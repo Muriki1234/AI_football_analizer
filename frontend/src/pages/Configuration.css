@@ -1,0 +1,134 @@
+.config-page {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding-top: var(--space-2xl);
+    position: relative;
+}
+
+.config-page__header {
+    text-align: center;
+    margin-bottom: var(--space-2xl);
+}
+
+.config-page__icon {
+    font-size: 2.5rem;
+    color: var(--color-accent);
+    margin-bottom: var(--space-sm);
+}
+
+.config-page__header h1 {
+    font-size: 2rem;
+    margin-bottom: var(--space-xs);
+}
+
+.config-page__header p {
+    color: var(--color-text-secondary);
+}
+
+/* Player Grid */
+.config-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: var(--space-md);
+    width: 100%;
+    max-width: 800px;
+    margin-bottom: var(--space-xl);
+}
+
+.config-player-card {
+    background: var(--color-bg-card);
+    border: 2px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    padding: var(--space-lg);
+    text-align: center;
+    cursor: pointer;
+    transition: all var(--transition-base);
+    position: relative;
+}
+
+.config-player-card--selected {
+    border-color: var(--color-accent);
+    background: rgba(0, 229, 155, 0.06);
+    box-shadow: var(--shadow-glow);
+}
+
+.config-player-card__avatar {
+    font-size: 2.5rem;
+    margin-bottom: var(--space-sm);
+}
+
+.config-player-card__name {
+    display: block;
+    font-weight: 600;
+    font-size: 0.95rem;
+}
+
+.config-player-card__number {
+    font-size: 0.8rem;
+    color: var(--color-text-muted);
+}
+
+.config-player-card__check {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--color-accent);
+    color: #0a0e17;
+    font-size: 0.8rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity var(--transition-fast);
+}
+
+.config-player-card--selected .config-player-card__check {
+    opacity: 1;
+}
+
+/* Options */
+.config-options {
+    display: flex;
+    gap: var(--space-md);
+    margin-bottom: var(--space-2xl);
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+/* CTA */
+.config-cta {
+    text-align: center;
+}
+
+.config-cta__hint {
+    font-size: 0.85rem;
+    color: var(--color-text-muted);
+    margin-top: var(--space-sm);
+}
+
+/* Spinner */
+.config-spinner {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    border: 2px solid rgba(10, 14, 23, 0.3);
+    border-top-color: #0a0e17;
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.btn--loading {
+    opacity: 0.8;
+    pointer-events: none;
+}

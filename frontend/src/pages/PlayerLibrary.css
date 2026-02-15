@@ -1,0 +1,129 @@
+.player-lib {
+    position: relative;
+}
+
+.player-lib__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: var(--space-2xl);
+    flex-wrap: wrap;
+    gap: var(--space-md);
+}
+
+.player-lib__header-left {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+}
+
+.player-lib__header-left h1 {
+    font-size: 1.8rem;
+}
+
+.player-lib__header-left p {
+    color: var(--color-text-muted);
+    font-size: 0.85rem;
+}
+
+.player-lib__header-actions {
+    display: flex;
+    gap: var(--space-md);
+    align-items: center;
+}
+
+.player-lib__search {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    padding: 10px 16px;
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-full);
+    color: var(--color-text-muted);
+    transition: border-color var(--transition-fast);
+}
+
+.player-lib__search:focus-within {
+    border-color: var(--color-accent);
+}
+
+.player-lib__search input {
+    background: none;
+    border: none;
+    outline: none;
+    color: var(--color-text-primary);
+    font-size: 0.9rem;
+    width: 180px;
+}
+
+.player-lib__search input::placeholder {
+    color: var(--color-text-muted);
+}
+
+/* Grid */
+.player-lib__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: var(--space-lg);
+}
+
+/* Card */
+.player-card {
+    cursor: pointer;
+}
+
+.player-card__top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--space-md);
+}
+
+.player-card__emoji {
+    font-size: 2.5rem;
+}
+
+.player-card__arrow {
+    font-size: 1.2rem;
+    color: var(--color-text-muted);
+    transition: transform var(--transition-fast);
+}
+
+.player-card:hover .player-card__arrow {
+    transform: translateX(4px);
+    color: var(--color-accent);
+}
+
+.player-card__name {
+    font-size: 1.1rem;
+    font-weight: 700;
+    margin-bottom: 2px;
+}
+
+.player-card__pos {
+    font-size: 0.82rem;
+    color: var(--color-text-muted);
+}
+
+.player-card__stats {
+    display: flex;
+    gap: var(--space-xl);
+    margin-top: var(--space-md);
+    padding-top: var(--space-md);
+    border-top: 1px solid var(--color-border);
+}
+
+.player-card__stat-value {
+    display: block;
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: var(--color-accent);
+}
+
+.player-card__stat-label {
+    font-size: 0.72rem;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}

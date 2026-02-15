@@ -1,0 +1,193 @@
+.dashboard {
+    padding: var(--space-xl) var(--space-lg);
+    max-width: 1440px;
+    margin: 0 auto;
+    position: relative;
+}
+
+.dashboard__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--space-xl);
+}
+
+.dashboard__header-left {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+}
+
+.dashboard__title {
+    font-size: 1.8rem;
+}
+
+.dashboard__subtitle {
+    color: var(--color-text-muted);
+    font-size: 0.9rem;
+    margin-top: 2px;
+}
+
+.dashboard__header-actions {
+    display: flex;
+    gap: var(--space-sm);
+}
+
+/* Layout */
+.dashboard__layout {
+    display: grid;
+    grid-template-columns: 1fr 240px;
+    gap: var(--space-lg);
+    margin-bottom: var(--space-xl);
+}
+
+/* Main viewport */
+.dashboard__main {
+    min-width: 0;
+}
+
+.dashboard__video-viewport {
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xl);
+    overflow: hidden;
+}
+
+.dashboard__video-placeholder {
+    aspect-ratio: 16 / 9;
+    background: linear-gradient(135deg, #0d1321 0%, #131d30 50%, #0d1321 100%);
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.dashboard__skeleton-overlay {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+
+.dashboard__video-label {
+    position: absolute;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.8rem;
+    color: var(--color-text-muted);
+    background: rgba(0, 0, 0, 0.5);
+    padding: 4px 14px;
+    border-radius: var(--radius-full);
+    backdrop-filter: blur(4px);
+}
+
+/* Controls */
+.dashboard__controls {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+    padding: var(--space-md) var(--space-lg);
+    border-top: 1px solid var(--color-border);
+}
+
+.dashboard__play-btn {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: var(--color-accent);
+    color: #0a0e17;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+    flex-shrink: 0;
+    transition: all var(--transition-fast);
+}
+
+.dashboard__play-btn:hover {
+    box-shadow: var(--shadow-glow);
+    transform: scale(1.08);
+}
+
+.dashboard__progress-track {
+    flex: 1;
+    height: 4px;
+    background: var(--color-bg-input);
+    border-radius: var(--radius-full);
+    overflow: hidden;
+}
+
+.dashboard__progress-fill {
+    height: 100%;
+    background: var(--color-accent-gradient);
+    border-radius: var(--radius-full);
+}
+
+.dashboard__time {
+    font-size: 0.8rem;
+    color: var(--color-text-muted);
+    font-family: 'Courier New', monospace;
+    flex-shrink: 0;
+}
+
+/* Sidebar */
+.dashboard__sidebar {
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xl);
+    padding: var(--space-lg);
+    height: fit-content;
+    position: sticky;
+    top: var(--space-lg);
+}
+
+.dashboard__sidebar-title {
+    font-size: 0.9rem;
+    font-weight: 700;
+    margin-bottom: var(--space-lg);
+    color: var(--color-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.dashboard__toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-sm) 0;
+    font-size: 0.9rem;
+    cursor: pointer;
+    color: var(--color-text-primary);
+    transition: color var(--transition-fast);
+}
+
+.dashboard__toggle-row:hover {
+    color: var(--color-accent);
+}
+
+.dashboard__toggle-row+.dashboard__toggle-row {
+    border-top: 1px solid var(--color-border);
+}
+
+/* Panels */
+.dashboard__panels {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+    gap: var(--space-lg);
+}
+
+@media (max-width: 900px) {
+    .dashboard__layout {
+        grid-template-columns: 1fr;
+    }
+
+    .dashboard__panels {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* AI Insights — always visible */
+.dashboard__ai-section {
+    margin-top: var(--space-xl);
+}

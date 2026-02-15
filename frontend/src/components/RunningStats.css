@@ -1,0 +1,22 @@
+.running-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-md);
+}
+
+.stat-card__icon {
+    font-size: 1.8rem;
+    margin-bottom: var(--space-sm);
+}
+
+.stat-card__unit {
+    font-size: 0.8rem;
+    color: var(--color-text-muted);
+    margin-top: -4px;
+}
+
+@media (max-width: 640px) {
+    .running-stats {
+        grid-template-columns: 1fr;
+    }
+}

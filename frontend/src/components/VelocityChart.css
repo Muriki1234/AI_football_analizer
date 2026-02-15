@@ -1,0 +1,38 @@
+.velocity-panel__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--space-md);
+}
+
+.velocity-panel__header h3 {
+    font-size: 1rem;
+    font-weight: 700;
+}
+
+.velocity-panel__peak {
+    font-size: 0.82rem;
+    color: var(--color-text-muted);
+}
+
+.velocity-panel__peak strong {
+    color: var(--color-accent);
+}
+
+.velocity-tooltip {
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 8px 12px;
+}
+
+.velocity-tooltip__time {
+    font-size: 0.75rem;
+    color: var(--color-text-muted);
+}
+
+.velocity-tooltip__speed {
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: var(--color-accent);
+}

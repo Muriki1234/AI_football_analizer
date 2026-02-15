@@ -1,0 +1,111 @@
+.trimmer-page {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding-top: var(--space-2xl);
+    position: relative;
+}
+
+.trimmer-page__header {
+    text-align: center;
+    margin-bottom: var(--space-xl);
+}
+
+.trimmer-page__icon {
+    font-size: 2.5rem;
+    color: var(--color-accent);
+    margin-bottom: var(--space-sm);
+}
+
+.trimmer-page__header h1 {
+    font-size: 2rem;
+    margin-bottom: var(--space-xs);
+}
+
+.trimmer-page__header p {
+    color: var(--color-text-secondary);
+}
+
+.trimmer__viewport {
+    width: 100%;
+    max-width: 900px;
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xl);
+    overflow: hidden;
+}
+
+.trimmer__video-area {
+    background: #000;
+    padding: var(--space-lg);
+}
+
+.trimmer__video-placeholder {
+    aspect-ratio: 16 / 9;
+    background: linear-gradient(135deg, #0d1321 0%, #1a2235 100%);
+    border-radius: var(--radius-md);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-xl);
+    position: relative;
+}
+
+.trimmer__video-label {
+    color: var(--color-text-muted);
+    font-size: 1.2rem;
+    font-weight: 600;
+}
+
+.trimmer__timestamp {
+    font-family: 'Courier New', monospace;
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--color-accent);
+    background: rgba(0, 229, 155, 0.1);
+    padding: 6px 14px;
+    border-radius: var(--radius-md);
+}
+
+/* Visual timeline */
+.trimmer__timeline {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 50px;
+    margin-top: var(--space-md);
+    padding: 0 var(--space-sm);
+}
+
+.trimmer__timeline-bar {
+    flex: 1;
+    background: var(--color-accent);
+    border-radius: 2px 2px 0 0;
+    transition: opacity var(--transition-fast);
+}
+
+/* Slider area */
+.trimmer__slider-area {
+    padding: var(--space-md) var(--space-xl) 0;
+}
+
+/* Footer */
+.trimmer__footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-lg) var(--space-xl);
+    border-top: 1px solid var(--color-border);
+}
+
+.trimmer__clip-badge {
+    font-size: 0.9rem;
+    color: var(--color-text-secondary);
+    background: var(--color-bg-elevated);
+    padding: 6px 16px;
+    border-radius: var(--radius-full);
+}
+
+.trimmer__clip-badge strong {
+    color: var(--color-accent);
+}
