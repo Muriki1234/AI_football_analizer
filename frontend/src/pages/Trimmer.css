@@ -36,8 +36,18 @@
 }
 
 .trimmer__video-area {
-    background: #000;
+    background: linear-gradient(135deg, #0d1321 0%, #1a2235 100%);
     padding: var(--space-lg);
+    position: relative;
+}
+
+.trimmer__video-player {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    object-fit: contain;
+    background: #000;
+    border-radius: var(--radius-md);
+    display: block;
 }
 
 .trimmer__video-placeholder {

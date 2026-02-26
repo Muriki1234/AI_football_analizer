@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react';
+import { uploadVideo } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useDropzone } from 'react-dropzone';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -10,18 +11,40 @@ import './Upload.css';
 export default function Upload() {
     const [file, setFile] = useState(null);
     const [preview, setPreview] = useState(null);
+    const [uploadSuccess, setUploadSuccess] = useState(false);
+    const [uploadedVideoId, setUploadedVideoId] = useState(null);
     const navigate = useNavigate();
     const { start, done } = useProgress();
 
-    const onDrop = useCallback((acceptedFiles) => {
+    const onDrop = useCallback(async (acceptedFiles) => {
         if (acceptedFiles.length > 0) {
-            start();
             const f = acceptedFiles[0];
             setFile(f);
             setPreview(URL.createObjectURL(f));
-            setTimeout(done, 600);
+
+            try {
+                start();
+                const data = await uploadVideo(f, (progress) => {
+                    // We could use a specific setProgress here if exposed, 
+                    // but for now start/done handles the visual indeterminate state 
+                    // or we can assume it finishes when done() is called.
+                    // If ProgressBar supports value, we'd use it.
+                });
+
+                // Add a small delay for UX so user sees the "done" state
+                setTimeout(() => {
+                    done();
+                    setUploadSuccess(true);
+                    setUploadedVideoId(data.video_id);
+                }, 800);
+            } catch (error) {
+                console.error("Upload failed", error);
+                alert("Upload failed. Please try again.");
+                done();
+                setFile(null);
+            }
         }
-    }, [start, done]);
+    }, [start, done, navigate]);
 
     const { getRootProps, getInputProps, isDragActive } = useDropzone({
         onDrop,
@@ -39,15 +62,8 @@ export default function Upload() {
         <div className="page-container upload-page">
             <div className="bg-grid" />
 
-            <motion.div
-                className="upload-page__back"
-                initial={{ opacity: 0, x: -10 }}
-                animate={{ opacity: 1, x: 0 }}
-            >
-                <button className="btn btn-ghost" onClick={() => navigate('/')}>
-                    <HiArrowLeft /> Back
-                </button>
-            </motion.div>
+
+
 
             <StepNav />
 
@@ -111,10 +127,15 @@ export default function Upload() {
                                 </div>
                             </div>
                             <button
-                                className="btn btn-primary"
-                                onClick={() => navigate('/trim')}
+                                className={`btn ${uploadSuccess ? 'btn-success' : 'btn-primary'}`}
+                                onClick={() => {
+                                    if (uploadSuccess && uploadedVideoId) {
+                                        navigate('/trim', { state: { videoId: uploadedVideoId } });
+                                    }
+                                }}
+                                disabled={!uploadSuccess}
                             >
-                                Continue to Trim
+                                {uploadSuccess ? 'Continue to Trim' : 'Uploading...'}
                                 <HiArrowRight />
                             </button>
                         </div>

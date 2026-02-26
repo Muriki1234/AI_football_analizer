@@ -4,6 +4,7 @@ class Config:
     SECRET_KEY = os.environ.get('SECRET_KEY') or 'you-will-never-guess'
     DEBUG = False
     TESTING = False
+    UPLOAD_FOLDER = os.path.join(os.getcwd(), 'uploads')
 
 class DevelopmentConfig(Config):
     DEBUG = True
