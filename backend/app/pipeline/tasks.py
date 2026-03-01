@@ -99,12 +99,23 @@ def run_samurai_tracking(session_id: str, session: dict,
             "--video_output_path", str(temp_video),
             "--model_path",  os.environ.get("SAM2_MODEL_PATH", "sam2/checkpoints/sam2.1_hiera_base_plus.pt"),
         ]
-        # Pass PYTHONPATH to ensure SAMURAI can find its dependencies (SAM2)
+        # Pass PYTHONPATH and CWD to ensure SAMURAI can find its dependencies (SAM2)
         env = os.environ.copy()
-        # The user requested pointing to the sam2 folder specifically
-        env["PYTHONPATH"] = "/content/drive/MyDrive/samurai_env/samurai/sam2"
+        # Ensure 'sam2' package is findable. Based on user dir structure:
+        # /content/drive/MyDrive/samurai_env/samurai/sam2/sam2/__init__.py exists
+        samurai_root = str(Path(SAMURAI_SCRIPT).parent.parent)
+        env["PYTHONPATH"] = f"{samurai_root}:{samurai_root}/sam2:" + env.get("PYTHONPATH", "")
+        # Required for better debug if it fails again
+        env["HYDRA_FULL_ERROR"] = "1"
         
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=900, env=env)
+        result = subprocess.run(
+            cmd, 
+            capture_output=True, 
+            text=True, 
+            timeout=900, 
+            env=env,
+            cwd=samurai_root  # Crucial for relative config paths in demo.py
+        )
 
 
         if result.returncode != 0:
