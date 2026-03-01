@@ -193,6 +193,33 @@ def get_frame(filename):
     frames_dir = os.path.join(os.path.dirname(current_app.config['UPLOAD_FOLDER']), 'frames')
     return send_from_directory(frames_dir, filename)
 
+@api.route('/api/frame/<video_id>', methods=['GET'])
+def extract_frame_on_fly(video_id):
+    """
+    GET /api/frame/123?t=4.5
+    Extracts frame at t seconds and returns directly.
+    """
+    t = float(request.args.get('t', 0))
+    if video_id not in video_sessions:
+        return jsonify({'error': 'Video not found'}), 404
+        
+    filepath = video_sessions[video_id]['filepath']
+    cap = cv2.VideoCapture(filepath)
+    if not cap.isOpened():
+        return jsonify({'error': 'Cannot open video'}), 500
+        
+    cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
+    ret, frame = cap.read()
+    cap.release()
+    
+    if not ret:
+        return jsonify({'error': 'Could not read frame'}), 500
+        
+    # Encode to memory and return
+    _, buffer = cv2.imencode('.jpg', frame)
+    from flask import Response
+    return Response(buffer.tobytes(), mimetype='image/jpeg')
+
 @api.route('/api/players/<video_id>', methods=['GET'])
 def get_detected_players(video_id):
     # This might not be used anymore if we pass data via router, but keep for fallback

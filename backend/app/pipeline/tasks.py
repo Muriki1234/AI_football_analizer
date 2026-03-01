@@ -11,6 +11,7 @@ tasks.py - 所有后台任务实现（Flask 线程版）
        run_minimap_replay   → 小地图轨迹回放 MP4
 """
 
+# Standard imports
 import os
 import subprocess
 import pickle
@@ -18,12 +19,24 @@ import traceback
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
-import numpy as np
-import cv2
-import matplotlib
-matplotlib.use("Agg")          # 必须在 import pyplot 之前，非交互模式
-import matplotlib.pyplot as plt
-import seaborn as sns
+# Try-wrapped heavy imports
+try:
+    import numpy as np
+except ImportError:
+    np = None
+
+try:
+    import cv2
+except ImportError:
+    cv2 = None
+
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+except ImportError:
+    plt = sns = None
 
 from .session_manager import SessionManager
 from .analysis_core import (
@@ -79,7 +92,13 @@ def run_samurai_tracking(session_id: str, session: dict,
             "--start_frame", str(player_bbox.get("frame", 0)),
             "--output_pkl",  str(cache_path),
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        # Pass PYTHONPATH to ensure SAMURAI can find its dependencies (SAM2)
+        env = os.environ.copy()
+        # The user requested pointing to the sam2 folder specifically
+        env["PYTHONPATH"] = "/content/drive/MyDrive/samurai_env/samurai/sam2"
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=900, env=env)
+
 
         if result.returncode != 0:
             raise RuntimeError(f"SAMURAI exited {result.returncode}: {result.stderr[-500:]}")
@@ -581,7 +600,7 @@ def _load_cache(session: dict) -> dict:
 
 
 def _find_matched_player(player_frame: dict, target_center: tuple,
-                          max_dist: float = 150) -> dict | None:
+                          max_dist: float = 150):
     """在 YOLO 追踪结果中找最接近 SAMURAI 中心点的球员"""
     best_dist, best_info = max_dist, None
     for info in player_frame.values():

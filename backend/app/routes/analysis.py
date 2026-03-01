@@ -43,8 +43,19 @@ def register_session(session_id: str):
     """
     data = request.get_json(silent=True) or {}
     video_path = data.get('video_path')
-    if not video_path or not os.path.exists(video_path):
+    
+    if not video_path:
+        # Fallback to in-memory video_sessions from api
+        try:
+            from .api import video_sessions
+            if session_id in video_sessions:
+                video_path = video_sessions[session_id].get('filepath')
+        except Exception as e:
+            print(f"Error fetching from video_sessions: {e}")
+
+    if not video_path or not os.path.exists(str(video_path)):
         return jsonify({'error': 'video_path missing or file not found'}), 400
+
 
     # Create session in pipeline (idempotent)
     if not sm.get_session(session_id):
