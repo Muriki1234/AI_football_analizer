@@ -114,12 +114,13 @@ def run_samurai_tracking(session_id: str, session: dict,
             text=True, 
             timeout=900, 
             env=env,
-            cwd=samurai_root  # Crucial for relative config paths in demo.py
+            cwd=samurai_root
         )
 
-
         if result.returncode != 0:
-            raise RuntimeError(f"SAMURAI exited {result.returncode}: {result.stderr[-500:]}")
+            # Display much more stderr to see the HYDRA_FULL_ERROR chained exception
+            full_error_log = result.stderr if len(result.stderr) < 3000 else result.stderr[-3000:]
+            raise RuntimeError(f"SAMURAI exited {result.returncode}:\n{full_error_log}")
 
         # 4. demo.py saves results to {video_output_path}_bboxes.txt
         res_txt = output_dir / "samurai_temp_bboxes.txt"
