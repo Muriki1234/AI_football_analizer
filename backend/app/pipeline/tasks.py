@@ -84,13 +84,20 @@ def run_samurai_tracking(session_id: str, session: dict,
 
         sm.update_status(session_id, "tracking", progress=10, stage="samurai_running")
 
-        bbox_str = "{x},{y},{w},{h}".format(**player_bbox)
+        # 1. Create temporary txt for demo.py (required by the current script version)
+        init_txt = output_dir / "input_bbox.txt"
+        with open(init_txt, "w") as f:
+            f.write("{x},{y},{w},{h}\n".format(**player_bbox))
+            
+        # 2. Define output video path (demo.py expects this to decide where to put the pkl replacement txt)
+        temp_video = output_dir / "samurai_temp.mp4"
+        
         cmd = [
             "python", SAMURAI_SCRIPT,
-            "--video",       video_path,
-            "--bbox",        bbox_str,
-            "--start_frame", str(player_bbox.get("frame", 0)),
-            "--output_pkl",  str(cache_path),
+            "--video_path",  video_path,
+            "--txt_path",    str(init_txt),
+            "--video_output_path", str(temp_video),
+            "--model_path",  os.environ.get("SAM2_MODEL_PATH", "sam2/checkpoints/sam2.1_hiera_base_plus.pt"),
         ]
         # Pass PYTHONPATH to ensure SAMURAI can find its dependencies (SAM2)
         env = os.environ.copy()
@@ -102,13 +109,26 @@ def run_samurai_tracking(session_id: str, session: dict,
 
         if result.returncode != 0:
             raise RuntimeError(f"SAMURAI exited {result.returncode}: {result.stderr[-500:]}")
-        if not cache_path.exists():
-            raise FileNotFoundError("SAMURAI did not produce output pkl")
 
-        # 校验结构
-        with open(cache_path, "rb") as f:
-            data = pickle.load(f)
-        n_tracked = len(data.get("bboxes", {}))
+        # 4. demo.py saves results to {video_output_path}_bboxes.txt
+        res_txt = output_dir / "samurai_temp_bboxes.txt"
+        if not res_txt.exists():
+            raise FileNotFoundError(f"SAMURAI did not produce output bboxes at {res_txt}")
+
+        # 5. Convert txt back to our pkl format
+        bboxes_dict = {}
+        with open(res_txt, "r") as f:
+            for line in f:
+                parts = line.strip().split(',')
+                if len(parts) >= 6:
+                    fid = int(parts[0])
+                    # x, y, w, h
+                    bboxes_dict[fid] = (float(parts[2]), float(parts[3]), float(parts[4]), float(parts[5]))
+
+        with open(cache_path, "wb") as f:
+            pickle.dump({"bboxes": bboxes_dict}, f)
+
+        n_tracked = len(bboxes_dict)
 
         sm.update_status(
             session_id, "tracking_done",
