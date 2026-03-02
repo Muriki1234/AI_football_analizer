@@ -84,7 +84,27 @@ def run_samurai_tracking(session_id: str, session: dict,
 
         sm.update_status(session_id, "tracking", progress=10, stage="samurai_running")
 
-        # 1. Create temporary txt for demo.py (required by the current script version)
+        # 0. Extract limited frames to prevent SAM2 OOM and bypass `decord`
+        start_index = int(player_bbox.get("frame", 0))
+        frames_dir = output_dir / "samurai_frames"
+        frames_dir.mkdir(parents=True, exist_ok=True)
+        
+        sm.update_status(session_id, "tracking", progress=15, stage="extracting_frames")
+        if cv2 is None:
+            raise ImportError("cv2 is required for frame extraction")
+            
+        cap = cv2.VideoCapture(video_path)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_index)
+        count = 0
+        max_frames = 450  # Cap tracking length to avoid OOM on 15GB T4 GPU
+        while cap.isOpened() and count < max_frames:
+            ret, frame = cap.read()
+            if not ret: break
+            cv2.imwrite(str(frames_dir / f"{count:05d}.jpg"), frame)
+            count += 1
+        cap.release()
+
+        # 1. Create temporary txt for demo.py
         init_txt = output_dir / "input_bbox.txt"
         with open(init_txt, "w") as f:
             f.write("{x},{y},{w},{h}\n".format(**player_bbox))
@@ -94,7 +114,7 @@ def run_samurai_tracking(session_id: str, session: dict,
         
         cmd = [
             "python", SAMURAI_SCRIPT,
-            "--video_path",  video_path,
+            "--video_path",  str(frames_dir),  # Pass directory to bypass `decord`
             "--txt_path",    str(init_txt),
             "--video_output_path", str(temp_video),
             "--model_path",  os.environ.get("SAM2_MODEL_PATH", "sam2/checkpoints/sam2.1_hiera_base_plus.pt"),
@@ -134,8 +154,9 @@ def run_samurai_tracking(session_id: str, session: dict,
                 parts = line.strip().split(',')
                 if len(parts) >= 6:
                     fid = int(parts[0])
+                    original_fid = start_index + fid  # Offset back to original video timeline
                     # x, y, w, h
-                    bboxes_dict[fid] = (float(parts[2]), float(parts[3]), float(parts[4]), float(parts[5]))
+                    bboxes_dict[original_fid] = (float(parts[2]), float(parts[3]), float(parts[4]), float(parts[5]))
 
         with open(cache_path, "wb") as f:
             pickle.dump({"bboxes": bboxes_dict}, f)
