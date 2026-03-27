@@ -51,6 +51,36 @@ export default function Dashboard() {
     // Track if we've already kicked off analysis to avoid double start
     const analysisStarted = useRef(false);
 
+    // Custom download handler to work with cross-origin Colab URLs and local Blobs
+    const handleDownload = async (url, filename) => {
+        try {
+            const response = await fetch(url);
+            const blob = await response.blob();
+            const blobUrl = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = blobUrl;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(blobUrl);
+        } catch (e) {
+            console.error("Download failed cross-origin, standard link fallback:", e);
+            window.open(url, '_blank');
+        }
+    };
+
+
+    
+    // Auto-download full_replay when done
+    useEffect(() => {
+        const replay = features['full_replay'];
+        if (replay && replay.status === 'done' && replay.url && !replay.downloadedTriggered) {
+             setFeatures(prev => ({ ...prev, full_replay: { ...prev.full_replay, downloadedTriggered: true } }));
+             handleDownload(replay.url, `Analyzed_Replay_${sessionId}.mp4`);
+        }
+    }, [features['full_replay']?.status, features['full_replay']?.url]);
+
     useEffect(() => {
         if (!sessionId) return;
 
@@ -239,9 +269,9 @@ export default function Dashboard() {
                             </div>
 
                             {fState.status === 'done' && (
-                                <a href={`/api/${sessionId}/download/${fState.taskId}`} download className="feature-card__download">
+                                <button onClick={() => handleDownload(fState.url, `${feat.key}_${sessionId}.${feat.type === 'video' ? 'mp4' : 'png'}`)} className="btn btn-ghost feature-card__download" style={{width: '100%', borderTop: '1px solid #333', marginTop: '1rem', paddingTop: '1rem'}}>
                                     ↓ Download
-                                </a>
+                                </button>
                             )}
                         </motion.div>
                     );

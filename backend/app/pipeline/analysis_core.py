@@ -95,11 +95,24 @@ def save_video(frames: list, output_path: str, fps: int = 24):
     if not frames:
         return
     h, w = frames[0].shape[:2]
-    out  = cv2.VideoWriter(output_path,
+    temp_path = output_path.replace('.mp4', '_temp.mp4')
+    out  = cv2.VideoWriter(temp_path,
                            cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
     for f in frames:
         out.write(f)
     out.release()
+    
+    # Convert to H.264 for web browser compatibility
+    import subprocess
+    try:
+        subprocess.run(["ffmpeg", "-y", "-i", temp_path, "-vcodec", "libx264", output_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if os.path.exists(output_path):
+            os.remove(temp_path)
+        else:
+            os.rename(temp_path, output_path)
+    except Exception:
+        if os.path.exists(temp_path):
+            os.rename(temp_path, output_path)
 
 def put_text_pil(img, text: str, position: tuple, color: tuple, font_size: int = 28):
     """用 PIL 绘制文字（支持中文）"""
