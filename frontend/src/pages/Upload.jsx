@@ -6,6 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { HiCloudArrowUp, HiPlay, HiArrowRight, HiXMark, HiArrowLeft } from 'react-icons/hi2';
 import { useProgress } from '../components/ProgressBar';
 import StepNav from '../components/StepNav';
+import colab from '../services/colabService';
 import './Upload.css';
 
 export default function Upload() {
@@ -25,11 +26,15 @@ export default function Upload() {
             try {
                 start();
                 const data = await uploadVideo(f, (progress) => {
-                    // We could use a specific setProgress here if exposed, 
-                    // but for now start/done handles the visual indeterminate state 
-                    // or we can assume it finishes when done() is called.
-                    // If ProgressBar supports value, we'd use it.
+                    // Local upload progress handled if needed
                 });
+
+                // If Colab GPU backend is connected, dual-upload to Colab
+                if (colab.isConfigured()) {
+                    await colab.sendVideo(data.video_id, f, (pct) => {
+                        console.log('Colab upload:', pct);
+                    });
+                }
 
                 // Add a small delay for UX so user sees the "done" state
                 setTimeout(() => {

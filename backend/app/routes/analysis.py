@@ -162,6 +162,15 @@ def generate_minimap_replay(session_id: str):
     return jsonify({'task_id': task_id, 'status': 'queued'}), 200
 
 
+@analysis.route('/api/<session_id>/generate/full_replay', methods=['POST'])
+def generate_full_replay(session_id: str):
+    session, err = _require_analysis_done(session_id)
+    if err: return err
+    task_id = sm.create_task(session_id, 'full_replay')
+    _fire_thread(tasks.run_full_replay, session_id, session, task_id, sm)
+    return jsonify({'task_id': task_id, 'status': 'queued'}), 200
+
+
 # ── Status & Summary ─────────────────────────────────────────────────────────
 
 _STAGE_LABELS = {
@@ -183,7 +192,7 @@ _STAGE_LABELS = {
 def _get_available_features(session: dict) -> list:
     status = session['status']
     if status == 'analysis_done':
-        return ['heatmap', 'speed_chart', 'possession', 'minimap_replay', 'summary']
+        return ['heatmap', 'speed_chart', 'possession', 'minimap_replay', 'full_replay', 'summary']
     if status == 'tracking_done':
         return ['analyze']
     if status == 'uploaded':

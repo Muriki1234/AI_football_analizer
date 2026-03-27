@@ -9,6 +9,7 @@ import Dashboard from './pages/Dashboard';
 import PlayerLibrary from './pages/PlayerLibrary';
 import PlayerProfile from './pages/PlayerProfile';
 import Login from './pages/Login';
+import ColabConnector from './components/ColabConnector';
 import './index.css';
 
 const pageVariants = {
@@ -52,6 +53,12 @@ function App() {
   return (
     <Router>
       <ProgressProvider>
+        <div style={{ position: 'sticky', top: 0, zIndex: 100 }}>
+          <ColabConnector
+            onConnected={(info) => console.log('Colab connected:', info.gpu)}
+            onDisconnected={() => console.log('Colab disconnected')}
+          />
+        </div>
         <AnimatedRoutes />
       </ProgressProvider>
     </Router>

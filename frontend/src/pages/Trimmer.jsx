@@ -31,8 +31,8 @@ export default function Trimmer() {
                 // 1. Save trim settings
                 await trimVideo(videoId, range[0], range[1]);
 
-                // 2. Extract the first frame of the trimmed selection and get mock players
-                const analysisResult = await analyzeFrame(videoId, range[0]);
+                // 2. Extract the first frame of the trimmed selection (offset 0 in the trimmed file)
+                const analysisResult = await analyzeFrame(videoId, 0);
 
                 // 3. Navigate to config with the pre-loaded data
                 navigate('/configure', {
@@ -40,7 +40,8 @@ export default function Trimmer() {
                         videoId,
                         detectedPlayers: analysisResult.players_data,
                         frameUrl: analysisResult.annotated_frame_url,
-                        imgDims: analysisResult.image_dimensions
+                        imgDims: analysisResult.image_dimensions,
+                        videoPath: location.state?.videoPath
                     }
                 });
             } catch (e) {

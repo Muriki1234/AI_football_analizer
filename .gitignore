@@ -33,3 +33,8 @@ backend/walkthrough.md.resolved
 frontend/test_trim.js
 frontend/test_upload.cjs
 frontend/test_upload.js
+
+# Ignore user colab notebook
+326ecfa9-3e8b-4407-8c41-c1ce8584b9cb
+backend/venv/
+

@@ -7,15 +7,43 @@ analysis_core.py - 核心 CV/ML 类库（Flask 版）
   3. matplotlib 统一用 Agg 后端（在 tasks.py 开头设置）
 """
 
+import os
 import cv2
-import numpy as np
-import pandas as pd
-from pathlib import Path
-from scipy.interpolate import interp1d
-from sklearn.cluster import KMeans
-from PIL import Image, ImageDraw, ImageFont
-from ultralytics import YOLO
-import supervision as sv
+
+try:
+    import numpy as np
+except ImportError:
+    np = None
+
+try:
+    import pandas as pd
+except ImportError:
+    pd = None
+
+try:
+    from scipy.interpolate import interp1d
+except ImportError:
+    interp1d = None
+
+try:
+    from sklearn.cluster import KMeans
+except ImportError:
+    KMeans = None
+
+try:
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError:
+    Image = ImageDraw = ImageFont = None
+
+try:
+    from ultralytics import YOLO
+except ImportError:
+    YOLO = None
+
+try:
+    import supervision as sv
+except ImportError:
+    sv = None
 
 try:
     from sports.common.view import ViewTransformer as SportsViewTransformer
@@ -180,6 +208,44 @@ class Tracker:
         return [{1: {"bbox": x}} for x in df.to_numpy().tolist()]
 
 
+    def draw_ellipse(self, frame, bbox, color, track_id, is_tracked=False):
+        y2 = int(bbox[3])
+        x_center = int((bbox[0] + bbox[2]) / 2)
+        width = int(bbox[2] - bbox[0])
+        cv2.ellipse(frame, center=(x_center, y2), axes=(int(width), int(0.35 * width)),
+                    angle=0.0, startAngle=-45, endAngle=235, color=color, thickness=2)
+        cv2.rectangle(frame, (int(x_center - width/2 - 2), int(y2 - 8)),
+                      (int(x_center + width/2 + 2), int(y2 + 8)), color, -1)
+        if track_id is not None:
+            cv2.putText(frame, str(track_id), (int(x_center - width/2), int(y2 + 5)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1)
+        return frame
+
+    def draw_triangle(self, frame, bbox, color):
+        y = int(bbox[1])
+        x_c = int((bbox[0] + bbox[2]) / 2)
+        triangle_points = np.array([[x_c, y], [x_c - 10, y - 20], [x_c + 10, y - 20]])
+        cv2.drawContours(frame, [triangle_points], 0, color, cv2.FILLED)
+        cv2.drawContours(frame, [triangle_points], 0, (0,0,0), 2)
+        return frame
+
+    def draw_team_ball_control(self, frame, frame_num, team_ball_control, team_colors):
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (1350, 850), (1900, 970), (255,255,255), -1)
+        alpha = 0.4
+        cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+        team_ball_control_till_frame = team_ball_control[:frame_num+1]
+        team_1_num_frames = team_ball_control_till_frame[team_ball_control_till_frame==1].shape[0]
+        team_2_num_frames = team_ball_control_till_frame[team_ball_control_till_frame==2].shape[0]
+        t1_color = team_colors.get(1, (0,255,0))
+        t2_color = team_colors.get(2, (0,0,255))
+        if team_1_num_frames + team_2_num_frames > 0:
+            team_1 = team_1_num_frames / (team_1_num_frames + team_2_num_frames)
+            team_2 = team_2_num_frames / (team_1_num_frames + team_2_num_frames)
+            cv2.putText(frame, f"Team 1: {team_1*100:.0f}%", (1400, 900), cv2.FONT_HERSHEY_SIMPLEX, 1, t1_color, 3)
+            cv2.putText(frame, f"Team 2: {team_2*100:.0f}%", (1400, 950), cv2.FONT_HERSHEY_SIMPLEX, 1, t2_color, 3)
+        return frame
+
 # ═══════════════════════════════════════════════════════════════════════
 # CameraMovementEstimator
 # ═══════════════════════════════════════════════════════════════════════
@@ -283,27 +349,44 @@ class ViewTransformer:
         elif mc > 50:  self.scale_factor, self.minimap_scale = 0.1,  10.0
         else:          self.scale_factor, self.minimap_scale = 1.0,  100.0
 
+
     def add_transformed_position_to_tracks(self, tracks: dict, kps_list: list):
         if not HAS_SPORTS: return
+        # === Colab Hardcoded Fallback Config ===
+        court_width, court_length = 68.0, 23.0
+        pv = np.array([[110, 1035], [2650, 1035], [2250, 275], [800, 275]], dtype=np.float32)
+        tv = np.array([[0, court_width], [court_length, court_width], [court_length, 0], [0, 0]], dtype=np.float32)
+        fb_trans = cv2.getPerspectiveTransform(pv, tv)
+
+        def fb_transform(point):
+            if cv2.pointPolygonTest(pv, (int(point[0]), int(point[1])), False) >= 0:
+                res = cv2.perspectiveTransform(np.array(point, dtype=np.float32).reshape(-1, 1, 2), fb_trans)
+                return res.reshape(-1, 2)
+            return None
+
         for fnum, kps in enumerate(kps_list):
             src, dst = [], []
             for kid, pos in kps.items():
                 if kid < len(self.config.vertices):
                     src.append(pos); dst.append(self.config.vertices[kid])
-            if len(src) < 4: continue
-            transformer = SportsViewTransformer(source=np.array(src),
-                                                target=np.array(dst))
+            
+            transformer = SportsViewTransformer(source=np.array(src), target=np.array(dst)) if len(src) >= 4 else None
+            
             for obj, otracks in tracks.items():
                 if fnum >= len(otracks): continue
                 for info in otracks[fnum].values():
                     pos = info.get("position_adjusted") or info.get("position")
                     if not pos: continue
-                    t = transformer.transform_points(np.array([pos]))
+                    t = transformer.transform_points(np.array([pos])) if transformer else None
                     if t is not None and len(t) > 0:
-                        info["position_transformed"] = [t[0][0]*self.scale_factor,
-                                                         t[0][1]*self.scale_factor]
-                        info["position_minimap"]     = [t[0][0]*self.minimap_scale,
-                                                         t[0][1]*self.minimap_scale]
+                        info["position_transformed"] = [t[0][0]*self.scale_factor, t[0][1]*self.scale_factor]
+                        info["position_minimap"]     = [t[0][0]*self.minimap_scale, t[0][1]*self.minimap_scale]
+                    else:
+                        fb = fb_transform(pos)
+                        if fb is not None:
+                            info["position_transformed"] = [fb[0][0]*self.scale_factor*100, fb[0][1]*self.scale_factor*100]
+                            info["position_minimap"] = [fb[0][0]*self.minimap_scale*100, fb[0][1]*self.minimap_scale*100]
+
 
     def interpolate_2d_positions(self, tracks: dict):
         """平滑 minimap 坐标（大窗口高斯平滑）"""

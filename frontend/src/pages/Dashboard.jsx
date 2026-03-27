@@ -19,6 +19,7 @@ const FEATURES = [
     { key: 'speed_chart', label: 'Speed & Distance', icon: HiBolt, color: '#f39c12', type: 'image' },
     { key: 'possession', label: 'Possession', icon: HiChartBar, color: '#3498db', type: 'image' },
     { key: 'minimap_replay', label: 'Minimap Replay', icon: HiArrowTrendingUp, color: '#00e59b', type: 'video' },
+    { key: 'full_replay', label: 'Analyzed Replay', icon: HiCheckCircle, color: '#9b59b6', type: 'video' },
 ];
 
 const PHASE_LABELS = {
