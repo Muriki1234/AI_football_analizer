@@ -258,7 +258,8 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         sm.update_status(session_id, "analyzing", progress=80, stage="team_assignment")
         team_assigner = TeamAssigner()
         team_control  = []
-        poss_detector = SmartBallPossessionDetector(fps=24)
+        cap = cv2.VideoCapture(video_path); fps = cap.get(cv2.CAP_PROP_FPS) or 24; cap.release()
+        poss_detector = SmartBallPossessionDetector(fps=fps)
         ball_history  = []
 
         if tracks["players"] and tracks["players"][0]:
@@ -455,7 +456,7 @@ def run_speed_chart(session_id: str, session: dict, task_id: str, sm: SessionMan
         sm.update_task(session_id, task_id, status="running", progress=10)
         data = _load_cache(session)
         tracks, tracked_bboxes = data["tracks"], data["tracked_bboxes"]
-        fps = 24
+        cap = cv2.VideoCapture(session["video_path"]); fps = cap.get(cv2.CAP_PROP_FPS) or 24; cap.release()
 
         speeds, distances, times = [], [], []
         for i in range(len(tracks["players"])):
@@ -539,6 +540,7 @@ def run_possession_stats(session_id: str, session: dict, task_id: str, sm: Sessi
         hex_colors   = data["team_colors_hex"]
 
         t1  = int(np.sum(team_control == 1))
+        cap = cv2.VideoCapture(session["video_path"]); fps = cap.get(cv2.CAP_PROP_FPS) or 24; cap.release()
         t2  = int(np.sum(team_control == 2))
         neu = int(np.sum(team_control == 0))
         total = t1 + t2 + neu or 1
@@ -549,8 +551,8 @@ def run_possession_stats(session_id: str, session: dict, task_id: str, sm: Sessi
             "neutral_pct":   round(neu / total * 100, 1),
             "team1_color":   hex_colors.get(1, "#3498db"),
             "team2_color":   hex_colors.get(2, "#e74c3c"),
-            "team1_seconds": round(t1  / 24, 1),
-            "team2_seconds": round(t2  / 24, 1),
+            "team1_seconds": round(t1  / fps, 1),
+            "team2_seconds": round(t2  / fps, 1),
         }
 
         output_path = sm.session_output_dir(session_id) / "possession_chart.png"
@@ -639,7 +641,8 @@ def run_minimap_replay(session_id: str, session: dict, task_id: str, sm: Session
                     sm.update_task(session_id, task_id, progress=pct)
 
         output_path = sm.session_output_dir(session_id) / "minimap_replay.mp4"
-        save_video(frames, str(output_path), fps=24)
+        cap = cv2.VideoCapture(session["video_path"]); fps = cap.get(cv2.CAP_PROP_FPS) or 24; cap.release()
+        save_video(frames, str(output_path), fps=fps)
 
         _finish_task(sm, session_id, task_id, output_path)
 
@@ -712,7 +715,8 @@ def run_full_replay(session_id: str, session: dict, task_id: str, sm: SessionMan
                     sm.update_task(session_id, task_id, progress=pct)
 
         output_path = sm.session_output_dir(session_id) / "full_replay.mp4"
-        save_video(output_frames, str(output_path), fps=24)
+        cap = cv2.VideoCapture(session["video_path"]); fps = cap.get(cv2.CAP_PROP_FPS) or 24; cap.release()
+        save_video(output_frames, str(output_path), fps=fps)
         
         _finish_task(sm, session_id, task_id, output_path)
 
