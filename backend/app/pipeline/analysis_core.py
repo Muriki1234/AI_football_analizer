@@ -82,7 +82,16 @@ def bgr_to_hex(bgr) -> str:
     return f"#{r:02x}{g:02x}{b:02x}"
 
 def read_video(video_path: str) -> list:
-    cap = cv2.VideoCapture(video_path)
+    import subprocess, os
+    norm_path = video_path.replace(".mp4", "_norm.mp4").replace(".MOV", "_norm.mp4").replace(".mov", "_norm.mp4")
+    if video_path != norm_path and not os.path.exists(norm_path):
+        try:
+            subprocess.run(["ffmpeg", "-y", "-i", video_path, "-c:v", "libx264", "-vsync", "1", norm_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+    
+    target_path = norm_path if os.path.exists(norm_path) else video_path
+    cap = cv2.VideoCapture(target_path)
     frames = []
     while True:
         ret, frame = cap.read()
