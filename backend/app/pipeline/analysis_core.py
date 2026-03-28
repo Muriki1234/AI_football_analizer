@@ -250,8 +250,10 @@ class Tracker:
         team_ball_control_till_frame = team_ball_control[:frame_num+1]
         team_1_num_frames = team_ball_control_till_frame[team_ball_control_till_frame==1].shape[0]
         team_2_num_frames = team_ball_control_till_frame[team_ball_control_till_frame==2].shape[0]
-        t1_color = team_colors.get(1, (0,255,0))
-        t2_color = team_colors.get(2, (0,0,255))
+        t1_color = team_colors.get(1, (0, 255, 0))
+        t2_color = team_colors.get(2, (0, 0, 255))
+        if hasattr(t1_color, "tolist"): t1_color = tuple(map(int, t1_color.tolist()))
+        if hasattr(t2_color, "tolist"): t2_color = tuple(map(int, t2_color.tolist()))
         if team_1_num_frames + team_2_num_frames > 0:
             team_1 = team_1_num_frames / (team_1_num_frames + team_2_num_frames)
             team_2 = team_2_num_frames / (team_1_num_frames + team_2_num_frames)

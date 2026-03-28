@@ -51,6 +51,7 @@ from .analysis_core import (
     save_video,
     bgr_to_hex,
     render_minimap_frame,
+    measure_distance,
 )
 
 try:
