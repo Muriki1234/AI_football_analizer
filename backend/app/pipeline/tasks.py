@@ -707,7 +707,7 @@ def run_full_replay(session_id: str, session: dict, task_id: str, sm: SessionMan
         
         output_frames = [None] * total_frames
         
-        with ThreadPoolExecutor(max_workers=4) as pool:
+        with ThreadPoolExecutor(max_workers=8) as pool:
             for idx, rendered in pool.map(_render_single_frame_worker_full, render_args):
                 output_frames[idx] = rendered
                 if idx % 60 == 0:
@@ -832,49 +832,6 @@ def _render_single_frame_worker_full(args):
 
         frame = tracker.draw_team_ball_control(frame, i, np.array(team_control), team_assigner.team_colors)
 
-        # Plot minimap overlay
-        if config:
-            from sports.annotators.soccer import draw_pitch, draw_points_on_pitch
-            import supervision as sv
-            pitch = draw_pitch(config=config)
-            team1_pos, team2_pos = [], []
-            tracked_pos, tracked_team = None, None
-
-            for pid, info in tracks['players'][i].items():
-                if not info: continue
-                pos = info.get('position_minimap')
-                if pos and len(pos) == 2 and not any(np.isnan(p) for p in pos):
-                    if pid == current_matched_yolo_id:
-                        tracked_pos, tracked_team = pos, info.get('team')
-                    elif info.get('team') == 1:
-                        team1_pos.append(pos)
-                    else:
-                        team2_pos.append(pos)
-
-            if team1_pos:
-                pitch = draw_points_on_pitch(config=config, xy=np.array(team1_pos),
-                                            face_color=sv.Color.from_hex(hex_t1), edge_color=sv.Color.BLACK, radius=12, pitch=pitch)
-            if team2_pos:
-                pitch = draw_points_on_pitch(config=config, xy=np.array(team2_pos),
-                                            face_color=sv.Color.from_hex(hex_t2), edge_color=sv.Color.BLACK, radius=12, pitch=pitch)
-            if tracked_pos:
-                pitch = draw_points_on_pitch(config=config, xy=np.array([tracked_pos]),
-                                            face_color=sv.Color.from_hex('#FFD700'), edge_color=sv.Color.from_hex('#FFD700'), radius=20, pitch=pitch)
-                inner_color = hex_t1 if tracked_team == 1 else hex_t2
-                pitch = draw_points_on_pitch(config=config, xy=np.array([tracked_pos]),
-                                            face_color=sv.Color.from_hex(inner_color), edge_color=sv.Color.BLACK, radius=14, pitch=pitch)
-
-            ball_pos = tracks['ball'][i].get(1, {}).get('position_minimap')
-            if ball_pos and len(ball_pos) == 2 and not any(np.isnan(p) for p in ball_pos):
-                pitch = draw_points_on_pitch(config=config, xy=np.array([ball_pos]),
-                                            face_color=sv.Color.from_hex('#00FF00'), edge_color=sv.Color.BLACK, radius=8, pitch=pitch)
-
-            target_w, scale = 400, 400 / pitch.shape[1]
-            target_h = int(pitch.shape[0] * scale)
-            pitch_resized = cv2.resize(pitch, (target_w, target_h))
-            pitch_resized = cv2.copyMakeBorder(pitch_resized, 4, 4, 4, 4, cv2.BORDER_CONSTANT, value=(0, 0, 0))
-            y_end, x_end = min(20 + pitch_resized.shape[0], frame.shape[0]), min(20 + pitch_resized.shape[1], frame.shape[1])
-            frame[20:y_end, 20:x_end] = pitch_resized[:y_end-20, :x_end-20]
     except Exception as e:
         print(f"Error drawing overlay on frame {i}: {e}")
         pass

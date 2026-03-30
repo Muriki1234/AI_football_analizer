@@ -54,9 +54,9 @@ except ImportError:
     HAS_SPORTS = False
 
 # ── 配置 ────────────────────────────────────────────────────────────────────
-YOLO_DETECTION_STRIDE = 3    # 每3帧检测一次
-YOLO_BATCH_SIZE       = 60
-KEYPOINT_STRIDE       = 60
+YOLO_DETECTION_STRIDE = 5    # 每5帧检测一次（与Colab一致）
+YOLO_BATCH_SIZE       = 32   # 单批处理帧数
+KEYPOINT_STRIDE       = 90   # 每90帧检测一次关键点
 MINIMAP_SMOOTH_WINDOW = 25
 SPEED_SMOOTH_WINDOW   = 7
 
@@ -82,20 +82,14 @@ def bgr_to_hex(bgr) -> str:
     return f"#{r:02x}{g:02x}{b:02x}"
 
 def read_video(video_path: str) -> list:
-    import subprocess, os
-    norm_path = video_path.replace(".mp4", "_norm.mp4").replace(".MOV", "_norm.mp4").replace(".mov", "_norm.mp4")
-    if video_path != norm_path and not os.path.exists(norm_path):
-        try:
-            subprocess.run(["ffmpeg", "-y", "-i", video_path, "-c:v", "libx264", "-vsync", "1", norm_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except Exception:
-            pass
-    
-    target_path = norm_path if os.path.exists(norm_path) else video_path
-    cap = cv2.VideoCapture(target_path)
+    """Read all frames from a video file. Uses CAP_FFMPEG backend for reliability."""
+    cap = cv2.VideoCapture(video_path, cv2.CAP_FFMPEG)
+    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
     frames = []
     while True:
         ret, frame = cap.read()
-        if not ret: break
+        if not ret:
+            break
         frames.append(frame)
     cap.release()
     return frames
@@ -287,11 +281,15 @@ class CameraMovementEstimator:
                              minDistance=3, blockSize=7, mask=mask)
 
     def get_camera_movement(self, frames: list) -> list:
-        movement = [[0.0, 0.0]] * len(frames)
+        """Estimate camera movement with stride=3 for speed, then interpolate."""
+        STRIDE = 3
+        total = len(frames)
+        sampled_movement = {0: [0.0, 0.0]}
+
         old_gray = cv2.cvtColor(frames[0], cv2.COLOR_BGR2GRAY)
         old_pts  = cv2.goodFeaturesToTrack(old_gray, **self.features)
 
-        for i in range(1, len(frames)):
+        for i in range(1, total, STRIDE):
             gray     = cv2.cvtColor(frames[i], cv2.COLOR_BGR2GRAY)
             new_pts, _, _ = cv2.calcOpticalFlowPyrLK(old_gray, gray, old_pts, None, **self.lk_params)
             max_d, cx, cy = 0, 0.0, 0.0
@@ -301,12 +299,16 @@ class CameraMovementEstimator:
                     if d > max_d:
                         max_d = d
                         cx, cy = measure_xy_distance(o.ravel(), n.ravel())
+            sampled_movement[i] = [cx, cy] if max_d > self.minimum_distance else [0.0, 0.0]
             if max_d > self.minimum_distance:
-                movement[i] = [cx, cy]
                 old_pts = cv2.goodFeaturesToTrack(gray, **self.features)
             old_gray = gray.copy()
 
-        df = pd.DataFrame(movement, columns=["x","y"])
+        # Interpolate back to full frame count
+        df = pd.DataFrame(index=range(total), columns=["x", "y"], dtype=float)
+        for idx, mv in sampled_movement.items():
+            df.loc[idx] = mv
+        df = df.interpolate(method="linear").bfill().ffill()
         df["x"] = df["x"].rolling(5, min_periods=1, center=True).mean()
         df["y"] = df["y"].rolling(5, min_periods=1, center=True).mean()
         return df.values.tolist()
