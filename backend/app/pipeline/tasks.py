@@ -215,12 +215,27 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
 
         # ── 1. 读视频 ────────────────────────────────────────────────
         sm.update_status(session_id, "analyzing", progress=5, stage="loading_video")
+        
+        # DEBUG: Read video via cv2 and log details
+        cap_dbg = cv2.VideoCapture(video_path)
+        cv2_fps = cap_dbg.get(cv2.CAP_PROP_FPS)
+        cv2_frame_count = int(cap_dbg.get(cv2.CAP_PROP_FRAME_COUNT))
+        cv2_w = int(cap_dbg.get(cv2.CAP_PROP_FRAME_WIDTH))
+        cv2_h = int(cap_dbg.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        cap_dbg.release()
+        print(f"[DEBUG] Video metadata: {video_path}")
+        print(f"[DEBUG]   cv2 FPS={cv2_fps}, cv2 FRAME_COUNT={cv2_frame_count}, size={cv2_w}x{cv2_h}")
+        print(f"[DEBUG]   Expected duration = {cv2_frame_count/cv2_fps:.2f}s") if cv2_fps > 0 else None
+        
         frames = read_video(video_path)
         total  = len(frames)
+        print(f"[DEBUG]   read_video() returned {total} frames (vs cv2 metadata: {cv2_frame_count})")
 
         with open(samurai_pkl, "rb") as f:
             samurai_data = pickle.load(f)
         tracked_bboxes = samurai_data["bboxes"]   # {frame_idx: (x,y,w,h)}
+        tb_keys = sorted(tracked_bboxes.keys())
+        print(f"[DEBUG]   SAMURAI tracked_bboxes: count={len(tracked_bboxes)}, min_key={tb_keys[0] if tb_keys else 'N/A'}, max_key={tb_keys[-1] if tb_keys else 'N/A'}")
 
         # ── 2. YOLO 跳帧检测 + 插值 ──────────────────────────────────
         sm.update_status(session_id, "analyzing", progress=10, stage="yolo_detection")
@@ -295,7 +310,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
 
         # ── 8. 摘要 & 缓存 ────────────────────────────────────────────
         sm.update_status(session_id, "analyzing", progress=92, stage="computing_summary")
-        player_summary = _compute_player_summary(tracks, tracked_bboxes, team_control)
+        player_summary = _compute_player_summary(tracks, tracked_bboxes, team_control, fps=fps)
 
         cache_payload = {
             "tracks":         tracks,
@@ -686,6 +701,16 @@ def run_full_replay(session_id: str, session: dict, task_id: str, sm: SessionMan
         sm.update_task(session_id, task_id, progress=10)
         frames = read_video(session["video_path"])
         total_frames = min(len(frames), len(tracks["players"]))
+        
+        tb_keys = sorted(tracked_bboxes.keys())
+        print(f"[DEBUG REPLAY] frames={len(frames)}, tracks_players_len={len(tracks['players'])}, total_frames={total_frames}")
+        print(f"[DEBUG REPLAY] tracked_bboxes: count={len(tracked_bboxes)}, range=[{tb_keys[0] if tb_keys else 'N/A'}..{tb_keys[-1] if tb_keys else 'N/A'}]")
+        print(f"[DEBUG REPLAY] team_control len={len(team_control)}")
+        
+        cap_dbg = cv2.VideoCapture(session["video_path"])
+        replay_fps = cap_dbg.get(cv2.CAP_PROP_FPS) or 24
+        cap_dbg.release()
+        print(f"[DEBUG REPLAY] video FPS={replay_fps}, expected output duration={total_frames/replay_fps:.2f}s")
         
         sm.update_task(session_id, task_id, progress=20)
         
