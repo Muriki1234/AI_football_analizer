@@ -98,18 +98,23 @@ def save_video(frames: list, output_path: str, fps: float = 24):
     """Save frames to H.264 mp4 via ffmpeg pipe — avoids mp4v temp-file FPS drift."""
     if not frames:
         return
-    
-    # Convert to H.264 for web browser compatibility
     import subprocess
-    try:
-        subprocess.run(["ffmpeg", "-y", "-i", temp_path, "-vcodec", "libx264", output_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if os.path.exists(output_path):
-            os.remove(temp_path)
-        else:
-            os.rename(temp_path, output_path)
-    except Exception:
-        if os.path.exists(temp_path):
-            os.rename(temp_path, output_path)
+    h, w = frames[0].shape[:2]
+    black = np.zeros((h, w, 3), dtype=np.uint8)
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "rawvideo", "-vcodec", "rawvideo",
+        "-s", f"{w}x{h}", "-pix_fmt", "bgr24",
+        "-r", str(fps), "-i", "pipe:",
+        "-vcodec", "libx264", "-pix_fmt", "yuv420p",
+        output_path
+    ]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for frame in frames:
+        proc.stdin.write((frame if frame is not None else black).tobytes())
+    proc.stdin.close()
+    proc.wait()
 
 def put_text_pil(img, text: str, position: tuple, color: tuple, font_size: int = 28):
     """用 PIL 绘制文字（支持中文）"""

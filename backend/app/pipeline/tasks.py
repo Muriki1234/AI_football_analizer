@@ -416,6 +416,11 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         with open(tracks_cache, "wb") as f:
             pickle.dump(cache_payload, f)
 
+        # ── 释放帧内存（后续任务会单独读取视频）──
+        del frames
+        import gc; gc.collect()
+        print(f"[MEM] Global analysis done — frames released")
+
         sm.update_status(
             session_id, "analysis_done",
             progress=100, stage="done",
@@ -710,9 +715,11 @@ def _draw_possession_chart(data: dict, t1: int, t2: int, neu: int, output_path: 
 def run_minimap_replay(session_id: str, session: dict, task_id: str, sm: SessionManager):
     """
     生成小地图轨迹回放 MP4。
-    不含原始视频画面，只渲染球场图 + 球员点 + 被追踪目标 + 足球，体积小、渲染快。
+    流式写入：逐帧渲染 → 直接写 ffmpeg pipe，内存占用恒定。
     """
     try:
+        import subprocess as sp
+
         sm.update_task(session_id, task_id, status="running", progress=5)
 
         if not HAS_SPORTS:
@@ -720,7 +727,7 @@ def run_minimap_replay(session_id: str, session: dict, task_id: str, sm: Session
 
         data = _load_cache(session)
         tracks, tracked_bboxes = data["tracks"], data["tracked_bboxes"]
-        team_control  = data["team_control"]
+        team_control  = np.array(data["team_control"])
         hex_t1        = data["team_colors_hex"].get(1, "#3498db")
         hex_t2        = data["team_colors_hex"].get(2, "#e74c3c")
         config        = SoccerPitchConfiguration()
@@ -728,25 +735,48 @@ def run_minimap_replay(session_id: str, session: dict, task_id: str, sm: Session
 
         sm.update_task(session_id, task_id, progress=10)
 
-        # 渲染所有帧（并行）
-        render_args = [
-            (i, tracks, tracked_bboxes, np.array(team_control),
-             config, hex_t1, hex_t2)
-            for i in range(total_frames)
-        ]
-        frames = [None] * total_frames
+        cap = cv2.VideoCapture(session["video_path"])
+        fps = cap.get(cv2.CAP_PROP_FPS) or 24
+        cap.release()
 
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            for idx, rendered in pool.map(_render_minimap_frame_worker, render_args):
-                frames[idx] = rendered
-                if idx % 120 == 0:
-                    pct = int(10 + (idx / total_frames) * 80)
-                    sm.update_task(session_id, task_id, progress=pct)
+        # 先渲染第一帧拿到尺寸
+        first_frame = render_minimap_frame(0, tracks, tracked_bboxes, team_control,
+                                            config, hex_t1, hex_t2)
+        mh, mw = first_frame.shape[:2]
 
         output_path = sm.session_output_dir(session_id) / "minimap_replay.mp4"
-        cap = cv2.VideoCapture(session["video_path"]); fps = cap.get(cv2.CAP_PROP_FPS) or 24; cap.release()
-        save_video(frames, str(output_path), fps=fps)
 
+        ffmpeg_cmd = [
+            "ffmpeg", "-y",
+            "-f", "rawvideo", "-vcodec", "rawvideo",
+            "-s", f"{mw}x{mh}", "-pix_fmt", "bgr24",
+            "-r", str(fps), "-i", "pipe:",
+            "-vcodec", "libx264", "-pix_fmt", "yuv420p",
+            str(output_path)
+        ]
+        proc = sp.Popen(ffmpeg_cmd, stdin=sp.PIPE,
+                        stdout=sp.DEVNULL, stderr=sp.DEVNULL)
+
+        # 写第一帧
+        proc.stdin.write(first_frame.tobytes())
+
+        # 流式渲染后续帧
+        for i in range(1, total_frames):
+            try:
+                frame = render_minimap_frame(i, tracks, tracked_bboxes, team_control,
+                                              config, hex_t1, hex_t2)
+            except Exception:
+                frame = np.zeros((mh, mw, 3), dtype=np.uint8)
+            proc.stdin.write(frame.tobytes())
+
+            if i % 120 == 0:
+                pct = int(10 + (i / total_frames) * 85)
+                sm.update_task(session_id, task_id, progress=pct)
+
+        proc.stdin.close()
+        proc.wait()
+
+        print(f"[MEM] Minimap replay done — streamed {total_frames} frames")
         _finish_task(sm, session_id, task_id, output_path)
 
     except Exception as exc:
@@ -775,8 +805,13 @@ def _render_minimap_frame_worker(args):
 # ── 3e. 全景图合并回放 (Full Replay) ──────────────────────────────────
 
 def run_full_replay(session_id: str, session: dict, task_id: str, sm: SessionManager):
-    """生成带有 YOLO 检测框、球员 ID、球权三角、小地图Overlay的全景视频 MP4"""
+    """
+    生成带有 YOLO 检测框、球员 ID、球权三角、小地图Overlay的全景视频 MP4。
+    流式处理：逐帧读取 → 渲染 → 写入 ffmpeg pipe，内存占用恒定（~1帧）。
+    """
     try:
+        import subprocess as sp
+
         sm.update_task(session_id, task_id, status="running", progress=5)
 
         data = _load_cache(session)
@@ -784,53 +819,68 @@ def run_full_replay(session_id: str, session: dict, task_id: str, sm: SessionMan
         team_control  = data["team_control"]
         hex_t1        = data["team_colors_hex"].get(1, "#3498db")
         hex_t2        = data["team_colors_hex"].get(2, "#e74c3c")
-        
-        # We need original frames
-        sm.update_task(session_id, task_id, progress=10)
-        frames = read_video(session["video_path"])
-        total_frames = min(len(frames), len(tracks["players"]))
-        
+
+        total_frames = len(tracks["players"])
         tb_keys = sorted(tracked_bboxes.keys())
-        print(f"[DEBUG REPLAY] frames={len(frames)}, tracks_players_len={len(tracks['players'])}, total_frames={total_frames}")
+        print(f"[DEBUG REPLAY] tracks_players_len={total_frames}")
         print(f"[DEBUG REPLAY] tracked_bboxes: count={len(tracked_bboxes)}, range=[{tb_keys[0] if tb_keys else 'N/A'}..{tb_keys[-1] if tb_keys else 'N/A'}]")
-        print(f"[DEBUG REPLAY] team_control len={len(team_control)}")
-        
-        cap_dbg = cv2.VideoCapture(session["video_path"])
-        replay_fps = cap_dbg.get(cv2.CAP_PROP_FPS) or 24
-        cap_dbg.release()
-        print(f"[DEBUG REPLAY] video FPS={replay_fps}, expected output duration={total_frames/replay_fps:.2f}s")
-        
-        sm.update_task(session_id, task_id, progress=20)
-        
-        # Build kwargs for parallel
-        tracker = Tracker(MODEL_PATH)
+
+        sm.update_task(session_id, task_id, progress=10)
+
+        # Prepare helpers (no frame data — lightweight)
+        tracker_obj = Tracker(MODEL_PATH)
         team_assigner = TeamAssigner()
         team_colors = {
             1: np.array([int(hex_t1[5:7], 16), int(hex_t1[3:5], 16), int(hex_t1[1:3], 16)]),
             2: np.array([int(hex_t2[5:7], 16), int(hex_t2[3:5], 16), int(hex_t2[1:3], 16)])
         }
         team_assigner.team_colors = team_colors
-
         config = SoccerPitchConfiguration() if HAS_SPORTS else None
 
-        render_args = [
-            (i, frames[i], tracks, tracked_bboxes, team_control, team_assigner, tracker, config, hex_t1, hex_t2)
-            for i in range(total_frames)
-        ]
-        
-        output_frames = [None] * total_frames
-        
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            for idx, rendered in pool.map(_render_single_frame_worker_full, render_args):
-                output_frames[idx] = rendered
-                if idx % 60 == 0:
-                    pct = int(20 + (idx / total_frames) * 75)
-                    sm.update_task(session_id, task_id, progress=pct)
+        # Open video for sequential reading
+        cap = cv2.VideoCapture(session["video_path"])
+        fps = cap.get(cv2.CAP_PROP_FPS) or 24
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
         output_path = sm.session_output_dir(session_id) / "full_replay.mp4"
-        cap = cv2.VideoCapture(session["video_path"]); fps = cap.get(cv2.CAP_PROP_FPS) or 24; cap.release()
-        save_video(output_frames, str(output_path), fps=fps)
-        
+
+        # Start ffmpeg pipe
+        ffmpeg_cmd = [
+            "ffmpeg", "-y",
+            "-f", "rawvideo", "-vcodec", "rawvideo",
+            "-s", f"{w}x{h}", "-pix_fmt", "bgr24",
+            "-r", str(fps), "-i", "pipe:",
+            "-vcodec", "libx264", "-pix_fmt", "yuv420p",
+            str(output_path)
+        ]
+        proc = sp.Popen(ffmpeg_cmd, stdin=sp.PIPE,
+                        stdout=sp.DEVNULL, stderr=sp.DEVNULL)
+
+        sm.update_task(session_id, task_id, progress=15)
+
+        # Stream: read frame → render → write → discard
+        for i in range(total_frames):
+            ret, frame = cap.read()
+            if not ret:
+                frame = np.zeros((h, w, 3), dtype=np.uint8)
+
+            # Render single frame (same logic as _render_single_frame_worker_full)
+            args = (i, frame, tracks, tracked_bboxes, team_control,
+                    team_assigner, tracker_obj, config, hex_t1, hex_t2)
+            _, rendered = _render_single_frame_worker_full(args)
+
+            proc.stdin.write(rendered.tobytes())
+
+            if i % 60 == 0:
+                pct = int(15 + (i / total_frames) * 80)
+                sm.update_task(session_id, task_id, progress=pct)
+
+        proc.stdin.close()
+        proc.wait()
+        cap.release()
+
+        print(f"[MEM] Full replay done — streamed {total_frames} frames, no bulk load")
         _finish_task(sm, session_id, task_id, output_path)
 
     except Exception as exc:

@@ -237,5 +237,17 @@ def serve_file(sid, task_id):
         return jsonify({"error": "File missing"}), 404
     return send_file(fp, conditional=True)
 
+@app.route("/api/<sid>/download_raw")
+def download_raw_video(sid):
+    """直接下载原始上传视频（full_replay 生成失败时的兜底）"""
+    session, err = _s404(sid)
+    if err: return err
+    vp = session.get("video_path", "")
+    if not vp or not os.path.exists(vp):
+        return jsonify({"error": "Video file not found"}), 404
+    return send_file(vp, as_attachment=True,
+                     download_name=f"original_{sid}.mp4",
+                     conditional=True)
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=7860, debug=False, use_reloader=False)

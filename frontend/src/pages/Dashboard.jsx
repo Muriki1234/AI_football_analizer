@@ -10,6 +10,7 @@ import {
     autoStart, pollSessionStatus, startGlobalAnalysis,
     generateFeature, pollTaskStatus, getSummary
 } from '../services/api';
+import colab from '../services/colabService';
 import StepNav from '../components/StepNav';
 import './Dashboard.css';
 
@@ -82,6 +83,7 @@ export default function Dashboard() {
     }, [features['full_replay']?.status, features['full_replay']?.url]);
 
     const needsAutoStart = location.state?.autoStart;
+    const autoStartFired = useRef(false);
 
     useEffect(() => {
         if (!sessionId) return;
@@ -89,10 +91,17 @@ export default function Dashboard() {
         (async () => {
             try {
                 // Step 0: Auto-start if coming straight from Upload (skip trim/configure)
-                if (needsAutoStart) {
+                // Guard against React StrictMode double-invoke
+                if (needsAutoStart && !autoStartFired.current) {
+                    autoStartFired.current = true;
                     setPhase('tracking');
                     setStageLabel('Auto-detecting players...');
-                    await autoStart(sessionId);
+                    try {
+                        await autoStart(sessionId);
+                    } catch (e) {
+                        // 400 = already started (e.g. StrictMode second invoke) — safe to ignore
+                        if (!e?.response?.status === 400) throw e;
+                    }
                 }
 
                 // Step 1: Wait for tracking_done
@@ -272,7 +281,25 @@ export default function Dashboard() {
                                 {fState.status === 'done' && feat.type === 'video' && fState.url && (
                                     <video src={fState.url} controls autoPlay muted loop className="feature-card__result-img" />
                                 )}
-                                {fState.status === 'error' && (
+                                {fState.status === 'error' && feat.key === 'full_replay' && (
+                                    <div>
+                                        <p className="feature-card__error">❌ {fState.error}</p>
+                                        <button
+                                            className="btn btn-secondary feature-card__btn"
+                                            style={{ marginTop: '0.5rem' }}
+                                            onClick={() => {
+                                                const base = colab.isConfigured() ? colab.getUrl() : '';
+                                                handleDownload(
+                                                    `${base}/api/${sessionId}/download_raw`,
+                                                    `original_${sessionId}.mp4`
+                                                );
+                                            }}
+                                        >
+                                            ↓ 下载原始视频
+                                        </button>
+                                    </div>
+                                )}
+                                {fState.status === 'error' && feat.key !== 'full_replay' && (
                                     <p className="feature-card__error">❌ {fState.error}</p>
                                 )}
                             </div>
