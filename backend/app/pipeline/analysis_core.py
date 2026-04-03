@@ -94,16 +94,10 @@ def read_video(video_path: str) -> list:
     cap.release()
     return frames
 
-def save_video(frames: list, output_path: str, fps: int = 24):
+def save_video(frames: list, output_path: str, fps: float = 24):
+    """Save frames to H.264 mp4 via ffmpeg pipe — avoids mp4v temp-file FPS drift."""
     if not frames:
         return
-    h, w = frames[0].shape[:2]
-    temp_path = output_path.replace('.mp4', '_temp.mp4')
-    out  = cv2.VideoWriter(temp_path,
-                           cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
-    for f in frames:
-        out.write(f)
-    out.release()
     
     # Convert to H.264 for web browser compatibility
     import subprocess
