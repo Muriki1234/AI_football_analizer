@@ -7,7 +7,7 @@ import {
     HiArrowTrendingUp
 } from 'react-icons/hi2';
 import {
-    pollSessionStatus, startGlobalAnalysis,
+    autoStart, pollSessionStatus, startGlobalAnalysis,
     generateFeature, pollTaskStatus, getSummary
 } from '../services/api';
 import StepNav from '../components/StepNav';
@@ -81,12 +81,21 @@ export default function Dashboard() {
         }
     }, [features['full_replay']?.status, features['full_replay']?.url]);
 
+    const needsAutoStart = location.state?.autoStart;
+
     useEffect(() => {
         if (!sessionId) return;
 
-        // Step 1: Wait for tracking_done
         (async () => {
             try {
+                // Step 0: Auto-start if coming straight from Upload (skip trim/configure)
+                if (needsAutoStart) {
+                    setPhase('tracking');
+                    setStageLabel('Auto-detecting players...');
+                    await autoStart(sessionId);
+                }
+
+                // Step 1: Wait for tracking_done
                 const trackResult = await pollSessionStatus(
                     sessionId, 'tracking_done',
                     (data) => {

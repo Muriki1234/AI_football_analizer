@@ -69,6 +69,93 @@ SAMURAI_SCRIPT     = os.environ.get("SAMURAI_SCRIPT",        "samurai/run_samura
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# 阶段 0.8：自动检测 + 随机选球员 + 启动追踪（跳过手动选择）
+# ═══════════════════════════════════════════════════════════════════════
+
+def run_auto_detect_and_track(session_id: str, session: dict, sm: SessionManager):
+    """
+    自动流水线：从第一帧做 YOLO 检测 → 随机选一个球员 → 直接启动 SAMURAI 追踪。
+    前端上传完视频直接跳 Dashboard，不再经过 Trim / Configuration。
+    """
+    import random
+
+    try:
+        video_path = session["video_path"]
+        sm.update_status(session_id, "tracking", progress=5, stage="auto_detect")
+
+        # ── 1. 抽取第一帧 ──
+        if cv2 is None:
+            raise ImportError("cv2 is required")
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise RuntimeError(f"Cannot open video: {video_path}")
+        ret, frame = cap.read()
+        height, width = frame.shape[:2]
+        cap.release()
+        if not ret:
+            raise RuntimeError("Cannot read first frame")
+
+        print(f"🔍 Auto-detect: frame size {width}x{height}")
+
+        # ── 2. YOLO 检测球员 ──
+        players_data = []
+        try:
+            import requests as http_requests
+            import base64
+
+            rf_api_key  = os.environ.get("ROBOFLOW_API_KEY")
+            rf_model_id = os.environ.get("ROBOFLOW_MODEL_ID")
+            rf_version  = os.environ.get("ROBOFLOW_VERSION", "1")
+
+            if rf_api_key and rf_model_id:
+                print("🤖 Roboflow detection...")
+                _, buf = cv2.imencode('.jpg', frame)
+                img_b64 = base64.b64encode(buf).decode('ascii')
+                url = f"https://detect.roboflow.com/{rf_model_id}/{rf_version}?api_key={rf_api_key}"
+                resp = http_requests.post(url, data=img_b64,
+                                          headers={"Content-Type": "application/x-www-form-urlencoded"})
+                if resp.status_code == 200:
+                    for idx, pred in enumerate(resp.json().get("predictions", [])):
+                        if pred.get("class", "").lower() == "player":
+                            xc, yc = pred["x"], pred["y"]
+                            pw, ph = pred["width"], pred["height"]
+                            players_data.append({
+                                "id": idx + 1,
+                                "bbox": [int(xc - pw/2), int(yc - ph/2),
+                                         int(xc + pw/2), int(yc + ph/2)]
+                            })
+                else:
+                    raise Exception(f"Roboflow API {resp.status_code}")
+            else:
+                raise ImportError("Roboflow keys not set")
+        except Exception as e:
+            print(f"⚠️ Roboflow failed ({e}), using mock bboxes")
+            players_data = [
+                {"id": 1, "bbox": [int(width*0.2), int(height*0.4), int(width*0.25), int(height*0.55)]},
+                {"id": 2, "bbox": [int(width*0.4), int(height*0.5), int(width*0.45), int(height*0.65)]},
+                {"id": 3, "bbox": [int(width*0.6), int(height*0.3), int(width*0.65), int(height*0.45)]},
+                {"id": 4, "bbox": [int(width*0.8), int(height*0.6), int(width*0.85), int(height*0.75)]},
+            ]
+
+        if not players_data:
+            raise RuntimeError("No players detected in first frame")
+
+        # ── 3. 随机选一个球员 ──
+        chosen = random.choice(players_data)
+        x1, y1, x2, y2 = chosen["bbox"]
+        player_bbox = {"x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1, "frame": 0}
+        print(f"🎲 Auto-picked player #{chosen['id']} bbox={chosen['bbox']}")
+
+        # ── 4. 直接调用 SAMURAI 追踪（同一线程内继续） ──
+        sm.update_status(session_id, "tracking", progress=10, stage="samurai_init")
+        run_samurai_tracking(session_id, session, player_bbox, sm)
+
+    except Exception as e:
+        traceback.print_exc()
+        sm.update_status(session_id, "tracking_failed", error=str(e))
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # 阶段 1：SAMURAI 追踪
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -167,7 +254,8 @@ def run_samurai_tracking(session_id: str, session: dict,
                     fid = int(parts[0])
                     original_fid = start_index + (fid * SKIP_STEP)
                     x, y, w, h = float(parts[2]), float(parts[3]), float(parts[4]), float(parts[5])
-                    sparse_bboxes[original_fid] = [x * scale_back, y * scale_back, w * scale_back, h * scale_back]
+                    if w > 0 and h > 0:
+                        sparse_bboxes[original_fid] = [x * scale_back, y * scale_back, w * scale_back, h * scale_back]
 
         end_index = max(sparse_bboxes.keys()) if sparse_bboxes else start_index
         df = pd.DataFrame(index=range(start_index, end_index + 1), columns=['x', 'y', 'w', 'h'])
@@ -803,6 +891,9 @@ def _render_single_frame_worker_full(args):
             y2 = int(samurai_bbox_xyxy[3])
             x_c = int((samurai_bbox_xyxy[0] + samurai_bbox_xyxy[2]) / 2)
             width = samurai_bbox_xyxy[2] - samurai_bbox_xyxy[0]
+
+            if width <= 0:
+                return i, frame
 
             cv2.ellipse(frame, center=(x_c, y2), axes=(int(width), int(0.35*width)),
                        angle=0.0, startAngle=-45, endAngle=235, color=(0, 215, 255), thickness=6)

@@ -127,6 +127,15 @@ async function registerVideoPath(sessionId, videoPath) {
 // ═══════════════════════════════════════════════════════════════════════
 
 /**
+ * 自动启动：检测球员 → 随机选择 → SAMURAI 追踪（跳过手动选择）
+ * @param {string} sessionId
+ */
+async function autoStart(sessionId) {
+  const { data } = await http.post(`/api/${sessionId}/auto_start`)
+  return data
+}
+
+/**
  * 启动 SAMURAI 追踪
  * @param {string} sessionId
  * @param {{ x1, y1, x2, y2, frame }} bbox  前端选框坐标
@@ -394,6 +403,7 @@ const colabService = {
   trimVideo,
 
   // 流水线
+  autoStart,
   analyzeFrame,
   startTracking,
   startAnalysis,

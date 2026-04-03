@@ -84,6 +84,14 @@ export const analyzePlayer = async (videoId, playerId, coordinates = null) => {
     return response.data;
 };
 
+// ── Auto-Start Pipeline（跳过 Trim & 球员选择）────────────────────────
+
+export const autoStart = async (sessionId) => {
+    if (colab.isConfigured()) return colab.autoStart(sessionId);
+    const response = await api.post(`/${sessionId}/auto_start`);
+    return response.data;
+};
+
 // ── Analysis Pipeline（全部走 Colab）────────────────────────────────────
 
 export const registerSession = async (sessionId, videoPath) => {

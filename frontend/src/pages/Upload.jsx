@@ -135,12 +135,19 @@ export default function Upload() {
                                 className={`btn ${uploadSuccess ? 'btn-success' : 'btn-primary'}`}
                                 onClick={() => {
                                     if (uploadSuccess && uploadedVideoId) {
-                                        navigate('/trim', { state: { videoId: uploadedVideoId } });
+                                        navigate('/dashboard', {
+                                            state: {
+                                                sessionId: uploadedVideoId,
+                                                videoId: uploadedVideoId,
+                                                playerName: 'Auto-detected Player',
+                                                autoStart: true,
+                                            }
+                                        });
                                     }
                                 }}
                                 disabled={!uploadSuccess}
                             >
-                                {uploadSuccess ? 'Continue to Trim' : 'Uploading...'}
+                                {uploadSuccess ? 'Start Analysis' : 'Uploading...'}
                                 <HiArrowRight />
                             </button>
                         </div>
