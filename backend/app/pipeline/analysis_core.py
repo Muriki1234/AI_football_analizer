@@ -511,6 +511,8 @@ class TeamAssigner:
     def get_player_team(self, frame, bbox, player_id: int) -> int:
         if player_id in self.player_team_dict:
             return self.player_team_dict[player_id]
+        if self.kmeans is None:
+            return 1  # fallback：kmeans 未初始化时默认队伍1
         color = self._get_player_color(frame, bbox)
         tid   = self.kmeans.predict(color.reshape(1,-1))[0] + 1
         self.player_team_dict[player_id] = tid
