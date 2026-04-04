@@ -29,13 +29,6 @@ export default function Upload() {
                     // Local upload progress handled if needed
                 });
 
-                // If Colab GPU backend is connected, dual-upload to Colab
-                if (colab.isConfigured()) {
-                    await colab.sendVideo(data.video_id, f, (pct) => {
-                        console.log('Colab upload:', pct);
-                    });
-                }
-
                 // Add a small delay for UX so user sees the "done" state
                 setTimeout(() => {
                     done();
@@ -135,19 +128,14 @@ export default function Upload() {
                                 className={`btn ${uploadSuccess ? 'btn-success' : 'btn-primary'}`}
                                 onClick={() => {
                                     if (uploadSuccess && uploadedVideoId) {
-                                        navigate('/dashboard', {
-                                            state: {
-                                                sessionId: uploadedVideoId,
-                                                videoId: uploadedVideoId,
-                                                playerName: 'Auto-detected Player',
-                                                autoStart: true,
-                                            }
+                                        navigate('/configure', {
+                                            state: { videoId: uploadedVideoId }
                                         });
                                     }
                                 }}
                                 disabled={!uploadSuccess}
                             >
-                                {uploadSuccess ? 'Start Analysis' : 'Uploading...'}
+                                {uploadSuccess ? 'Select Player' : 'Uploading...'}
                                 <HiArrowRight />
                             </button>
                         </div>

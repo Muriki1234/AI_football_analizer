@@ -100,7 +100,7 @@ export default function Dashboard() {
                         await autoStart(sessionId);
                     } catch (e) {
                         // 400 = already started (e.g. StrictMode second invoke) — safe to ignore
-                        if (!e?.response?.status === 400) throw e;
+                        if (e?.response?.status !== 400) throw e;
                     }
                 }
 

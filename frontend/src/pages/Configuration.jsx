@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { getPlayers, registerSession, startTracking } from '../services/api';
+import { analyzeFrame, registerSession, startTracking } from '../services/api';
 import { motion, AnimatePresence } from 'framer-motion';
 import { HiUserGroup, HiArrowRight, HiLink, HiPlus } from 'react-icons/hi2';
 import { useProgress } from '../components/ProgressBar';
@@ -11,20 +11,24 @@ export default function Configuration() {
     const [selected, setSelected] = useState(null);
     const [analyzing, setAnalyzing] = useState(false);
     const [players, setPlayers] = useState([]);
+    const [frameUrl, setFrameUrl] = useState(null);
+    const [imgDims, setImgDims] = useState(null);
+    const [detecting, setDetecting] = useState(false);
 
     const navigate = useNavigate();
     const location = useLocation();
     const { start, done } = useProgress();
 
     const videoId = location.state?.videoId;
+    // Support both: coming from Upload (just videoId) or legacy Trimmer (with preLoadedPlayers)
     const preLoadedPlayers = location.state?.detectedPlayers;
-    const frameUrl = location.state?.frameUrl;
-    const imgDims = location.state?.imgDims;
+    const preLoadedFrameUrl = location.state?.frameUrl;
+    const preLoadedImgDims = location.state?.imgDims;
 
     useEffect(() => {
         async function fetchPlayers() {
             if (preLoadedPlayers) {
-                // Formatting pre-loaded detected players
+                // Legacy: data passed from Trimmer
                 const formattedPlayers = preLoadedPlayers.map((p, i) => ({
                     id: p.id || i + 1,
                     name: p.name || `Detected Player ${i + 1}`,
@@ -33,26 +37,36 @@ export default function Configuration() {
                     bbox: p.bbox
                 }));
                 setPlayers(formattedPlayers);
-                if (formattedPlayers.length > 0) {
-                    setSelected(formattedPlayers[0].id);
-                }
+                setFrameUrl(preLoadedFrameUrl || null);
+                setImgDims(preLoadedImgDims || null);
+                if (formattedPlayers.length > 0) setSelected(formattedPlayers[0].id);
             } else if (videoId) {
-                // Fallback request
+                // New: detect players from first frame directly
                 try {
-                    const data = await getPlayers(videoId);
-                    setPlayers(data.players);
-                    if (data.players.length > 0) {
-                        setSelected(data.players[0].id);
-                    }
+                    setDetecting(true);
+                    const data = await analyzeFrame(videoId, 0);
+                    const formattedPlayers = (data.players_data || []).map((p, i) => ({
+                        id: p.id || i + 1,
+                        name: p.name || `Player ${i + 1}`,
+                        number: p.number || '?',
+                        avatar: p.avatar || '👤',
+                        bbox: p.bbox
+                    }));
+                    setPlayers(formattedPlayers);
+                    if (data.annotated_frame_url) setFrameUrl(data.annotated_frame_url);
+                    if (data.image_dimensions) setImgDims(data.image_dimensions);
+                    if (formattedPlayers.length > 0) setSelected(formattedPlayers[0].id);
                 } catch (e) {
-                    console.error("Failed to fetch players", e);
+                    console.error("Failed to detect players", e);
+                } finally {
+                    setDetecting(false);
                 }
             } else {
                 setPlayers([]);
             }
         }
         fetchPlayers();
-    }, [videoId, preLoadedPlayers]);
+    }, [videoId]);
 
     const selectPlayer = (id) => {
         setSelected(id);
@@ -173,7 +187,9 @@ export default function Configuration() {
                         animate={{ opacity: 1, x: 0 }}
                         transition={{ delay: 0.2 }}
                     >
-                        {players.length > 0 ? players.map((player, i) => (
+                        {detecting ? (
+                            <div className="config-no-players">🔍 Detecting players...</div>
+                        ) : players.length > 0 ? players.map((player, i) => (
                             <motion.div
                                 key={player.id}
                                 className={`config-player-card ${selected === player.id ? 'config-player-card--selected' : ''}`}
