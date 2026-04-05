@@ -16,7 +16,7 @@ from app.pipeline.session_manager import SessionManager
 from app.pipeline import tasks
 
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+CORS(app)  # 覆盖所有路由，包括 /health
 
 OUTPUT_ROOT = Path('/content/pitchlogic/outputs')
 UPLOAD_ROOT = Path('/content/pitchlogic/uploads')
