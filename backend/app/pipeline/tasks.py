@@ -371,19 +371,13 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         poss_detector = SmartBallPossessionDetector(fps=fps)
         ball_history  = []
 
-        # 多帧采样初始化队伍颜色，防止 frame 0 选手过少或只有一队
-        team_color_initialized = False
-        sample_indices = [0, len(frames)//4, len(frames)//2]
-        for sample_idx in sample_indices:
-            if sample_idx < len(tracks["players"]) and len(tracks["players"][sample_idx]) >= 2:
-                try:
-                    team_assigner.assign_team_color(frames[sample_idx], tracks["players"][sample_idx])
-                    team_color_initialized = True
-                    print(f"[INFO] Team colors initialized from frame {sample_idx}")
-                    break
-                except Exception as e:
-                    print(f"[WARN] Frame {sample_idx} team color init failed: {e}")
-                    continue
+        # 多帧聚合初始化队伍颜色（8帧均匀采样，鲁棒性更强）
+        team_assigner.assign_team_color_multi(frames, tracks["players"], n_samples=8)
+        team_color_initialized = bool(team_assigner.kmeans is not None)
+        if team_color_initialized:
+            print(f"[INFO] Team colors initialized from 8 sampled frames (multi-frame)")
+        else:
+            print("[WARN] Team color initialization failed — all players assigned to team 1")
 
         if team_color_initialized:
             for i, p_tracks in enumerate(tracks["players"]):

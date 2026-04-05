@@ -54,7 +54,7 @@ except ImportError:
     HAS_SPORTS = False
 
 # ── 配置 ────────────────────────────────────────────────────────────────────
-YOLO_DETECTION_STRIDE = 5    # 每5帧检测一次
+YOLO_DETECTION_STRIDE = 1    # 每帧都检测（不跳帧）
 YOLO_BATCH_SIZE       = 60   # 单批处理帧数（60 = 更好GPU利用率）
 KEYPOINT_STRIDE       = 60   # 每60帧检测一次关键点（提升小地图精度）
 MINIMAP_SMOOTH_WINDOW = 25
@@ -505,6 +505,39 @@ class TeamAssigner:
                   for d in player_detections.values() if d]
         if not colors: return
         self.kmeans = KMeans(n_clusters=2, init="k-means++", n_init=10).fit(colors)
+        self.team_colors[1] = self.kmeans.cluster_centers_[0]
+        self.team_colors[2] = self.kmeans.cluster_centers_[1]
+
+    def assign_team_color_multi(self, frames: list, tracks_players: list, n_samples: int = 8):
+        """
+        从视频中均匀采样 n_samples 帧，聚合所有球员颜色后拟合 KMeans。
+        比单帧初始化鲁棒得多，解决白/黄等相近颜色无法区分的问题。
+        """
+        total = len(frames)
+        if total == 0:
+            return
+        # 均匀采样（跳过开头/结尾5%，避免黑帧）
+        start = max(0, int(total * 0.05))
+        end   = min(total - 1, int(total * 0.95))
+        sample_idx = np.linspace(start, end, n_samples, dtype=int)
+
+        all_colors = []
+        for idx in sample_idx:
+            if idx >= len(tracks_players):
+                continue
+            for pid, info in tracks_players[idx].items():
+                if not info or 'bbox' not in info:
+                    continue
+                try:
+                    c = self._get_player_color(frames[idx], info['bbox'])
+                    if c is not None and not np.all(c == 0):
+                        all_colors.append(c)
+                except Exception:
+                    pass
+
+        if len(all_colors) < 2:
+            return
+        self.kmeans = KMeans(n_clusters=2, init="k-means++", n_init=10, random_state=42).fit(np.array(all_colors))
         self.team_colors[1] = self.kmeans.cluster_centers_[0]
         self.team_colors[2] = self.kmeans.cluster_centers_[1]
 
