@@ -62,6 +62,12 @@ try:
 except ImportError:
     HAS_SPORTS = False
 
+# ── 团队显示颜色（高对比度，用于渲染而非分类）────────────────────────────────
+TEAM1_DISPLAY_BGR = (255, 191, 0)     # #00BFFF 青色 (BGR)
+TEAM1_DISPLAY_HEX = "#00BFFF"
+TEAM2_DISPLAY_BGR = (147, 20, 255)    # #FF1493 深粉 (BGR)
+TEAM2_DISPLAY_HEX = "#FF1493"
+
 # ── 环境变量配置（部署时设置）────────────────────────────────────────────────
 MODEL_PATH         = os.environ.get("YOLO_MODEL_PATH",      "weights/football/best.pt")
 KEYPOINT_MODEL_PATH= os.environ.get("KEYPOINT_MODEL_PATH",  "weights/keypoints/best.pt")
@@ -182,9 +188,9 @@ def run_samurai_tracking(session_id: str, session: dict,
         if cv2 is None:
             raise ImportError("cv2 is required for frame extraction")
             
-        # ── 高清变极速抽取：缩放0.5 & 第5帧抽1帧 ──
+        # ── 高清变极速抽取：缩放0.5 & 第10帧抽1帧 ──
         RESIZE_FACTOR = 0.5
-        SKIP_STEP = 5
+        SKIP_STEP = 10
         
         cap = cv2.VideoCapture(video_path)
         orig_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -421,8 +427,8 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                 k: v.tolist() for k, v in team_assigner.team_colors.items()
             },
             "team_colors_hex": {
-                1: bgr_to_hex(team_assigner.team_colors.get(1, [255,255,255])),
-                2: bgr_to_hex(team_assigner.team_colors.get(2, [0,0,0])),
+                1: TEAM1_DISPLAY_HEX,
+                2: TEAM2_DISPLAY_HEX,
             },
         }
         with open(tracks_cache, "wb") as f:
@@ -934,12 +940,14 @@ def _render_single_frame_worker_full(args):
             bbox = info['bbox']
             if bbox[2] <= bbox[0] or bbox[3] <= bbox[1]: continue
 
-            # Determine color
-            tc = info.get('team_color')
-            if tc is not None and len(tc) == 3:
-                color = (int(tc[0]), int(tc[1]), int(tc[2]))
+            # Determine color by team ID (use predefined display colors)
+            team_id = info.get('team')
+            if team_id == 1:
+                color = TEAM1_DISPLAY_BGR
+            elif team_id == 2:
+                color = TEAM2_DISPLAY_BGR
             else:
-                color = (0,0,255)
+                color = (0, 0, 255)
             
             frame = tracker.draw_ellipse(frame, bbox, color, pid, is_tracked=False)
 
@@ -962,9 +970,11 @@ def _render_single_frame_worker_full(args):
 
             team_color = (0, 215, 255)
             if current_yolo_info:
-                tc = current_yolo_info.get('team_color', [0, 215, 255])
-                if len(tc) == 3:
-                    team_color = (int(tc[0]), int(tc[1]), int(tc[2]))
+                tid = current_yolo_info.get('team')
+                if tid == 1:
+                    team_color = TEAM1_DISPLAY_BGR
+                elif tid == 2:
+                    team_color = TEAM2_DISPLAY_BGR
 
             cv2.ellipse(frame, center=(x_c, y2), axes=(int(width*0.9), int(0.35*width*0.9)),
                        angle=0.0, startAngle=-45, endAngle=235, color=team_color, thickness=3)
@@ -995,12 +1005,7 @@ def _render_single_frame_worker_full(args):
                 if confidence > 0.6:
                     frame = tracker.draw_triangle(frame, samurai_bbox_xyxy, (0, 0, 255))
 
-        # Draw referees & ball
-        for _, info in tracks['referees'][i].items():
-            if info and 'bbox' in info:
-                bbox = info['bbox']
-                if len(bbox) == 4 and bbox[2] > bbox[0] and bbox[3] > bbox[1]:
-                    frame = tracker.draw_ellipse(frame, bbox, (0, 255, 255), None)
+        # Draw ball (referees intentionally not drawn to keep replay clean)
 
         for _, info in tracks['ball'][i].items():
             if info and 'bbox' in info:

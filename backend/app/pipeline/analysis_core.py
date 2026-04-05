@@ -54,9 +54,9 @@ except ImportError:
     HAS_SPORTS = False
 
 # ── 配置 ────────────────────────────────────────────────────────────────────
-YOLO_DETECTION_STRIDE = 5    # 每5帧检测一次（与Colab一致）
-YOLO_BATCH_SIZE       = 32   # 单批处理帧数
-KEYPOINT_STRIDE       = 90   # 每90帧检测一次关键点
+YOLO_DETECTION_STRIDE = 5    # 每5帧检测一次
+YOLO_BATCH_SIZE       = 60   # 单批处理帧数（60 = 更好GPU利用率）
+KEYPOINT_STRIDE       = 60   # 每60帧检测一次关键点（提升小地图精度）
 MINIMAP_SMOOTH_WINDOW = 25
 SPEED_SMOOTH_WINDOW   = 7
 
@@ -158,7 +158,7 @@ class Tracker:
         for i in range(0, len(det_indices), YOLO_BATCH_SIZE):
             batch_idx    = det_indices[i:i+YOLO_BATCH_SIZE]
             batch_frames = [frames[idx] for idx in batch_idx]
-            results      = self.model.predict(batch_frames, conf=0.1, verbose=False)
+            results      = self.model.predict(batch_frames, conf=0.1, verbose=False, half=True, imgsz=416)
             for res, fidx in zip(results, batch_idx):
                 det_dict[fidx] = res
 
@@ -336,7 +336,7 @@ class KeypointDetector:
         for i in range(0, len(indices), YOLO_BATCH_SIZE):
             batch_idx = indices[i:i+YOLO_BATCH_SIZE]
             results   = self.model.predict([frames[j] for j in batch_idx],
-                                           conf=0.1, verbose=False)
+                                           conf=0.1, verbose=False, half=True, imgsz=416)
             for res, fidx in zip(results, batch_idx):
                 kps = {}
                 if res.keypoints is not None and res.keypoints.xy.shape[1] > 0:

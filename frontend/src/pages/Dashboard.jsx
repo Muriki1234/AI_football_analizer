@@ -142,6 +142,9 @@ export default function Dashboard() {
                 const s = await getSummary(sessionId);
                 setSummary(s);
 
+                // Step 5: Auto-trigger full_replay generation
+                handleGenerateFeature('full_replay');
+
             } catch (e) {
                 setError(e.message || 'Pipeline failed');
                 setPhase('error');
