@@ -380,12 +380,39 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             print("[WARN] Team color initialization failed — all players assigned to team 1")
 
         if team_color_initialized:
+            # ── 多帧投票：对每个 player_id 收集跨帧颜色预测，用多数票决定队伍 ──
+            # 这样避免"第一次出现时宽镜头小画面导致单次预测错误"的问题
+            from collections import Counter
+            player_vote_dict = {}   # {pid: [team_id, ...]}
+            SAMPLE_STEP = max(1, len(frames) // 120)  # 最多采样120帧，避免过慢
+            for i in range(0, len(tracks["players"]), SAMPLE_STEP):
+                p_tracks_sample = tracks["players"][i]
+                for pid, info in p_tracks_sample.items():
+                    if not info or 'bbox' not in info: continue
+                    try:
+                        color = team_assigner._get_player_color(frames[i], info['bbox'])
+                        if color is not None and not np.all(color == 0):
+                            predicted = int(team_assigner.kmeans.predict(color.reshape(1, -1))[0]) + 1
+                            player_vote_dict.setdefault(pid, []).append(predicted)
+                    except Exception:
+                        pass
+
+            # 多数票决定最终队伍
+            player_final_team = {
+                pid: Counter(votes).most_common(1)[0][0]
+                for pid, votes in player_vote_dict.items() if votes
+            }
+            print(f"[INFO] Multi-frame voting done: {len(player_final_team)} players assigned")
+
             for i, p_tracks in enumerate(tracks["players"]):
-                # 分配队伍 ID 和颜色
+                # 分配队伍 ID 和颜色（用投票结果；新 ID 回退到 kmeans 单次预测）
                 for pid, info in p_tracks.items():
                     if not info:
                         continue
-                    tid = team_assigner.get_player_team(frames[i], info["bbox"], pid)
+                    if pid in player_final_team:
+                        tid = player_final_team[pid]
+                    else:
+                        tid = team_assigner.get_player_team(frames[i], info["bbox"], pid)
                     info["team"]       = tid
                     info["team_color"] = team_assigner.team_colors.get(tid, np.array([0,0,0]))
 

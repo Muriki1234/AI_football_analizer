@@ -9,63 +9,90 @@ import './VideoOverlayPlayer.css';
 
 const BALL_COLOR    = '#00FF00';
 const TRACKED_OUTER = '#FFD700';
+const POSS_WINDOW   = 120;  // 控球率：滚动最近 N 帧
 
-// ── 椭圆：模仿 cv2.ellipse(center, axes, 0, -45, 235) ─────────────────────
-function drawEllipse(ctx, bbox, color, trackId, lineWidth = 2) {
+// ── 椭圆：模仿 cv2.ellipse(center=(cx,y2), axes, 0, -45, 235) ────────────
+function drawEllipse(ctx, bbox, color, lineWidth = 3) {
     const [x1, y1, x2, y2] = bbox;
     const cx = (x1 + x2) / 2;
-    const cy = y2;                          // 底部中心
+    const cy = y2;
     const rx = Math.max((x2 - x1) / 2, 1);
     const ry = Math.max(rx * 0.35, 1);
 
-    // OpenCV startAngle=-45, endAngle=235（顺时针）→ Canvas 同等角度（rad）
-    const startA = (-45  * Math.PI) / 180;
-    const endA   = (235  * Math.PI) / 180;
-
     ctx.save();
     ctx.beginPath();
-    ctx.ellipse(cx, cy, rx, ry, 0, startA, endA, false); // false = 顺时针
+    ctx.ellipse(cx, cy, rx, ry, 0,
+        (-45  * Math.PI) / 180,
+        (235  * Math.PI) / 180,
+        false   // clockwise（与 OpenCV 一致）
+    );
     ctx.strokeStyle = color;
     ctx.lineWidth   = lineWidth;
     ctx.stroke();
-
-    // ID 标签
-    if (trackId !== null && trackId !== undefined) {
-        const label = String(trackId);
-        ctx.font = 'bold 11px Arial';
-        const tw = ctx.measureText(label).width;
-        ctx.fillStyle = color;
-        ctx.fillRect(cx - tw / 2 - 4, cy - 9, tw + 8, 14);
-        ctx.fillStyle = '#000';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(label, cx, cy - 2);
-    }
     ctx.restore();
 }
 
-// ── 倒三角（球 / 持球标记） ────────────────────────────────────────────────
+// ── 追踪目标专用：金色外圈 + 队伍色内圈 + 速度标签 ──────────────────────
+function drawTrackedPlayer(ctx, outerBbox, innerBbox, teamColor, trackId, speedKmh) {
+    drawEllipse(ctx, outerBbox, TRACKED_OUTER, 5);
+    drawEllipse(ctx, innerBbox, teamColor, 3);
+
+    // ID 标签（只追踪目标显示）
+    if (trackId !== null && trackId !== undefined) {
+        const [x1, , x2, y2] = outerBbox;
+        const cx = (x1 + x2) / 2;
+        const label = String(trackId);
+        ctx.save();
+        ctx.font = 'bold 11px Arial';
+        const tw = ctx.measureText(label).width;
+        ctx.fillStyle = TRACKED_OUTER;
+        ctx.fillRect(cx - tw / 2 - 4, y2 - 9, tw + 8, 14);
+        ctx.fillStyle = '#000';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, cx, y2 - 2);
+        ctx.restore();
+    }
+
+    // 速度标签
+    if (speedKmh > 0) {
+        const [x1, , , y2] = outerBbox;
+        const spd = speedKmh.toFixed(1) + ' km/h';
+        ctx.save();
+        ctx.font = 'bold 12px Arial';
+        const tw = ctx.measureText(spd).width;
+        ctx.fillStyle = 'rgba(180,235,255,0.9)';
+        ctx.fillRect(x1, y2 + 4, tw + 8, 16);
+        ctx.strokeStyle = '#000'; ctx.lineWidth = 0.5;
+        ctx.strokeRect(x1, y2 + 4, tw + 8, 16);
+        ctx.fillStyle = '#000';
+        ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+        ctx.fillText(spd, x1 + 4, y2 + 6);
+        ctx.restore();
+    }
+}
+
+// ── 倒三角（球 / 持球标记） ───────────────────────────────────────────────
 function drawTriangle(ctx, bbox, color) {
-    const [x1, y1, x2, y2] = bbox;
+    const [x1, y1, x2] = bbox;
     const cx = (x1 + x2) / 2;
-    const cy = y1;
     const s  = 9;
     ctx.save();
     ctx.beginPath();
-    ctx.moveTo(cx, cy - s);
-    ctx.lineTo(cx - s / 2, cy);
-    ctx.lineTo(cx + s / 2, cy);
+    ctx.moveTo(cx, y1 - s);
+    ctx.lineTo(cx - s / 2, y1);
+    ctx.lineTo(cx + s / 2, y1);
     ctx.closePath();
     ctx.fillStyle = color;
     ctx.fill();
     ctx.restore();
 }
 
-// ── 顶部控球率横条 ─────────────────────────────────────────────────────────
+// ── 控球率横条（滚动窗口） ─────────────────────────────────────────────────
 function drawPossessionBar(ctx, cw, t1frac, t2frac, t1color, t2color) {
     const bh = 22, bw = 220, bx = (cw - bw) / 2, by = 8;
     ctx.save();
-    ctx.globalAlpha = 0.75;
+    ctx.globalAlpha = 0.8;
     ctx.fillStyle = '#111';
     ctx.fillRect(bx, by, bw, bh);
     ctx.fillStyle = t1color;
@@ -84,36 +111,29 @@ function drawPossessionBar(ctx, cw, t1frac, t2frac, t1color, t2color) {
     ctx.restore();
 }
 
-// ── 计算视频在 canvas 上的实际显示区域（letterbox 补偿） ────────────────────
-function getVideoRect(canvasW, canvasH, videoW, videoH) {
-    const canvasAspect = canvasW / canvasH;
-    const videoAspect  = videoW  / videoH;
-    let dispW, dispH, offsetX, offsetY;
-    if (canvasAspect > videoAspect) {
-        dispH   = canvasH;
-        dispW   = canvasH * videoAspect;
-        offsetX = (canvasW - dispW) / 2;
-        offsetY = 0;
+// ── 计算 letterbox 显示区域 ────────────────────────────────────────────────
+function getVideoRect(cw, ch, vw, vh) {
+    const ca = cw / ch, va = vw / vh;
+    let dispW, dispH, ox, oy;
+    if (ca > va) {
+        dispH = ch; dispW = ch * va; ox = (cw - dispW) / 2; oy = 0;
     } else {
-        dispW   = canvasW;
-        dispH   = canvasW / videoAspect;
-        offsetX = 0;
-        offsetY = (canvasH - dispH) / 2;
+        dispW = cw; dispH = cw / va; ox = 0; oy = (ch - dispH) / 2;
     }
-    return { dispW, dispH, offsetX, offsetY };
+    return { dispW, dispH, ox, oy };
 }
 
 export default function VideoOverlayPlayer({ sessionId }) {
-    const videoRef   = useRef(null);
-    const canvasRef  = useRef(null);
-    const overlayRef = useRef(null);
-    const rafRef     = useRef(null);
-    const possRef    = useRef({ t1: 0, t2: 0, lastFrame: -1 });
+    const videoRef    = useRef(null);
+    const canvasRef   = useRef(null);
+    const overlayRef  = useRef(null);
+    const rafRef      = useRef(null);
+    const historyRef  = useRef([]);   // 最近 POSS_WINDOW 帧的 ctrl 值
 
     const [loadState, setLoadState] = useState('loading');
     const [errMsg, setErrMsg]       = useState('');
 
-    // ── 加载 overlay 数据 ─────────────────────────────────────────────────
+    // ── 加载 overlay 数据 ──────────────────────────────────────────────
     useEffect(() => {
         if (!sessionId) return;
         setLoadState('loading');
@@ -124,7 +144,7 @@ export default function VideoOverlayPlayer({ sessionId }) {
             .catch(e => { setErrMsg(e.message); setLoadState('error'); });
     }, [sessionId]);
 
-    // ── Canvas 渲染（每 rAF 触发一次） ───────────────────────────────────
+    // ── 渲染单帧 ──────────────────────────────────────────────────────
     const renderFrame = useCallback(() => {
         const video  = videoRef.current;
         const canvas = canvasRef.current;
@@ -132,8 +152,7 @@ export default function VideoOverlayPlayer({ sessionId }) {
         if (!video || !canvas || !data) return;
 
         const ctx = canvas.getContext('2d');
-        const cw  = canvas.width;
-        const ch  = canvas.height;
+        const cw = canvas.width, ch = canvas.height;
         ctx.clearRect(0, 0, cw, ch);
 
         const frameIdx = Math.min(
@@ -145,90 +164,64 @@ export default function VideoOverlayPlayer({ sessionId }) {
         const f = data.frames[frameIdx];
         if (!f) return;
 
-        // ── 控球率累计（每帧只累计一次）──────────────────────────────────
-        const pos = possRef.current;
-        if (frameIdx !== pos.lastFrame) {
-            pos.lastFrame = frameIdx;
-            if (f.ctrl === 1) pos.t1++;
-            else if (f.ctrl === 2) pos.t2++;
-        }
-        const tot = pos.t1 + pos.t2 || 1;
+        // ── 滚动窗口控球率 ─────────────────────────────────────────────
+        const hist = historyRef.current;
+        hist.push(f.ctrl);
+        if (hist.length > POSS_WINDOW) hist.shift();
+        const t1c_count = hist.filter(v => v === 1).length;
+        const t2c_count = hist.filter(v => v === 2).length;
+        const tot = t1c_count + t2c_count || 1;
 
-        // ── 计算视频实际显示区域（处理 letterbox） ────────────────────────
-        const { dispW, dispH, offsetX, offsetY } =
-            getVideoRect(cw, ch, data.video_w, data.video_h);
-        const scaleX = dispW / data.video_w;
-        const scaleY = dispH / data.video_h;
-
-        // 坐标转换：原始分辨率 → canvas 像素（含 letterbox 偏移）
+        // ── letterbox 坐标映射 ─────────────────────────────────────────
+        const { dispW, dispH, ox, oy } = getVideoRect(cw, ch, data.video_w, data.video_h);
+        const sx = dispW / data.video_w, sy = dispH / data.video_h;
         const sc = ([ax1, ay1, ax2, ay2]) => [
-            ax1 * scaleX + offsetX,
-            ay1 * scaleY + offsetY,
-            ax2 * scaleX + offsetX,
-            ay2 * scaleY + offsetY,
+            ax1 * sx + ox, ay1 * sy + oy,
+            ax2 * sx + ox, ay2 * sy + oy,
         ];
 
-        // ── 找追踪目标对应的 YOLO player id ──────────────────────────────
+        // ── 找追踪目标 player_id ───────────────────────────────────────
         let trackedId = null;
         if (f.t) {
             const [tx1, ty1, tx2, ty2] = f.t;
             const tcx = (tx1 + tx2) / 2, tcy = (ty1 + ty2) / 2;
-            let minD = 80; // 原始分辨率像素阈值
+            let minD = 80;
             for (const p of f.p) {
-                const pcx = (p[1] + p[3]) / 2, pcy = (p[2] + p[4]) / 2;
-                const d = Math.hypot(pcx - tcx, pcy - tcy);
+                const d = Math.hypot((p[1]+p[3])/2 - tcx, (p[2]+p[4])/2 - tcy);
                 if (d < minD) { minD = d; trackedId = p[0]; }
             }
         }
 
-        // ── 画普通球员 ─────────────────────────────────────────────────
-        const t1c = data.t1 || '#00BFFF';
-        const t2c = data.t2 || '#FF1493';
+        const t1color = data.t1 || '#00BFFF';
+        const t2color = data.t2 || '#FF1493';
+
+        // ── 普通球员：只画彩色椭圆弧，不显示 ID ──────────────────────
         for (const p of f.p) {
             if (p[0] === trackedId) continue;
-            const color = p[5] === 1 ? t1c : t2c;
-            drawEllipse(ctx, sc([p[1], p[2], p[3], p[4]]), color, p[0]);
+            const color = p[5] === 1 ? t1color : t2color;
+            drawEllipse(ctx, sc([p[1], p[2], p[3], p[4]]), color);
             if (p[6]) drawTriangle(ctx, sc([p[1], p[2], p[3], p[4]]), '#0000FF');
         }
 
-        // ── 画追踪目标（金色外圈 + 队伍色内圈） ─────────────────────────
+        // ── 追踪目标（金色外圈 + 队伍色内圈 + 速度 + ID） ──────────────
         if (f.t) {
-            const tBbox = sc(f.t);
-            drawEllipse(ctx, tBbox, TRACKED_OUTER, null, 5);
-
-            const tp = f.p.find(p => p[0] === trackedId);
-            const innerColor = tp ? (tp[5] === 1 ? t1c : t2c) : TRACKED_OUTER;
-            // 内圈稍微缩小（4px 四周）
-            const inner = [tBbox[0]+4, tBbox[1]+4, tBbox[2]-4, tBbox[3]-4];
-            drawEllipse(ctx, inner, innerColor, trackedId, 2);
-
-            // 速度标签
-            if (tp && tp[7] > 0) {
-                const spd = tp[7].toFixed(1) + ' km/h';
-                ctx.save();
-                ctx.font = 'bold 12px Arial';
-                const tw = ctx.measureText(spd).width;
-                const lx = tBbox[0], ly = tBbox[3] + 4;
-                ctx.fillStyle = 'rgba(180,235,255,0.9)';
-                ctx.fillRect(lx, ly, tw + 8, 16);
-                ctx.strokeStyle = '#000'; ctx.lineWidth = 0.5;
-                ctx.strokeRect(lx, ly, tw + 8, 16);
-                ctx.fillStyle = '#000';
-                ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-                ctx.fillText(spd, lx + 4, ly + 2);
-                ctx.restore();
-            }
+            const tBbox  = sc(f.t);
+            const inner  = [tBbox[0]+4, tBbox[1]+4, tBbox[2]-4, tBbox[3]-4];
+            const tp     = f.p.find(p => p[0] === trackedId);
+            const tcolor = tp ? (tp[5] === 1 ? t1color : t2color) : TRACKED_OUTER;
+            const speed  = tp?.at(7) ?? 0;
+            drawTrackedPlayer(ctx, tBbox, inner, tcolor, trackedId, speed);
         }
 
         // ── 球 ─────────────────────────────────────────────────────────
         if (f.b) drawTriangle(ctx, sc(f.b), BALL_COLOR);
 
         // ── 控球率横条 ─────────────────────────────────────────────────
-        drawPossessionBar(ctx, cw, pos.t1 / tot, pos.t2 / tot, t1c, t2c);
+        drawPossessionBar(ctx, cw, t1c_count / tot, t2c_count / tot, t1color, t2color);
 
     }, []);
 
-    // ── rAF 循环 ─────────────────────────────────────────────────────────
+    // ── rAF 渲染循环 ──────────────────────────────────────────────────
     useEffect(() => {
         if (loadState !== 'ready') return;
         const loop = () => { renderFrame(); rafRef.current = requestAnimationFrame(loop); };
@@ -236,23 +229,21 @@ export default function VideoOverlayPlayer({ sessionId }) {
         return () => cancelAnimationFrame(rafRef.current);
     }, [loadState, renderFrame]);
 
-    // ── 视频 / 窗口尺寸变化时同步 canvas 大小 ────────────────────────────
+    // ── Canvas 尺寸跟随视频 ───────────────────────────────────────────
     useEffect(() => {
         if (loadState !== 'ready') return;
         const video = videoRef.current;
         const canvas = canvasRef.current;
         if (!video || !canvas) return;
         const sync = () => {
-            canvas.width  = video.clientWidth  || video.offsetWidth  || 640;
-            canvas.height = video.clientHeight || video.offsetHeight || 360;
+            canvas.width  = video.clientWidth  || 640;
+            canvas.height = video.clientHeight || 360;
         };
         sync();
         const ro = new ResizeObserver(sync);
         ro.observe(video);
         return () => ro.disconnect();
     }, [loadState]);
-
-    const videoSrc = `${colab.getUrl()}/api/${sessionId}/raw_video`;
 
     return (
         <div className="vop">
@@ -269,10 +260,10 @@ export default function VideoOverlayPlayer({ sessionId }) {
                 <div className="vop__wrapper">
                     <video
                         ref={videoRef}
-                        src={videoSrc}
+                        src={`${colab.getUrl()}/api/${sessionId}/raw_video`}
                         controls
                         className="vop__video"
-                        onSeeked={() => { possRef.current = { t1: 0, t2: 0, lastFrame: -1 }; }}
+                        onSeeked={() => { historyRef.current = []; }}
                     />
                     <canvas ref={canvasRef} className="vop__canvas" />
                 </div>
