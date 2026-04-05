@@ -287,5 +287,98 @@ def download_raw_video(sid):
                      download_name=f'original_{sid}.mp4',
                      conditional=True)
 
+@app.route('/api/<sid>/raw_video')
+def raw_video(sid):
+    """直接流式提供原始视频（支持 range 请求，供前端 <video> 标签使用）"""
+    session, err = _s404(sid)
+    if err: return err
+    vp = session.get('video_path', '')
+    if not vp or not os.path.exists(vp):
+        return jsonify({'error': 'Video file not found'}), 404
+    return send_file(vp, mimetype='video/mp4', conditional=True)
+
+@app.route('/api/<sid>/overlay_data')
+def overlay_data(sid):
+    """
+    返回逐帧标注数据（JSON），供前端 Canvas 实时渲染叠加层。
+    分析完成即可调用，无需等待视频生成。
+    格式:
+      { fps, video_w, video_h, t1, t2, frames: [{p, b, t, ctrl}, ...] }
+      p = [[id, x1, y1, x2, y2, team, has_ball, speed], ...]
+      b = [x1, y1, x2, y2] | null
+      t = [x1, y1, x2, y2] | null  (SAMURAI tracked bbox)
+      ctrl = 1 | 2 | 0
+    """
+    session, err = _s404(sid)
+    if err: return err
+    if session.get('status') not in ('analysis_done',):
+        return jsonify({'error': 'Analysis not complete yet'}), 425
+
+    import pickle, cv2 as _cv2
+    tracks_path = session.get('tracks_cache_path')
+    if not tracks_path or not os.path.exists(tracks_path):
+        return jsonify({'error': 'Tracks cache not found'}), 404
+
+    with open(tracks_path, 'rb') as f:
+        data = pickle.load(f)
+
+    tracks       = data['tracks']
+    tracked_bboxes = data['tracked_bboxes']
+    team_control = data['team_control']
+    hex_t1       = data.get('team_colors_hex', {}).get(1, '#00BFFF')
+    hex_t2       = data.get('team_colors_hex', {}).get(2, '#FF1493')
+
+    # 获取视频尺寸
+    vp = session.get('video_path', '')
+    video_w, video_h, fps = 1920, 1080, 24.0
+    if vp and os.path.exists(vp):
+        cap = _cv2.VideoCapture(vp)
+        video_w = int(cap.get(_cv2.CAP_PROP_FRAME_WIDTH))
+        video_h = int(cap.get(_cv2.CAP_PROP_FRAME_HEIGHT))
+        fps     = cap.get(_cv2.CAP_PROP_FPS) or 24.0
+        cap.release()
+
+    total = len(tracks['players'])
+    frames_out = []
+    for i in range(total):
+        # 球员
+        players_list = []
+        for pid, info in tracks['players'][i].items():
+            if not info or 'bbox' not in info: continue
+            b = info['bbox']
+            spd = info.get('speed')
+            players_list.append([
+                int(pid),
+                round(b[0], 1), round(b[1], 1), round(b[2], 1), round(b[3], 1),
+                int(info.get('team', 0)),
+                1 if info.get('has_ball') else 0,
+                round(float(spd), 1) if spd is not None else 0.0
+            ])
+
+        # 足球
+        ball_info = tracks['ball'][i].get(1, {})
+        ball = None
+        if ball_info and 'bbox' in ball_info:
+            bb = ball_info['bbox']
+            ball = [round(bb[0],1), round(bb[1],1), round(bb[2],1), round(bb[3],1)]
+
+        # 追踪目标（SAMURAI bbox → xyxy）
+        tracked = None
+        if i in tracked_bboxes:
+            sx, sy, sw, sh = tracked_bboxes[i]
+            tracked = [round(sx,1), round(sy,1), round(sx+sw,1), round(sy+sh,1)]
+
+        ctrl = int(team_control[i]) if i < len(team_control) else 0
+        frames_out.append({'p': players_list, 'b': ball, 't': tracked, 'ctrl': ctrl})
+
+    return jsonify({
+        'fps':     fps,
+        'video_w': video_w,
+        'video_h': video_h,
+        't1':      hex_t1,
+        't2':      hex_t2,
+        'frames':  frames_out,
+    })
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=7860, debug=False, use_reloader=False)

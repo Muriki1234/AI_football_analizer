@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     HiHome, HiArrowPath, HiChartBar, HiBolt,
     HiUserGroup, HiMapPin, HiCheckCircle, HiExclamationCircle,
-    HiArrowTrendingUp
+    HiArrowTrendingUp, HiPlayCircle
 } from 'react-icons/hi2';
 import {
     autoStart, pollSessionStatus, startGlobalAnalysis,
@@ -12,15 +12,15 @@ import {
 } from '../services/api';
 import colab from '../services/colabService';
 import StepNav from '../components/StepNav';
+import VideoOverlayPlayer from '../components/VideoOverlayPlayer';
 import './Dashboard.css';
 
-// Feature cards config
+// Feature cards config (full_replay 已移除，改用 Canvas 实时播放)
 const FEATURES = [
     { key: 'heatmap', label: 'Heatmap', icon: HiMapPin, color: '#e74c3c', type: 'image' },
     { key: 'speed_chart', label: 'Speed & Distance', icon: HiBolt, color: '#f39c12', type: 'image' },
     { key: 'possession', label: 'Possession', icon: HiChartBar, color: '#3498db', type: 'image' },
     { key: 'minimap_replay', label: 'Minimap Replay', icon: HiArrowTrendingUp, color: '#00e59b', type: 'video' },
-    { key: 'full_replay', label: 'Analyzed Replay', icon: HiCheckCircle, color: '#9b59b6', type: 'video' },
 ];
 
 const PHASE_LABELS = {
@@ -45,6 +45,7 @@ export default function Dashboard() {
     const [stageLabel, setStageLabel] = useState('Initializing...');
     const [error, setError] = useState(null);
     const [summary, setSummary] = useState(null);
+    const [overlayReady, setOverlayReady] = useState(false); // Canvas 播放器是否可用
     const [features, setFeatures] = useState(
         Object.fromEntries(FEATURES.map(f => [f.key, { status: 'locked', taskId: null, url: null, result: null }]))
     );
@@ -73,14 +74,7 @@ export default function Dashboard() {
 
 
     
-    // Auto-download full_replay when done
-    useEffect(() => {
-        const replay = features['full_replay'];
-        if (replay && replay.status === 'done' && replay.url && !replay.downloadedTriggered) {
-             setFeatures(prev => ({ ...prev, full_replay: { ...prev.full_replay, downloadedTriggered: true } }));
-             handleDownload(replay.url, `Analyzed_Replay_${sessionId}.mp4`);
-        }
-    }, [features['full_replay']?.status, features['full_replay']?.url]);
+    // (Canvas overlay 替代 full_replay — 不再需要自动下载)
 
     const needsAutoStart = location.state?.autoStart;
     const autoStartFired = useRef(false);
@@ -142,8 +136,8 @@ export default function Dashboard() {
                 const s = await getSummary(sessionId);
                 setSummary(s);
 
-                // Step 5: Auto-trigger full_replay generation
-                handleGenerateFeature('full_replay');
+                // Step 5: 标记 Canvas 播放器可用（直接播，无需等待生成）
+                setOverlayReady(true);
 
             } catch (e) {
                 setError(e.message || 'Pipeline failed');
@@ -245,6 +239,24 @@ export default function Dashboard() {
                                 </div>
                             </motion.div>
                         ))}
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* Canvas 实时标注播放器（分析完即可播，无需等待生成） */}
+            <AnimatePresence>
+                {overlayReady && (
+                    <motion.div
+                        className="dashboard__live-player"
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                    >
+                        <div className="live-player__header">
+                            <HiPlayCircle style={{ color: '#9b59b6' }} />
+                            <span>Live Annotated Replay</span>
+                            <span className="live-player__badge">Instant</span>
+                        </div>
+                        <VideoOverlayPlayer sessionId={sessionId} />
                     </motion.div>
                 )}
             </AnimatePresence>
