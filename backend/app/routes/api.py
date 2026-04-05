@@ -1,5 +1,5 @@
 import os
-import time
+import uuid
 import cv2
 from flask import Blueprint, request, jsonify, current_app, send_from_directory, url_for
 from werkzeug.utils import secure_filename
@@ -30,7 +30,7 @@ def upload_video():
             os.makedirs(upload_folder)
             
         # Create a unique video ID for this session
-        video_id = str(int(time.time()))
+        video_id = uuid.uuid4().hex[:12]
         
         filepath = os.path.join(upload_folder, f"{video_id}_{filename}")
         file.save(filepath)
