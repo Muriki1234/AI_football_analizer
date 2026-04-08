@@ -59,6 +59,8 @@ YOLO_BATCH_SIZE       = 60   # 单批处理帧数（60 = 更好GPU利用率）
 KEYPOINT_STRIDE       = 60   # 每60帧检测一次关键点（提升小地图精度）
 MINIMAP_SMOOTH_WINDOW = 25
 SPEED_SMOOTH_WINDOW   = 7
+PLAYER_CONF           = 0.1  # 球员/裁判检测置信度（低阈值，避免漏检）
+BALL_CONF             = 0.3  # 球检测置信度（高阈值，减少误检）
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -93,6 +95,40 @@ def read_video(video_path: str) -> list:
         frames.append(frame)
     cap.release()
     return frames
+
+def stream_video_chunks(video_path: str, chunk_size: int = 500):
+    """Generator: yields (start_frame_idx, frames_chunk) without loading full video into RAM."""
+    cap = cv2.VideoCapture(video_path, cv2.CAP_FFMPEG)
+    start_idx = 0
+    while True:
+        chunk = []
+        for _ in range(chunk_size):
+            ret, frame = cap.read()
+            if not ret:
+                break
+            chunk.append(frame)
+        if not chunk:
+            break
+        yield start_idx, chunk
+        start_idx += len(chunk)
+        if len(chunk) < chunk_size:
+            break
+    cap.release()
+
+
+def read_frames_at_indices(video_path: str, indices) -> dict:
+    """Read specific frames from video by seeking. Returns {frame_idx: frame} dict."""
+    indices = sorted(set(int(i) for i in indices if i >= 0))
+    result = {}
+    cap = cv2.VideoCapture(video_path, cv2.CAP_FFMPEG)
+    for idx in indices:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+        ret, frame = cap.read()
+        if ret:
+            result[idx] = frame
+    cap.release()
+    return result
+
 
 def save_video(frames: list, output_path: str, fps: float = 24):
     """Save frames to H.264 mp4 via ffmpeg pipe — avoids mp4v temp-file FPS drift."""
@@ -206,6 +242,46 @@ class Tracker:
                         if ib[2]>ib[0] and ib[3]>ib[1]:
                             tracks[obj][fi][tid] = {"bbox": ib}
 
+    def get_object_tracks_streamed(self, video_path: str, total_frames: int,
+                                    chunk_size: int = 500) -> dict:
+        """流式版本：分块处理视频，不把所有帧加载到内存。ByteTrack 跨块保持连续状态。"""
+        tracks = {"players":  [{} for _ in range(total_frames)],
+                  "referees": [{} for _ in range(total_frames)],
+                  "ball":     [{} for _ in range(total_frames)]}
+
+        for start_idx, chunk in stream_video_chunks(video_path, chunk_size):
+            # YOLO 推理：对块内帧批处理
+            det_local = list(range(0, len(chunk), YOLO_DETECTION_STRIDE))
+            det_dict  = {}
+            for i in range(0, len(det_local), YOLO_BATCH_SIZE):
+                batch_l  = det_local[i:i+YOLO_BATCH_SIZE]
+                results  = self.model.predict([chunk[j] for j in batch_l],
+                                              conf=0.1, verbose=False, half=True, imgsz=416)
+                for res, local_idx in zip(results, batch_l):
+                    det_dict[local_idx] = res
+
+            # ByteTrack 更新：必须按帧序处理以维持追踪状态（跨块也连续）
+            for local_idx in sorted(det_dict.keys()):
+                global_idx = start_idx + local_idx
+                if global_idx >= total_frames:
+                    break
+                ds = sv.Detections.from_ultralytics(det_dict[local_idx])
+                for k, cid in enumerate(ds.class_id):
+                    if "goalkeeper" in self.class_names[cid].lower():
+                        ds.class_id[k] = self.player_id
+
+                d_tracks = self.tracker.update_with_detections(ds)
+                for d in d_tracks:
+                    bbox, cid, tid = d[0].tolist(), d[3], d[4]
+                    if   cid == self.player_id:  tracks["players"][global_idx][tid]  = {"bbox": bbox}
+                    elif cid == self.referee_id: tracks["referees"][global_idx][tid] = {"bbox": bbox}
+                for d in ds:
+                    if d[3] == self.ball_id:
+                        tracks["ball"][global_idx][1] = {"bbox": d[0].tolist()}
+
+        self._interpolate_tracks(tracks, total_frames)
+        return tracks
+
     def add_position_to_tracks(self, tracks: dict):
         for obj, otracks in tracks.items():
             for fnum, track in enumerate(otracks):
@@ -312,6 +388,63 @@ class CameraMovementEstimator:
         df["y"] = df["y"].rolling(5, min_periods=1, center=True).mean()
         return df.values.tolist()
 
+    @classmethod
+    def from_video_path(cls, video_path: str):
+        """从视频第一帧创建实例（流式处理用）。"""
+        cap = cv2.VideoCapture(video_path, cv2.CAP_FFMPEG)
+        ret, frame = cap.read()
+        cap.release()
+        if not ret:
+            raise RuntimeError(f"Cannot read first frame: {video_path}")
+        return cls(frame)
+
+    def get_camera_movement_streamed(self, video_path: str, total_frames: int,
+                                      chunk_size: int = 500) -> list:
+        """流式光流估计：跨块保持 old_gray/old_pts 状态，不需要全帧列表。"""
+        STRIDE = 3
+        sampled_movement = {0: [0.0, 0.0]}
+        old_gray = None
+        old_pts  = None
+
+        for start_idx, chunk in stream_video_chunks(video_path, chunk_size):
+            for local_idx, frame in enumerate(chunk):
+                fi = start_idx + local_idx
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+                if old_gray is None:          # 第一帧初始化
+                    old_gray = gray
+                    old_pts  = cv2.goodFeaturesToTrack(old_gray, **self.features)
+                    continue
+
+                if fi % STRIDE != 0:          # 跳帧：只更新 old_gray，不计算
+                    old_gray = gray
+                    continue
+
+                new_pts, _, _ = cv2.calcOpticalFlowPyrLK(
+                    old_gray, gray, old_pts, None, **self.lk_params)
+                max_d, cx, cy = 0, 0.0, 0.0
+                if new_pts is not None and old_pts is not None:
+                    for n, o in zip(new_pts, old_pts):
+                        d = measure_distance(n.ravel(), o.ravel())
+                        if d > max_d:
+                            max_d = d
+                            cx, cy = measure_xy_distance(o.ravel(), n.ravel())
+                sampled_movement[fi] = ([cx, cy] if max_d > self.minimum_distance
+                                         else [0.0, 0.0])
+                if max_d > self.minimum_distance:
+                    old_pts = cv2.goodFeaturesToTrack(gray, **self.features)
+                old_gray = gray.copy()
+
+        # 插值回全帧数
+        df = pd.DataFrame(index=range(total_frames), columns=["x", "y"], dtype=float)
+        for idx, mv in sampled_movement.items():
+            if idx < total_frames:
+                df.loc[idx] = mv
+        df = df.interpolate(method="linear").bfill().ffill()
+        df["x"] = df["x"].rolling(5, min_periods=1, center=True).mean()
+        df["y"] = df["y"].rolling(5, min_periods=1, center=True).mean()
+        return df.values.tolist()
+
     def add_adjust_positions_to_tracks(self, tracks: dict, cam_movement: list):
         for obj, otracks in tracks.items():
             for fnum, track in enumerate(otracks):
@@ -363,6 +496,45 @@ class KeypointDetector:
 # ViewTransformer
 # ═══════════════════════════════════════════════════════════════════════
 
+    def predict_streamed(self, video_path: str, total_frames: int,
+                          chunk_size: int = 500) -> list:
+        """流式关键点检测：KEYPOINT_STRIDE 采样，不加载全部帧。"""
+        sampled = {}
+
+        for start_idx, chunk in stream_video_chunks(video_path, chunk_size):
+            # 只处理落在步长边界上的帧
+            kp_local = [j for j in range(len(chunk))
+                         if (start_idx + j) % KEYPOINT_STRIDE == 0]
+            if not kp_local:
+                continue
+            for i in range(0, len(kp_local), YOLO_BATCH_SIZE):
+                batch_l  = kp_local[i:i+YOLO_BATCH_SIZE]
+                results  = self.model.predict([chunk[j] for j in batch_l],
+                                               conf=0.1, verbose=False, half=True, imgsz=416)
+                for res, local_idx in zip(results, batch_l):
+                    global_idx = start_idx + local_idx
+                    kps = {}
+                    if res.keypoints is not None and res.keypoints.xy.shape[1] > 0:
+                        xy    = res.keypoints.xy[0].cpu().numpy()
+                        confs = (res.keypoints.conf[0].cpu().numpy()
+                                 if res.keypoints.conf is not None
+                                 else np.ones(len(xy)))
+                        for kid, (x, y) in enumerate(xy):
+                            if confs[kid] > 0.3 and (x != 0 or y != 0):
+                                kps[kid] = [float(x), float(y)]
+                    sampled[global_idx] = kps
+
+        # 展开到全帧列表（未检测帧用最近邻填充）
+        result = []
+        for i in range(total_frames):
+            if i in sampled:
+                result.append(sampled[i])
+            else:
+                nearest = min(sampled.keys(), key=lambda k: abs(k - i), default=0)
+                result.append(sampled.get(nearest, {}))
+        return result
+
+
 class ViewTransformer:
     def __init__(self):
         if not HAS_SPORTS:
@@ -377,40 +549,28 @@ class ViewTransformer:
 
     def add_transformed_position_to_tracks(self, tracks: dict, kps_list: list):
         if not HAS_SPORTS: return
-        # === Colab Hardcoded Fallback Config ===
-        court_width, court_length = 68.0, 23.0
-        pv = np.array([[110, 1035], [2650, 1035], [2250, 275], [800, 275]], dtype=np.float32)
-        tv = np.array([[0, court_width], [court_length, court_width], [court_length, 0], [0, 0]], dtype=np.float32)
-        fb_trans = cv2.getPerspectiveTransform(pv, tv)
-
-        def fb_transform(point):
-            if cv2.pointPolygonTest(pv, (int(point[0]), int(point[1])), False) >= 0:
-                res = cv2.perspectiveTransform(np.array(point, dtype=np.float32).reshape(-1, 1, 2), fb_trans)
-                return res.reshape(-1, 2)
-            return None
 
         for fnum, kps in enumerate(kps_list):
             src, dst = [], []
             for kid, pos in kps.items():
                 if kid < len(self.config.vertices):
                     src.append(pos); dst.append(self.config.vertices[kid])
-            
-            transformer = SportsViewTransformer(source=np.array(src), target=np.array(dst)) if len(src) >= 4 else None
-            
+
+            # 不足4个关键点时跳过该帧（与 notebook 行为一致，不使用写死的 fallback）
+            if len(src) < 4:
+                continue
+
+            transformer = SportsViewTransformer(source=np.array(src), target=np.array(dst))
+
             for obj, otracks in tracks.items():
                 if fnum >= len(otracks): continue
                 for info in otracks[fnum].values():
                     pos = info.get("position_adjusted") or info.get("position")
                     if not pos: continue
-                    t = transformer.transform_points(np.array([pos])) if transformer else None
+                    t = transformer.transform_points(np.array([pos]))
                     if t is not None and len(t) > 0:
                         info["position_transformed"] = [t[0][0]*self.scale_factor, t[0][1]*self.scale_factor]
                         info["position_minimap"]     = [t[0][0]*self.minimap_scale, t[0][1]*self.minimap_scale]
-                    else:
-                        fb = fb_transform(pos)
-                        if fb is not None:
-                            info["position_transformed"] = [fb[0][0]*self.scale_factor*100, fb[0][1]*self.scale_factor*100]
-                            info["position_minimap"] = [fb[0][0]*self.minimap_scale*100, fb[0][1]*self.minimap_scale*100]
 
 
     def interpolate_2d_positions(self, tracks: dict):
@@ -541,6 +701,39 @@ class TeamAssigner:
         self.team_colors[1] = self.kmeans.cluster_centers_[0]
         self.team_colors[2] = self.kmeans.cluster_centers_[1]
 
+    def assign_team_color_from_video(self, video_path: str, tracks_players: list,
+                                      n_samples: int = 8):
+        """流式版 assign_team_color_multi：按需 seek 到采样帧，不需要完整 frames 列表。"""
+        total = len(tracks_players)
+        if total == 0:
+            return
+        start = max(0, int(total * 0.05))
+        end   = min(total - 1, int(total * 0.95))
+        sample_idx = np.linspace(start, end, n_samples, dtype=int).tolist()
+        frame_dict = read_frames_at_indices(video_path, sample_idx)
+
+        all_colors = []
+        for idx in sample_idx:
+            frame = frame_dict.get(idx)
+            if frame is None or idx >= len(tracks_players):
+                continue
+            for pid, info in tracks_players[idx].items():
+                if not info or 'bbox' not in info:
+                    continue
+                try:
+                    c = self._get_player_color(frame, info['bbox'])
+                    if c is not None and not np.all(c == 0):
+                        all_colors.append(c)
+                except Exception:
+                    pass
+
+        if len(all_colors) < 2:
+            return
+        self.kmeans = KMeans(n_clusters=2, init="k-means++", n_init=10,
+                             random_state=42).fit(np.array(all_colors))
+        self.team_colors[1] = self.kmeans.cluster_centers_[0]
+        self.team_colors[2] = self.kmeans.cluster_centers_[1]
+
     def get_player_team(self, frame, bbox, player_id: int) -> int:
         if player_id in self.player_team_dict:
             return self.player_team_dict[player_id]
@@ -557,9 +750,11 @@ class TeamAssigner:
 # ═══════════════════════════════════════════════════════════════════════
 
 class SmartBallPossessionDetector:
-    def __init__(self, fps: int = 24):
+    def __init__(self, fps: int = 24, video_w: int = 1920, video_h: int = 1080):
         self.fps                  = fps
-        self.max_control_distance = 70
+        # 按视频宽度归一化距离阈值（基准：1920px）
+        self._res_scale           = max(video_w, video_h) / 1920.0
+        self.max_control_distance = int(70  * self._res_scale)
         self._possession_history  = []
         self._speed_history       = []
         self._current             = None
@@ -571,8 +766,10 @@ class SmartBallPossessionDetector:
         if len(ball_bbox) != 4 or not players: return -1
         ball_pos  = ((ball_bbox[0]+ball_bbox[2])/2, (ball_bbox[1]+ball_bbox[3])/2)
         ball_spd  = self._calc_ball_speed(ball_history)
-        self.ball_state = ("flying" if ball_spd>30 else
-                           "contested" if ball_spd>15 else "controlled")
+        thr_fly   = 30 * self._res_scale
+        thr_cont  = 15 * self._res_scale
+        self.ball_state = ("flying" if ball_spd > thr_fly else
+                           "contested" if ball_spd > thr_cont else "controlled")
         pid = (self._detect_flying(ball_pos, ball_history, players)   if self.ball_state=="flying"   else
                self._detect_contested(ball_pos, players)               if self.ball_state=="contested" else
                self._detect_controlled(ball_pos, ball_history, players))
@@ -606,6 +803,8 @@ class SmartBallPossessionDetector:
     def _detect_flying(self, ball_pos, history, players):
         if len(history)<3 or not history[-1] or not history[-3]: return -1
         vel = np.array([history[-1][0]-history[-3][0], history[-1][1]-history[-3][1]])
+        max_d = 300 * self._res_scale
+        min_v = 5   * self._res_scale
         best, best_s = -1, 0
         for pid, info in players.items():
             if not info or "bbox" not in info: continue
@@ -613,7 +812,7 @@ class SmartBallPossessionDetector:
             foot = np.array([(b[0]+b[2])/2, b[3]])
             tp   = foot - np.array(ball_pos)
             d    = float(np.linalg.norm(tp))
-            if d>300 or np.linalg.norm(vel)<5: continue
+            if d > max_d or np.linalg.norm(vel) < min_v: continue
             cos  = float(np.dot(vel,tp)/(np.linalg.norm(vel)*d+1e-6))
             if cos>0.5:
                 s = cos*1000/(d+1)
@@ -621,7 +820,7 @@ class SmartBallPossessionDetector:
         return best
 
     def _detect_contested(self, ball_pos, players):
-        best, best_d = -1, 40
+        best, best_d = -1, int(40 * self._res_scale)
         for pid, info in players.items():
             if not info or "bbox" not in info: continue
             b = info["bbox"]
