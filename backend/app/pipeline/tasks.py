@@ -42,12 +42,13 @@ from .session_manager import SessionManager
 from .analysis_core import (
     Tracker,
     CameraMovementEstimator,
+    stream_video_chunks,
+    read_frames_at_indices,
     KeypointDetector,
     ViewTransformer,
     AccurateSpeedEstimator,
     TeamAssigner,
     SmartBallPossessionDetector,
-    read_video,
     save_video,
     bgr_to_hex,
     render_minimap_frame,
@@ -307,48 +308,43 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         output_dir   = sm.session_output_dir(session_id)
         tracks_cache = output_dir / "tracks.pkl"
 
-        # ── 1. 读视频 ────────────────────────────────────────────────
+        # ── 1. 读取视频元数据（不加载帧到内存）────────────────────────
         sm.update_status(session_id, "analyzing", progress=5, stage="loading_video")
-        
-        # DEBUG: Read video via cv2 and log details
-        cap_dbg = cv2.VideoCapture(video_path)
-        cv2_fps = cap_dbg.get(cv2.CAP_PROP_FPS)
-        cv2_frame_count = int(cap_dbg.get(cv2.CAP_PROP_FRAME_COUNT))
-        cv2_w = int(cap_dbg.get(cv2.CAP_PROP_FRAME_WIDTH))
-        cv2_h = int(cap_dbg.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        cap_dbg.release()
-        print(f"[DEBUG] Video metadata: {video_path}")
-        print(f"[DEBUG]   cv2 FPS={cv2_fps}, cv2 FRAME_COUNT={cv2_frame_count}, size={cv2_w}x{cv2_h}")
-        print(f"[DEBUG]   Expected duration = {cv2_frame_count/cv2_fps:.2f}s") if cv2_fps > 0 else None
-        
-        frames = read_video(video_path)
-        total  = len(frames)
-        print(f"[DEBUG]   read_video() returned {total} frames (vs cv2 metadata: {cv2_frame_count})")
+        cap_meta = cv2.VideoCapture(video_path)
+        fps    = cap_meta.get(cv2.CAP_PROP_FPS) or 24
+        total  = int(cap_meta.get(cv2.CAP_PROP_FRAME_COUNT))
+        _vid_w = int(cap_meta.get(cv2.CAP_PROP_FRAME_WIDTH))  or 1920
+        _vid_h = int(cap_meta.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 1080
+        cap_meta.release()
+        if total <= 0:
+            total = 1500
+        print(f"[INFO] Video: {total} frames @ {fps:.1f}fps, {_vid_w}x{_vid_h}")
 
         with open(samurai_pkl, "rb") as f:
             samurai_data = pickle.load(f)
         tracked_bboxes = samurai_data["bboxes"]   # {frame_idx: (x,y,w,h)}
         tb_keys = sorted(tracked_bboxes.keys())
-        print(f"[DEBUG]   SAMURAI tracked_bboxes: count={len(tracked_bboxes)}, min_key={tb_keys[0] if tb_keys else 'N/A'}, max_key={tb_keys[-1] if tb_keys else 'N/A'}")
+        print(f"[INFO] SAMURAI bboxes: {len(tracked_bboxes)} frames, "
+              f"range [{tb_keys[0] if tb_keys else 'N/A'} – {tb_keys[-1] if tb_keys else 'N/A'}]")
 
-        # ── 2. YOLO 跳帧检测 + 插值 ──────────────────────────────────
+        # ── 2. YOLO 流式检测（分块，内存恒定）────────────────────────
         sm.update_status(session_id, "analyzing", progress=10, stage="yolo_detection")
         tracker = Tracker(MODEL_PATH)
-        tracks  = tracker.get_object_tracks(frames)
+        tracks  = tracker.get_object_tracks_streamed(video_path, total)
         tracker.add_position_to_tracks(tracks)
 
-        # ── 3. 摄像机运动补偿 ────────────────────────────────────────
+        # ── 3. 摄像机运动补偿（流式光流）────────────────────────────
         sm.update_status(session_id, "analyzing", progress=35, stage="camera_motion")
-        cam = CameraMovementEstimator(frames[0])
-        cam_mov = cam.get_camera_movement(frames)
+        cam     = CameraMovementEstimator.from_video_path(video_path)
+        cam_mov = cam.get_camera_movement_streamed(video_path, total)
         cam.add_adjust_positions_to_tracks(tracks, cam_mov)
 
-        # ── 4. 关键点 + 透视变换（生成 minimap 坐标）───────────────
+        # ── 4. 关键点 + 透视变换（流式，生成 minimap 坐标）──────────
         sm.update_status(session_id, "analyzing", progress=50, stage="keypoint_detection")
         if os.path.exists(KEYPOINT_MODEL_PATH) and HAS_SPORTS:
             kp  = KeypointDetector(KEYPOINT_MODEL_PATH)
             vt  = ViewTransformer()
-            kps = kp.predict(frames)
+            kps = kp.predict_streamed(video_path, total)
             vt.add_transformed_position_to_tracks(tracks, kps)
             vt.interpolate_2d_positions(tracks)
         else:
@@ -367,37 +363,44 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         sm.update_status(session_id, "analyzing", progress=80, stage="team_assignment")
         team_assigner = TeamAssigner()
         team_control  = []
-        cap = cv2.VideoCapture(video_path); fps = cap.get(cv2.CAP_PROP_FPS) or 24; cap.release()
-        poss_detector = SmartBallPossessionDetector(fps=fps)
+        poss_detector = SmartBallPossessionDetector(fps=fps, video_w=_vid_w, video_h=_vid_h)
         ball_history  = []
 
-        # 多帧聚合初始化队伍颜色（8帧均匀采样，鲁棒性更强）
-        team_assigner.assign_team_color_multi(frames, tracks["players"], n_samples=8)
+        # 多帧聚合初始化队伍颜色（流式 seek 采样 8 帧）
+        team_assigner.assign_team_color_from_video(video_path, tracks["players"], n_samples=8)
         team_color_initialized = bool(team_assigner.kmeans is not None)
         if team_color_initialized:
-            print(f"[INFO] Team colors initialized from 8 sampled frames (multi-frame)")
+            print(f"[INFO] Team colors initialized from 8 sampled frames")
         else:
             print("[WARN] Team color initialization failed — all players assigned to team 1")
 
         if team_color_initialized:
-            # ── 多帧投票：对每个 player_id 收集跨帧颜色预测，用多数票决定队伍 ──
-            # 这样避免"第一次出现时宽镜头小画面导致单次预测错误"的问题
+            # ── 多帧投票：按索引 seek 采样帧，不缓存全部帧 ──
             from collections import Counter
-            player_vote_dict = {}   # {pid: [team_id, ...]}
-            SAMPLE_STEP = max(1, len(frames) // 120)  # 最多采样120帧，避免过慢
-            for i in range(0, len(tracks["players"]), SAMPLE_STEP):
-                p_tracks_sample = tracks["players"][i]
-                for pid, info in p_tracks_sample.items():
-                    if not info or 'bbox' not in info: continue
-                    try:
-                        color = team_assigner._get_player_color(frames[i], info['bbox'])
-                        if color is not None and not np.all(color == 0):
-                            predicted = int(team_assigner.kmeans.predict(color.reshape(1, -1))[0]) + 1
-                            player_vote_dict.setdefault(pid, []).append(predicted)
-                    except Exception:
-                        pass
+            player_vote_dict = {}
+            SAMPLE_STEP = max(1, total // 120)
+            vote_indices = list(range(0, total, SAMPLE_STEP))
 
-            # 多数票决定最终队伍
+            # 分批 seek（每批50帧，避免长时间无进度）
+            for chunk_start in range(0, len(vote_indices), 50):
+                batch_idxs = vote_indices[chunk_start:chunk_start + 50]
+                frame_dict = read_frames_at_indices(video_path, batch_idxs)
+                for idx in batch_idxs:
+                    frame = frame_dict.get(idx)
+                    if frame is None or idx >= len(tracks["players"]):
+                        continue
+                    for pid, info in tracks["players"][idx].items():
+                        if not info or 'bbox' not in info:
+                            continue
+                        try:
+                            color = team_assigner._get_player_color(frame, info['bbox'])
+                            if color is not None and not np.all(color == 0):
+                                predicted = int(team_assigner.kmeans.predict(
+                                    color.reshape(1, -1))[0]) + 1
+                                player_vote_dict.setdefault(pid, []).append(predicted)
+                        except Exception:
+                            pass
+
             player_final_team = {
                 pid: Counter(votes).most_common(1)[0][0]
                 for pid, votes in player_vote_dict.items() if votes
@@ -405,14 +408,11 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             print(f"[INFO] Multi-frame voting done: {len(player_final_team)} players assigned")
 
             for i, p_tracks in enumerate(tracks["players"]):
-                # 分配队伍 ID 和颜色（用投票结果；新 ID 回退到 kmeans 单次预测）
                 for pid, info in p_tracks.items():
                     if not info:
                         continue
-                    if pid in player_final_team:
-                        tid = player_final_team[pid]
-                    else:
-                        tid = team_assigner.get_player_team(frames[i], info["bbox"], pid)
+                    # 投票结果优先，未覆盖的 ID 默认队伍1
+                    tid = player_final_team.get(pid, 1)
                     info["team"]       = tid
                     info["team_color"] = team_assigner.team_colors.get(tid, np.array([0,0,0]))
 
@@ -433,7 +433,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                     p_tracks[pid_has_ball]["possession_confidence"] = conf
                     team_control.append(p_tracks[pid_has_ball].get("team", 0))
                 else:
-                    team_control.append(team_control[-1] if team_control else 0)
+                    team_control.append(0)
 
         # ── 8. 摘要 & 缓存 ────────────────────────────────────────────
         sm.update_status(session_id, "analyzing", progress=92, stage="computing_summary")
@@ -454,11 +454,6 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         }
         with open(tracks_cache, "wb") as f:
             pickle.dump(cache_payload, f)
-
-        # ── 释放帧内存（后续任务会单独读取视频）──
-        del frames
-        import gc; gc.collect()
-        print(f"[MEM] Global analysis done — frames released")
 
         sm.update_status(
             session_id, "analysis_done",

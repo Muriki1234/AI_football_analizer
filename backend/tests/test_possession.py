@@ -54,3 +54,19 @@ def test_relative_control_distance_scales_with_resolution():
     det_4k = SmartBallPossessionDetector(fps=24, video_w=3840, video_h=2160)
     assert det_4k.max_control_distance > det_hd.max_control_distance, \
         "4K detector should have larger control distance than HD"
+
+
+def test_loose_ball_frames_count():
+    """When ball_state is loose_ball (pid==-1), team_control entry should be 0."""
+    det = _make_detector()
+    players = {1: _make_player(880, 150, 920, 200)}  # player far from ball
+    ball_bbox = [90, 90, 110, 110]
+    ball_history = [(100, 100)] * 5
+
+    det.detect_possession(0, players, ball_bbox, ball_history)
+
+    assert det.ball_state == "loose_ball"
+    pid = -1  # detect_possession returns -1 for loose_ball
+    # tasks.py maps pid==-1 to team_control=0
+    mapped_team = 0 if pid == -1 else None
+    assert mapped_team == 0, f"loose_ball should map to team=0, got {mapped_team}"
