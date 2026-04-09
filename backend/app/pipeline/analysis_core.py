@@ -57,7 +57,7 @@ except ImportError:
 # ── 配置 ────────────────────────────────────────────────────────────────────
 YOLO_DETECTION_STRIDE = 1    # 每帧都检测（不跳帧）
 YOLO_BATCH_SIZE       = 60   # 单批处理帧数（60 = 更好GPU利用率）
-KEYPOINT_STRIDE       = 60   # 每60帧检测一次关键点（提升小地图精度）
+KEYPOINT_STRIDE       = 20   # 每20帧检测一次关键点（提升小地图精度，原为60）
 MINIMAP_SMOOTH_WINDOW = 25
 SPEED_SMOOTH_WINDOW   = 7
 PLAYER_CONF           = 0.1  # 球员/裁判检测置信度（低阈值，避免漏检）
@@ -83,6 +83,68 @@ def measure_xy_distance(p1, p2):
 def bgr_to_hex(bgr) -> str:
     b, g, r = int(bgr[0]), int(bgr[1]), int(bgr[2])
     return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def clamp_pitch_position(x: float, y: float,
+                          x_max: float = 105.0, y_max: float = 68.0):
+    """Clamp a transformed pitch coordinate to valid field bounds."""
+    return (max(0.0, min(float(x), x_max)),
+            max(0.0, min(float(y), y_max)))
+
+
+def _linear_fill_keypoints(sampled: dict, total_frames: int) -> list:
+    """
+    Fill un-sampled frames by linearly interpolating each keypoint ID
+    between known frames. Nearest-neighbor fallback for edge gaps.
+
+    Uses numpy for interpolation (pandas optional for richer fill).
+
+    Args:
+        sampled: {frame_idx: {keypoint_id: [x, y]}} — only sampled frames
+        total_frames: total number of frames in the video
+
+    Returns:
+        list of length total_frames, each element is {keypoint_id: [x, y]}
+    """
+    if not sampled:
+        return [{} for _ in range(total_frames)]
+
+    all_kids = set()
+    for kps in sampled.values():
+        all_kids.update(kps.keys())
+
+    result = [{} for _ in range(total_frames)]
+
+    for fi, kps in sampled.items():
+        if fi < total_frames:
+            result[fi] = dict(kps)
+
+    all_frames = np.arange(total_frames, dtype=float)
+
+    for kid in all_kids:
+        known_idx = sorted(fi for fi, kps in sampled.items() if kid in kps and fi < total_frames)
+        if len(known_idx) < 2:
+            if known_idx:
+                fi0 = known_idx[0]
+                val = sampled[fi0][kid]
+                for fi in range(total_frames):
+                    if kid not in result[fi]:
+                        result[fi][kid] = list(val)
+            continue
+
+        kx = np.array([sampled[fi][kid][0] for fi in known_idx], dtype=float)
+        ky = np.array([sampled[fi][kid][1] for fi in known_idx], dtype=float)
+        ki = np.array(known_idx, dtype=float)
+
+        interp_x = np.interp(all_frames, ki, kx)
+        interp_y = np.interp(all_frames, ki, ky)
+
+        for fi in range(total_frames):
+            if kid not in result[fi]:
+                result[fi][kid] = [float(interp_x[fi]), float(interp_y[fi])]
+
+    return result
+
 
 def read_video(video_path: str) -> list:
     """Read all frames from a video file. Uses CAP_FFMPEG backend for reliability."""
@@ -554,14 +616,8 @@ class KeypointDetector:
                             kps[kid] = [float(x), float(y)]
                 sampled[fidx] = kps
 
-        result = []
-        for i in range(len(frames)):
-            if i in sampled:
-                result.append(sampled[i])
-            else:
-                nearest = min(sampled.keys(), key=lambda k: abs(k-i), default=0)
-                result.append(sampled.get(nearest, {}))
-        return result
+        # 展开到全帧列表（线性插值填充，比最近邻更平滑）
+        return _linear_fill_keypoints(sampled, len(frames))
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -596,15 +652,8 @@ class KeypointDetector:
                                 kps[kid] = [float(x), float(y)]
                     sampled[global_idx] = kps
 
-        # 展开到全帧列表（未检测帧用最近邻填充）
-        result = []
-        for i in range(total_frames):
-            if i in sampled:
-                result.append(sampled[i])
-            else:
-                nearest = min(sampled.keys(), key=lambda k: abs(k - i), default=0)
-                result.append(sampled.get(nearest, {}))
-        return result
+        # 展开到全帧列表（线性插值填充，比最近邻更平滑）
+        return _linear_fill_keypoints(sampled, total_frames)
 
 
 class ViewTransformer:
@@ -641,8 +690,12 @@ class ViewTransformer:
                     if not pos: continue
                     t = transformer.transform_points(np.array([pos]))
                     if t is not None and len(t) > 0:
-                        info["position_transformed"] = [t[0][0]*self.scale_factor, t[0][1]*self.scale_factor]
-                        info["position_minimap"]     = [t[0][0]*self.minimap_scale, t[0][1]*self.minimap_scale]
+                        tx = t[0][0] * self.scale_factor
+                        ty = t[0][1] * self.scale_factor
+                        tx_c, ty_c = clamp_pitch_position(tx, ty)
+                        info["position_transformed"] = [tx_c, ty_c]
+                        info["position_minimap"]     = [tx_c * (self.minimap_scale / self.scale_factor),
+                                                          ty_c * (self.minimap_scale / self.scale_factor)]
 
 
     def interpolate_2d_positions(self, tracks: dict):
