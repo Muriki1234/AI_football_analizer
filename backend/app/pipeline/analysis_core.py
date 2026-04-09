@@ -21,9 +21,10 @@ except ImportError:
     pd = None
 
 try:
-    from scipy.interpolate import interp1d
+    from scipy.interpolate import interp1d, UnivariateSpline
 except ImportError:
     interp1d = None
+    UnivariateSpline = None
 
 try:
     from sklearn.cluster import KMeans
@@ -165,6 +166,75 @@ def put_text_pil(img, text: str, position: tuple, color: tuple, font_size: int =
     return cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
 
 
+def interpolate_ball_positions_spline(ball_positions: list) -> list:
+    """
+    Interpolate missing ball detections.
+    - Gaps <= 30 frames: cubic spline (smooth curve matching ball physics)
+    - Gaps > 30 frames: linear fallback (spline oscillates badly over long gaps)
+    - Detected frames are preserved exactly (no smoothing of real detections)
+    """
+    n = len(ball_positions)
+    raw = [ball_positions[i].get(1, {}).get("bbox") for i in range(n)]
+
+    known_idx = [i for i, b in enumerate(raw) if b is not None]
+    if len(known_idx) < 2:
+        return ball_positions
+
+    coords = {c: np.array([raw[i][j] for i in known_idx], dtype=float)
+              for j, c in enumerate(["x1", "y1", "x2", "y2"])}
+    idx_arr = np.array(known_idx, dtype=float)
+
+    result = list(ball_positions)
+
+    # Group missing indices into contiguous gap segments
+    missing = sorted(set(range(n)) - set(known_idx))
+    if not missing:
+        return result
+
+    gaps = []
+    seg_start = prev = missing[0]
+    for m in missing[1:]:
+        if m != prev + 1:
+            gaps.append((seg_start, prev))
+            seg_start = m
+        prev = m
+    gaps.append((seg_start, prev))
+
+    # Fit global cubic spline on known points (only if enough points)
+    if len(known_idx) >= 4:
+        splines = {c: UnivariateSpline(idx_arr, coords[c], k=3, s=0, ext=3)
+                   for c in ["x1", "y1", "x2", "y2"]}
+    else:
+        splines = None
+
+    for gap_start, gap_end in gaps:
+        gap_len = gap_end - gap_start + 1
+
+        if splines is not None and gap_len <= 30:
+            # Cubic spline for short gaps
+            for fi in range(gap_start, gap_end + 1):
+                bbox = [float(splines[c](fi)) for c in ["x1", "y1", "x2", "y2"]]
+                result[fi] = {1: {"bbox": bbox}}
+        else:
+            # Linear fallback for long gaps or insufficient known points
+            before = [k for k in known_idx if k < gap_start]
+            after  = [k for k in known_idx if k > gap_end]
+            if not before or not after:
+                nearest = before[-1] if before else after[0]
+                for fi in range(gap_start, gap_end + 1):
+                    result[fi] = {1: {"bbox": list(raw[nearest])}}
+            else:
+                k0, k1 = before[-1], after[0]
+                b0, b1 = raw[k0], raw[k1]
+                span = k1 - k0
+                for fi in range(gap_start, gap_end + 1):
+                    t = (fi - k0) / span
+                    bbox = [b0[j] + t * (b1[j] - b0[j]) for j in range(4)]
+                    result[fi] = {1: {"bbox": bbox}}
+
+    return result
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Tracker
 # ═══════════════════════════════════════════════════════════════════════
@@ -297,10 +367,8 @@ class Tracker:
                                             else get_foot_position(info["bbox"]))
 
     def interpolate_ball_positions(self, ball_positions: list) -> list:
-        raw = [x.get(1, {}).get("bbox", []) for x in ball_positions]
-        df  = pd.DataFrame(raw, columns=["x1","y1","x2","y2"])
-        df  = df.interpolate().bfill()
-        return [{1: {"bbox": x}} for x in df.to_numpy().tolist()]
+        """Interpolate missing ball detections using cubic spline (short gaps) or linear (long gaps)."""
+        return interpolate_ball_positions_spline(ball_positions)
 
 
     def draw_ellipse(self, frame, bbox, color, track_id, is_tracked=False):
