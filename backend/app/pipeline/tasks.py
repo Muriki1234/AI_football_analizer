@@ -44,6 +44,7 @@ from .analysis_core import (
     CameraMovementEstimator,
     stream_video_chunks,
     read_frames_at_indices,
+    read_video,
     KeypointDetector,
     ViewTransformer,
     AccurateSpeedEstimator,
@@ -67,6 +68,9 @@ except ImportError:
 MODEL_PATH         = os.environ.get("YOLO_MODEL_PATH",      "weights/football/best.pt")
 KEYPOINT_MODEL_PATH= os.environ.get("KEYPOINT_MODEL_PATH",  "weights/keypoints/best.pt")
 SAMURAI_SCRIPT     = os.environ.get("SAMURAI_SCRIPT",        "samurai/run_samurai.py")
+
+SHORT_VIDEO_FRAMES = 3000  # ≤3000 frames (~2min@24fps): read once into RAM for speed
+                            # >3000 frames: use streaming to avoid OOM
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -321,28 +325,55 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         print(f"[INFO] SAMURAI bboxes: {len(tracked_bboxes)} frames, "
               f"range [{tb_keys[0] if tb_keys else 'N/A'} – {tb_keys[-1] if tb_keys else 'N/A'}]")
 
-        # ── 2. YOLO 流式检测（分块，内存恒定）────────────────────────
+        # ── 2-4. 检测 + 光流 + 关键点（短视频一次读入内存，长视频流式）────────
         sm.update_status(session_id, "analyzing", progress=10, stage="yolo_detection")
         tracker = Tracker(MODEL_PATH)
-        tracks  = tracker.get_object_tracks_streamed(video_path, total)
-        tracker.add_position_to_tracks(tracks)
 
-        # ── 3. 摄像机运动补偿（流式光流）────────────────────────────
-        sm.update_status(session_id, "analyzing", progress=35, stage="camera_motion")
-        cam     = CameraMovementEstimator.from_video_path(video_path)
-        cam_mov = cam.get_camera_movement_streamed(video_path, total)
-        cam.add_adjust_positions_to_tracks(tracks, cam_mov)
+        if total <= SHORT_VIDEO_FRAMES:
+            # 短视频：一次读入内存，三个模块共享同一份帧（省去2次重复IO）
+            print(f"[INFO] Short video ({total} frames) — loading into RAM for speed")
+            frames = read_video(video_path)
+            tracks = tracker.get_object_tracks(frames)
+            tracker.add_position_to_tracks(tracks)
 
-        # ── 4. 关键点 + 透视变换（流式，生成 minimap 坐标）──────────
-        sm.update_status(session_id, "analyzing", progress=50, stage="keypoint_detection")
-        if os.path.exists(KEYPOINT_MODEL_PATH) and HAS_SPORTS:
-            kp  = KeypointDetector(KEYPOINT_MODEL_PATH)
-            vt  = ViewTransformer()
-            kps = kp.predict_streamed(video_path, total)
-            vt.add_transformed_position_to_tracks(tracks, kps)
-            vt.interpolate_2d_positions(tracks)
+            sm.update_status(session_id, "analyzing", progress=35, stage="camera_motion")
+            cam = CameraMovementEstimator(frames[0])
+            cam_mov = cam.get_camera_movement(frames)
+            cam.add_adjust_positions_to_tracks(tracks, cam_mov)
+
+            sm.update_status(session_id, "analyzing", progress=50, stage="keypoint_detection")
+            if os.path.exists(KEYPOINT_MODEL_PATH) and HAS_SPORTS:
+                kp  = KeypointDetector(KEYPOINT_MODEL_PATH)
+                vt  = ViewTransformer()
+                kps = kp.predict(frames)
+                vt.add_transformed_position_to_tracks(tracks, kps)
+                vt.interpolate_2d_positions(tracks)
+            else:
+                print(f"[WARN] Keypoint model not found or sports lib missing — skipping perspective")
+
+            del frames  # 释放内存
+            import gc; gc.collect()
+
         else:
-            print(f"[WARN] Keypoint model not found or sports lib missing — skipping perspective")
+            # 长视频：流式处理，内存恒定
+            print(f"[INFO] Long video ({total} frames) — using streaming mode")
+            tracks = tracker.get_object_tracks_streamed(video_path, total)
+            tracker.add_position_to_tracks(tracks)
+
+            sm.update_status(session_id, "analyzing", progress=35, stage="camera_motion")
+            cam     = CameraMovementEstimator.from_video_path(video_path)
+            cam_mov = cam.get_camera_movement_streamed(video_path, total)
+            cam.add_adjust_positions_to_tracks(tracks, cam_mov)
+
+            sm.update_status(session_id, "analyzing", progress=50, stage="keypoint_detection")
+            if os.path.exists(KEYPOINT_MODEL_PATH) and HAS_SPORTS:
+                kp  = KeypointDetector(KEYPOINT_MODEL_PATH)
+                vt  = ViewTransformer()
+                kps = kp.predict_streamed(video_path, total)
+                vt.add_transformed_position_to_tracks(tracks, kps)
+                vt.interpolate_2d_positions(tracks)
+            else:
+                print(f"[WARN] Keypoint model not found or sports lib missing — skipping perspective")
 
         # ── 5. 足球轨迹插值 ──────────────────────────────────────────
         sm.update_status(session_id, "analyzing", progress=65, stage="ball_interpolation")
