@@ -214,8 +214,10 @@ class Tracker:
                 if   cid == self.player_id:   tracks["players"][fidx][tid]  = {"bbox": bbox}
                 elif cid == self.referee_id:  tracks["referees"][fidx][tid] = {"bbox": bbox}
 
-            for d in ds:
-                if d[3] == self.ball_id:
+            # Ball: apply BALL_CONF post-filter
+            ball_confs = det.boxes.conf.tolist() if det.boxes is not None else []
+            for d, conf_val in zip(ds, ball_confs):
+                if d[3] == self.ball_id and conf_val >= BALL_CONF:
                     tracks["ball"][fidx][1] = {"bbox": d[0].tolist()}
 
         self._interpolate_tracks(tracks, total)
@@ -275,8 +277,10 @@ class Tracker:
                     bbox, cid, tid = d[0].tolist(), d[3], d[4]
                     if   cid == self.player_id:  tracks["players"][global_idx][tid]  = {"bbox": bbox}
                     elif cid == self.referee_id: tracks["referees"][global_idx][tid] = {"bbox": bbox}
-                for d in ds:
-                    if d[3] == self.ball_id:
+                # Ball: apply BALL_CONF post-filter
+                ball_confs = det_dict[local_idx].boxes.conf.tolist() if det_dict[local_idx].boxes is not None else []
+                for d, conf_val in zip(ds, ball_confs):
+                    if d[3] == self.ball_id and conf_val >= BALL_CONF:
                         tracks["ball"][global_idx][1] = {"bbox": d[0].tolist()}
 
         self._interpolate_tracks(tracks, total_frames)
