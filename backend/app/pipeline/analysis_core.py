@@ -840,11 +840,20 @@ class SmartBallPossessionDetector:
         ball_spd  = self._calc_ball_speed(ball_history)
         thr_fly   = 30 * self._res_scale
         thr_cont  = 15 * self._res_scale
-        self.ball_state = ("flying" if ball_spd > thr_fly else
-                           "contested" if ball_spd > thr_cont else "controlled")
-        pid = (self._detect_flying(ball_pos, ball_history, players)   if self.ball_state=="flying"   else
-               self._detect_contested(ball_pos, players)               if self.ball_state=="contested" else
-               self._detect_controlled(ball_pos, ball_history, players))
+        if ball_spd > thr_fly:
+            self.ball_state = "flying"
+            pid = self._detect_flying(ball_pos, ball_history, players)
+        elif ball_spd > thr_cont:
+            self.ball_state = "contested"
+            pid = self._detect_contested(ball_pos, players)
+        else:
+            # Slow ball — check if any player is actually close enough
+            pid = self._detect_controlled(ball_pos, ball_history, players)
+            if pid == -1:
+                self.ball_state = "loose_ball"  # ball on ground, no one in range
+            else:
+                self.ball_state = "controlled"
+
         return self._smooth(pid)
 
     def get_confidence(self) -> float:
