@@ -63,12 +63,6 @@ try:
 except ImportError:
     HAS_SPORTS = False
 
-# ── 团队显示颜色（高对比度，用于渲染而非分类）────────────────────────────────
-TEAM1_DISPLAY_BGR = (255, 191, 0)     # #00BFFF 青色 (BGR)
-TEAM1_DISPLAY_HEX = "#00BFFF"
-TEAM2_DISPLAY_BGR = (147, 20, 255)    # #FF1493 深粉 (BGR)
-TEAM2_DISPLAY_HEX = "#FF1493"
-
 # ── 环境变量配置（部署时设置）────────────────────────────────────────────────
 MODEL_PATH         = os.environ.get("YOLO_MODEL_PATH",      "weights/football/best.pt")
 KEYPOINT_MODEL_PATH= os.environ.get("KEYPOINT_MODEL_PATH",  "weights/keypoints/best.pt")
@@ -448,8 +442,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                 k: v.tolist() for k, v in team_assigner.team_colors.items()
             },
             "team_colors_hex": {
-                1: TEAM1_DISPLAY_HEX,
-                2: TEAM2_DISPLAY_HEX,
+                k: bgr_to_hex(v) for k, v in team_assigner.team_colors.items()
             },
         }
         with open(tracks_cache, "wb") as f:
@@ -956,15 +949,13 @@ def _render_single_frame_worker_full(args):
             bbox = info['bbox']
             if bbox[2] <= bbox[0] or bbox[3] <= bbox[1]: continue
 
-            # Determine color by team ID (use predefined display colors)
-            team_id = info.get('team')
-            if team_id == 1:
-                color = TEAM1_DISPLAY_BGR
-            elif team_id == 2:
-                color = TEAM2_DISPLAY_BGR
+            # Use real jersey color stored per-player by run_global_analysis
+            raw_color = info.get('team_color')
+            if raw_color is not None:
+                color = tuple(int(c) for c in raw_color[:3])
             else:
-                color = (0, 0, 255)
-            
+                color = (0, 255, 0)  # fallback green if no color assigned yet
+
             frame = tracker.draw_ellipse(frame, bbox, color, pid, is_tracked=False)
 
             if info.get('has_ball', False):
@@ -984,13 +975,11 @@ def _render_single_frame_worker_full(args):
             cv2.ellipse(frame, center=(x_c, y2), axes=(int(width), int(0.35*width)),
                        angle=0.0, startAngle=-45, endAngle=235, color=(0, 215, 255), thickness=6)
 
-            team_color = (0, 215, 255)
+            team_color = (0, 215, 255)  # default gold outline
             if current_yolo_info:
-                tid = current_yolo_info.get('team')
-                if tid == 1:
-                    team_color = TEAM1_DISPLAY_BGR
-                elif tid == 2:
-                    team_color = TEAM2_DISPLAY_BGR
+                raw_color = current_yolo_info.get('team_color')
+                if raw_color is not None:
+                    team_color = tuple(int(c) for c in raw_color[:3])
 
             cv2.ellipse(frame, center=(x_c, y2), axes=(int(width*0.9), int(0.35*width*0.9)),
                        angle=0.0, startAngle=-45, endAngle=235, color=team_color, thickness=3)
