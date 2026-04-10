@@ -439,11 +439,6 @@ class Tracker:
         width = int(bbox[2] - bbox[0])
         cv2.ellipse(frame, center=(x_center, y2), axes=(int(width), int(0.35 * width)),
                     angle=0.0, startAngle=-45, endAngle=235, color=color, thickness=2)
-        cv2.rectangle(frame, (int(x_center - width/2 - 2), int(y2 - 8)),
-                      (int(x_center + width/2 + 2), int(y2 + 8)), color, -1)
-        if track_id is not None:
-            cv2.putText(frame, str(track_id), (int(x_center - width/2), int(y2 + 5)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1)
         return frame
 
     def draw_triangle(self, frame, bbox, color):
@@ -671,17 +666,21 @@ class ViewTransformer:
     def add_transformed_position_to_tracks(self, tracks: dict, kps_list: list):
         if not HAS_SPORTS: return
 
+        last_transformer = None  # fallback: reuse last good homography
+
         for fnum, kps in enumerate(kps_list):
             src, dst = [], []
             for kid, pos in kps.items():
                 if kid < len(self.config.vertices):
                     src.append(pos); dst.append(self.config.vertices[kid])
 
-            # 不足4个关键点时跳过该帧（与 notebook 行为一致，不使用写死的 fallback）
-            if len(src) < 4:
-                continue
-
-            transformer = SportsViewTransformer(source=np.array(src), target=np.array(dst))
+            if len(src) >= 4:
+                transformer = SportsViewTransformer(source=np.array(src), target=np.array(dst))
+                last_transformer = transformer  # save for fallback
+            elif last_transformer is not None:
+                transformer = last_transformer  # reuse last good homography
+            else:
+                continue  # no good frame yet, skip
 
             for obj, otracks in tracks.items():
                 if fnum >= len(otracks): continue
@@ -699,27 +698,58 @@ class ViewTransformer:
 
 
     def interpolate_2d_positions(self, tracks: dict):
-        """平滑 minimap 坐标（大窗口高斯平滑）"""
+        """平滑 minimap 坐标（自适应窗口：静止大窗口，移动小窗口）"""
+        SPEED_THRESHOLD = 0.3   # m/frame — below this → stationary smoothing
+        WINDOW_SLOW     = 15    # large window for stationary players
+        WINDOW_FAST     = 5     # small window for fast-moving players
+
         for obj, otracks in tracks.items():
-            if obj in ("ball","referees"): continue
+            if obj in ("ball", "referees"): continue
             all_ids = set()
             for fd in otracks: all_ids.update(fd.keys())
+
             for tid in all_ids:
                 rows = []
                 for fd in otracks:
                     info = fd.get(tid)
-                    pt = info.get("position_transformed",[np.nan,np.nan]) if info else [np.nan,np.nan]
-                    mp = info.get("position_minimap",   [np.nan,np.nan]) if info else [np.nan,np.nan]
-                    rows.append({"x":pt[0],"y":pt[1],"mx":mp[0],"my":mp[1]})
+                    pt = info.get("position_transformed", [np.nan, np.nan]) if info else [np.nan, np.nan]
+                    mp = info.get("position_minimap",     [np.nan, np.nan]) if info else [np.nan, np.nan]
+                    rows.append({"x": pt[0], "y": pt[1], "mx": mp[0], "my": mp[1]})
 
                 df = pd.DataFrame(rows).interpolate("linear").bfill().ffill()
-                if len(df) > MINIMAP_SMOOTH_WINDOW:
-                    df["mx"] = df["mx"].rolling(MINIMAP_SMOOTH_WINDOW, min_periods=1,
-                                                center=True, win_type="gaussian").mean(std=3)
-                    df["my"] = df["my"].rolling(MINIMAP_SMOOTH_WINDOW, min_periods=1,
-                                                center=True, win_type="gaussian").mean(std=3)
-                    df["x"]  = df["x"].rolling(SPEED_SMOOTH_WINDOW, min_periods=1, center=True).mean()
-                    df["y"]  = df["y"].rolling(SPEED_SMOOTH_WINDOW, min_periods=1, center=True).mean()
+
+                # Compute per-frame speed (m/frame) from position_transformed deltas
+                dx = df["x"].diff().fillna(0)
+                dy = df["y"].diff().fillna(0)
+                speed = (dx**2 + dy**2).pow(0.5)  # Euclidean distance per frame
+
+                # Choose window per frame: slow → 15, fast → 5
+                windows = np.where(speed < SPEED_THRESHOLD, WINDOW_SLOW, WINDOW_FAST)
+
+                # Apply rolling smooth with adaptive window
+                # Strategy: split into segments by window size and smooth each
+                mx_smooth = df["mx"].copy()
+                my_smooth = df["my"].copy()
+                x_smooth  = df["x"].copy()
+                y_smooth  = df["y"].copy()
+
+                for win in [WINDOW_SLOW, WINDOW_FAST]:
+                    mask = (windows == win)
+                    if not mask.any(): continue
+                    # Apply uniform rolling window to the whole series, then keep only masked frames
+                    r_mx = df["mx"].rolling(win, min_periods=1, center=True).mean()
+                    r_my = df["my"].rolling(win, min_periods=1, center=True).mean()
+                    r_x  = df["x"].rolling(min(win, SPEED_SMOOTH_WINDOW), min_periods=1, center=True).mean()
+                    r_y  = df["y"].rolling(min(win, SPEED_SMOOTH_WINDOW), min_periods=1, center=True).mean()
+                    mx_smooth = mx_smooth.where(~mask, r_mx)
+                    my_smooth = my_smooth.where(~mask, r_my)
+                    x_smooth  = x_smooth.where(~mask, r_x)
+                    y_smooth  = y_smooth.where(~mask, r_y)
+
+                df["mx"] = mx_smooth
+                df["my"] = my_smooth
+                df["x"]  = x_smooth
+                df["y"]  = y_smooth
 
                 for i, row in df.iterrows():
                     if tid in otracks[i] and not np.isnan(row["x"]):
