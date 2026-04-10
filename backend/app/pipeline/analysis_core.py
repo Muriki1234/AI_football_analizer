@@ -666,21 +666,17 @@ class ViewTransformer:
     def add_transformed_position_to_tracks(self, tracks: dict, kps_list: list):
         if not HAS_SPORTS: return
 
-        last_transformer = None  # fallback: reuse last good homography
-
         for fnum, kps in enumerate(kps_list):
             src, dst = [], []
             for kid, pos in kps.items():
                 if kid < len(self.config.vertices):
                     src.append(pos); dst.append(self.config.vertices[kid])
 
-            if len(src) >= 4:
-                transformer = SportsViewTransformer(source=np.array(src), target=np.array(dst))
-                last_transformer = transformer  # save for fallback
-            elif last_transformer is not None:
-                transformer = last_transformer  # reuse last good homography
-            else:
-                continue  # no good frame yet, skip
+            # 不足4个关键点时跳过（避免不稳定 homography 扩散错误）
+            if len(src) < 4:
+                continue
+
+            transformer = SportsViewTransformer(source=np.array(src), target=np.array(dst))
 
             for obj, otracks in tracks.items():
                 if fnum >= len(otracks): continue

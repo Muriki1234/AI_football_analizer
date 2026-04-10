@@ -334,6 +334,8 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             print(f"[INFO] Short video ({total} frames) — loading into RAM for speed")
             frames = read_video(video_path)
             tracks = tracker.get_object_tracks(frames)
+            # 球插值先于 add_position_to_tracks，让插值帧也能获得 position/position_minimap
+            tracks["ball"] = tracker.interpolate_ball_positions(tracks["ball"])
             tracker.add_position_to_tracks(tracks)
 
             sm.update_status(session_id, "analyzing", progress=35, stage="camera_motion")
@@ -358,6 +360,8 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             # 长视频：流式处理，内存恒定
             print(f"[INFO] Long video ({total} frames) — using streaming mode")
             tracks = tracker.get_object_tracks_streamed(video_path, total)
+            # 球插值先于 add_position_to_tracks，让插值帧也能获得 position/position_minimap
+            tracks["ball"] = tracker.interpolate_ball_positions(tracks["ball"])
             tracker.add_position_to_tracks(tracks)
 
             sm.update_status(session_id, "analyzing", progress=35, stage="camera_motion")
@@ -375,11 +379,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             else:
                 print(f"[WARN] Keypoint model not found or sports lib missing — skipping perspective")
 
-        # ── 5. 足球轨迹插值 ──────────────────────────────────────────
-        sm.update_status(session_id, "analyzing", progress=65, stage="ball_interpolation")
-        tracks["ball"] = tracker.interpolate_ball_positions(tracks["ball"])
-
-        # ── 6. 速度 & 距离 ───────────────────────────────────────────
+        # ── 5. 速度 & 距离 ───────────────────────────────────────────
         sm.update_status(session_id, "analyzing", progress=70, stage="speed_calculation")
         speed_est = AccurateSpeedEstimator()
         speed_est.add_speed_and_distance_to_tracks(tracks)
