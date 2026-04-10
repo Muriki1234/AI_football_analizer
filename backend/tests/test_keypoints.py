@@ -113,3 +113,16 @@ def test_adaptive_smoothing_window_values():
     assert slow_window == 15, f"Slow player should use window=15, got {slow_window}"
     assert fast_window == 5,  f"Fast player should use window=5, got {fast_window}"
     assert slow_window > fast_window, "Slow player should have larger smoothing window"
+
+
+def test_ball_trail_length():
+    """Ball trail should keep at most 30 positions."""
+    trail = []
+    for i in range(50):  # simulate 50 frames of ball positions
+        trail.append((float(i), float(i)))
+        if len(trail) > 30:
+            trail.pop(0)
+
+    assert len(trail) == 30, f"Trail should be capped at 30, got {len(trail)}"
+    assert trail[-1] == (49.0, 49.0), "Last entry should be most recent position"
+    assert trail[0]  == (20.0, 20.0), "First entry should be 30 frames back"

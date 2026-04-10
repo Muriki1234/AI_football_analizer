@@ -798,8 +798,14 @@ def run_minimap_replay(session_id: str, session: dict, task_id: str, sm: Session
         cap.release()
 
         # 先渲染第一帧拿到尺寸
+        ball_trail: list = []
+        ball_info_0 = tracks["ball"][0].get(1, {}) if len(tracks["ball"]) > 0 else {}
+        ball_mp_0 = ball_info_0.get("position_minimap") if ball_info_0 else None
+        if ball_mp_0:
+            ball_trail.append((ball_mp_0[0], ball_mp_0[1]))
         first_frame = render_minimap_frame(0, tracks, tracked_bboxes, team_control,
-                                            config, hex_t1, hex_t2)
+                                            config, hex_t1, hex_t2,
+                                            ball_trail=list(ball_trail))
         mh, mw = first_frame.shape[:2]
 
         output_path = sm.session_output_dir(session_id) / "minimap_replay.mp4"
@@ -820,9 +826,16 @@ def run_minimap_replay(session_id: str, session: dict, task_id: str, sm: Session
 
         # 流式渲染后续帧
         for i in range(1, total_frames):
+            ball_info = tracks["ball"][i].get(1, {}) if i < len(tracks["ball"]) else {}
+            ball_mp = ball_info.get("position_minimap") if ball_info else None
+            if ball_mp:
+                ball_trail.append((ball_mp[0], ball_mp[1]))
+                if len(ball_trail) > 30:
+                    ball_trail.pop(0)
             try:
                 frame = render_minimap_frame(i, tracks, tracked_bboxes, team_control,
-                                              config, hex_t1, hex_t2)
+                                              config, hex_t1, hex_t2,
+                                              ball_trail=list(ball_trail))
             except Exception:
                 frame = np.zeros((mh, mw, 3), dtype=np.uint8)
             proc.stdin.write(frame.tobytes())
@@ -844,10 +857,12 @@ def run_minimap_replay(session_id: str, session: dict, task_id: str, sm: Session
 
 def _render_minimap_frame_worker(args):
     """线程安全的单帧渲染包装"""
-    i, tracks, tracked_bboxes, team_control, config, hex_t1, hex_t2 = args
+    i, tracks, tracked_bboxes, team_control, config, hex_t1, hex_t2 = args[:7]
+    ball_trail = args[7] if len(args) > 7 else None
     try:
         frame = render_minimap_frame(i, tracks, tracked_bboxes, team_control,
-                                     config, hex_t1, hex_t2)
+                                     config, hex_t1, hex_t2,
+                                     ball_trail=ball_trail)
         return i, frame
     except Exception:
         # 出错返回黑帧，不中断整体渲染

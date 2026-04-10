@@ -1012,7 +1012,8 @@ class SmartBallPossessionDetector:
 
 def render_minimap_frame(frame_idx: int, tracks: dict,
                          tracked_bboxes: dict, team_control: np.ndarray,
-                         config, hex_t1: str, hex_t2: str) -> np.ndarray:
+                         config, hex_t1: str, hex_t2: str,
+                         ball_trail: list = None) -> np.ndarray:
     """
     渲染单帧小地图图像（不含原始视频画面）。
     输出尺寸约 700×400（由 draw_pitch 决定），可直接写入 MP4。
@@ -1069,6 +1070,18 @@ def render_minimap_frame(frame_idx: int, tracks: dict,
         pitch = draw_points_on_pitch(config=config, xy=np.array([tracked_pos]),
             face_color=sv.Color.from_hex(inner), edge_color=sv.Color.BLACK,
             radius=14, pitch=pitch)
+
+    # ── 球轨迹拖尾（最近30帧）────────────────────────────────────────
+    if ball_trail and len(ball_trail) > 1:
+        n = len(ball_trail)
+        for i in range(1, n):
+            alpha = i / n  # 0=oldest (faint) → 1=newest (bright)
+            thickness = max(1, int(alpha * 3))
+            color_intensity = int(alpha * 255)
+            trail_color = (0, color_intensity, 0)  # green, fades from dark to bright
+            pt1 = (int(ball_trail[i-1][0]), int(ball_trail[i-1][1]))
+            pt2 = (int(ball_trail[i][0]),   int(ball_trail[i][1]))
+            cv2.line(pitch, pt1, pt2, trail_color, thickness)
 
     # ── 足球 ─────────────────────────────────────────────────────────
     ball_pos = tracks["ball"][frame_idx].get(1, {}).get("position_minimap")
