@@ -661,6 +661,7 @@ class ViewTransformer:
         if   mc > 500: self.scale_factor, self.minimap_scale = 0.01, 1.0
         elif mc > 50:  self.scale_factor, self.minimap_scale = 0.1,  10.0
         else:          self.scale_factor, self.minimap_scale = 1.0,  100.0
+        self._last_transformer = None  # fallback when keypoints < 4
 
 
     def add_transformed_position_to_tracks(self, tracks: dict, kps_list: list):
@@ -672,11 +673,14 @@ class ViewTransformer:
                 if kid < len(self.config.vertices):
                     src.append(pos); dst.append(self.config.vertices[kid])
 
-            # 不足4个关键点时跳过（避免不稳定 homography 扩散错误）
-            if len(src) < 4:
+            if len(src) >= 4:
+                transformer = SportsViewTransformer(source=np.array(src), target=np.array(dst))
+                self._last_transformer = transformer
+            elif self._last_transformer is not None:
+                # 用上一帧有效的 homography 做 fallback，避免小地图断续
+                transformer = self._last_transformer
+            else:
                 continue
-
-            transformer = SportsViewTransformer(source=np.array(src), target=np.array(dst))
 
             for obj, otracks in tracks.items():
                 if fnum >= len(otracks): continue
@@ -954,8 +958,11 @@ class SmartBallPossessionDetector:
             if not info or "bbox" not in info: continue
             b    = info["bbox"]
             foot = ((b[0]+b[2])/2, b[3])
+            # 阈值 = bbox 高度的 1.5 倍，自适应球员大小和分辨率
+            bbox_h   = max(b[3] - b[1], 1)
+            max_dist = bbox_h * 1.5
             d    = measure_distance(ball_pos, foot)
-            if d > self.max_control_distance: continue
+            if d > max_dist: continue
             s = 100/(d+1)
             if s > best_s: best_s=s; best=pid
         return best
