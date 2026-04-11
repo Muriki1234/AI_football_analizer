@@ -126,14 +126,6 @@ async function registerVideoPath(sessionId, videoPath) {
 // 分析流水线
 // ═══════════════════════════════════════════════════════════════════════
 
-/**
- * 自动启动：检测球员 → 随机选择 → SAMURAI 追踪（跳过手动选择）
- * @param {string} sessionId
- */
-async function autoStart(sessionId) {
-  const { data } = await http.post(`/api/${sessionId}/auto_start`)
-  return data
-}
 
 /**
  * 启动 SAMURAI 追踪
@@ -194,6 +186,18 @@ async function generateMinimapReplay(sessionId) {
 /** 生成全量回放视频，返回 task_id */
 async function generateFullReplay(sessionId) {
   const { data } = await http.post(`/api/${sessionId}/generate/full_replay`)
+  return data.task_id
+}
+
+/** 生成冲刺爆发分析图，返回 task_id */
+async function generateSprintAnalysis(sessionId) {
+  const { data } = await http.post(`/api/${sessionId}/generate/sprint_analysis`)
+  return data.task_id
+}
+
+/** 生成防线渗透统计图，返回 task_id */
+async function generateDefensiveLine(sessionId) {
+  const { data } = await http.post(`/api/${sessionId}/generate/defensive_line`)
   return data.task_id
 }
 
@@ -403,7 +407,6 @@ const colabService = {
   trimVideo,
 
   // 流水线
-  autoStart,
   analyzeFrame,
   startTracking,
   startAnalysis,
@@ -415,6 +418,8 @@ const colabService = {
   generatePossession,
   generateMinimapReplay,
   generateFullReplay,
+  generateSprintAnalysis,
+  generateDefensiveLine,
   getTask,
   getSummary,
   getFileUrl,

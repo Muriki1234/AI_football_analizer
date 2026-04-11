@@ -66,42 +66,6 @@ def register_session(session_id: str):
     return jsonify({'status': 'registered', 'session_id': session_id}), 200
 
 
-# ── Stage 0.8: Auto-Start (skip trim & player selection) ────────────────────
-
-@analysis.route('/api/<session_id>/auto_start', methods=['POST'])
-def auto_start(session_id: str):
-    """
-    Auto-pipeline: register session → YOLO detect first frame → random pick
-    player → start SAMURAI tracking.  Frontend skips trim & player selection.
-    """
-    # 1. Resolve video path from upload store
-    try:
-        from .api import video_sessions
-        video_info = video_sessions.get(session_id)
-        if not video_info:
-            return jsonify({'error': 'Video session not found'}), 404
-        video_path = video_info['filepath']
-    except Exception as e:
-        return jsonify({'error': f'Cannot access video: {str(e)}'}), 500
-
-    if not os.path.exists(video_path):
-        return jsonify({'error': 'Video file not found on disk'}), 404
-
-    # 2. Register pipeline session (idempotent)
-    if not sm.get_session(session_id):
-        sm.create_session(session_id, video_path)
-        sm.session_output_dir(session_id).mkdir(parents=True, exist_ok=True)
-
-    session = sm.get_session(session_id)
-    if session['status'] not in ('uploaded',):
-        return jsonify({'error': f"Cannot auto_start from status: {session['status']}"}), 400
-
-    # 3. Fire background thread: detect → random pick → SAMURAI tracking
-    sm.update_status(session_id, 'tracking', progress=0, stage='auto_detect')
-    _fire_thread(tasks.run_auto_detect_and_track, session_id, session, sm)
-
-    return jsonify({'status': 'auto_started', 'session_id': session_id}), 200
-
 
 # ── Stage 1: SAMURAI Tracking ────────────────────────────────────────────────
 
@@ -208,6 +172,24 @@ def generate_full_replay(session_id: str):
     return jsonify({'task_id': task_id, 'status': 'queued'}), 200
 
 
+@analysis.route('/api/<session_id>/generate/sprint_analysis', methods=['POST'])
+def generate_sprint_analysis(session_id: str):
+    session, err = _require_analysis_done(session_id)
+    if err: return err
+    task_id = sm.create_task(session_id, 'sprint_analysis')
+    _fire_thread(tasks.run_sprint_analysis, session_id, session, task_id, sm)
+    return jsonify({'task_id': task_id, 'status': 'queued'}), 200
+
+
+@analysis.route('/api/<session_id>/generate/defensive_line', methods=['POST'])
+def generate_defensive_line(session_id: str):
+    session, err = _require_analysis_done(session_id)
+    if err: return err
+    task_id = sm.create_task(session_id, 'defensive_line')
+    _fire_thread(tasks.run_defensive_line, session_id, session, task_id, sm)
+    return jsonify({'task_id': task_id, 'status': 'queued'}), 200
+
+
 # ── Status & Summary ─────────────────────────────────────────────────────────
 
 _STAGE_LABELS = {
@@ -230,7 +212,8 @@ _STAGE_LABELS = {
 def _get_available_features(session: dict) -> list:
     status = session['status']
     if status == 'analysis_done':
-        return ['heatmap', 'speed_chart', 'possession', 'minimap_replay', 'full_replay', 'summary']
+        return ['heatmap', 'speed_chart', 'possession', 'minimap_replay', 'full_replay',
+                'sprint_analysis', 'defensive_line', 'summary']
     if status == 'tracking_done':
         return ['analyze']
     if status == 'uploaded':
