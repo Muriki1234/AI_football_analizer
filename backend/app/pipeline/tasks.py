@@ -335,8 +335,14 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                         try:
                             color = team_assigner._get_player_color(frame, info['bbox'])
                             if color is not None and not np.all(color == 0):
-                                predicted = int(team_assigner.kmeans.predict(
-                                    color.reshape(1, -1))[0]) + 1
+                                cluster_id = int(team_assigner.kmeans.predict(
+                                    color.reshape(1, -1))[0])
+                                # 用 _cluster_to_team 映射到 team 1/2，小簇按颜色距离归队
+                                predicted = team_assigner._cluster_to_team.get(cluster_id)
+                                if predicted is None:
+                                    d1 = np.linalg.norm(color - team_assigner.team_colors.get(1, np.zeros(3)))
+                                    d2 = np.linalg.norm(color - team_assigner.team_colors.get(2, np.zeros(3)))
+                                    predicted = 1 if d1 <= d2 else 2
                                 player_vote_dict.setdefault(pid, []).append(predicted)
                         except Exception:
                             pass
@@ -372,7 +378,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                     i, p_tracks, ball_bbox, ball_history,
                     ball_transformed_pos=ball_transformed_pos)
                 conf = poss_detector.get_confidence()
-                if pid_has_ball != -1 and pid_has_ball in p_tracks and conf > 0.5:
+                if pid_has_ball != -1 and pid_has_ball in p_tracks and conf > 0.3:
                     p_tracks[pid_has_ball]["has_ball"]             = True
                     p_tracks[pid_has_ball]["possession_confidence"] = conf
                     team_control.append(p_tracks[pid_has_ball].get("team", 0))
@@ -948,27 +954,6 @@ def _render_single_frame_worker_full(args):
 
             cv2.ellipse(frame, center=(x_c, y2), axes=(int(width*0.9), int(0.35*width*0.9)),
                        angle=0.0, startAngle=-45, endAngle=235, color=team_color, thickness=3)
-
-            display_id = current_matched_yolo_id if current_matched_yolo_id else "Target"
-            text_size, _ = cv2.getTextSize(str(display_id), cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-            w_txt, h_txt = text_size
-
-            cv2.rectangle(frame, (int(x_c - w_txt/2 - 5), int(y2 - 10)),
-                               (int(x_c + w_txt/2 + 5), int(y2 + 10)), (0, 215, 255), -1)
-            cv2.putText(frame, str(display_id), (int(x_c - w_txt/2), int(y2 + 5)),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
-            
-            if current_yolo_info and 'speed' in current_yolo_info:
-                speed = current_yolo_info['speed']
-                text = f"{speed:.1f} km/h"
-                (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-                box_x1, box_y2 = int(samurai_bbox_xyxy[0]), int(samurai_bbox_xyxy[3])
-                cv2.rectangle(frame, (box_x1, box_y2 + 32 - th),
-                            (box_x1 + tw + 6, box_y2 + 38), (180, 235, 255), -1)
-                cv2.rectangle(frame, (box_x1, box_y2 + 32 - th),
-                            (box_x1 + tw + 6, box_y2 + 38), (0, 0, 0), 1)
-                cv2.putText(frame, text, (box_x1 + 3, box_y2 + 32),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
 
             if current_yolo_info and current_yolo_info.get('has_ball', False):
                 confidence = current_yolo_info.get('possession_confidence', 1.0)
