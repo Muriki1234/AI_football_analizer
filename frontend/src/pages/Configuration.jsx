@@ -142,7 +142,12 @@ export default function Configuration() {
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: 0.1 }}
                 >
-                    {frameUrl ? (
+                    {detecting ? (
+                        <div className="config-frame-placeholder">
+                            <div className="config-loading-spinner" />
+                            <span>Detecting players...</span>
+                        </div>
+                    ) : frameUrl ? (
                         <div className="config-frame-wrapper">
                             <img src={frameUrl} alt="Analyzed Frame" className="config-frame-img" />
                             {imgDims && (

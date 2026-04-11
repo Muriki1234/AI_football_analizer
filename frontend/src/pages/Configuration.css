@@ -110,8 +110,25 @@
 }
 
 .config-frame-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
     color: var(--color-text-muted);
     font-style: italic;
+}
+
+.config-loading-spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid rgba(255,255,255,0.1);
+    border-top-color: var(--color-accent, #3b82f6);
+    border-radius: 50%;
+    animation: config-spin 0.9s linear infinite;
+}
+
+@keyframes config-spin {
+    to { transform: rotate(360deg); }
 }
 
 /* Right Side: Sidebar */
