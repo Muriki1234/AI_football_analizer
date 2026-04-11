@@ -17,6 +17,7 @@ export default function Trimmer() {
     const [range, setRange] = useState([0, 0]);
     const [duration, setDuration] = useState(0);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
+    const [isVideoLoading, setIsVideoLoading] = useState(true);
     const videoRef = useRef(null);
     const navigate = useNavigate();
     const location = useLocation();
@@ -99,6 +100,7 @@ export default function Trimmer() {
                                 const d = e.target.duration;
                                 setDuration(d);
                                 setRange([0, d]);
+                                setIsVideoLoading(false);
                             }}
                         />
                     ) : (
@@ -122,6 +124,12 @@ export default function Trimmer() {
 
                 {/* Range slider */}
                 <div className="trimmer__slider-area">
+                    {isVideoLoading && videoId && (
+                        <div className="trimmer__loading">
+                            <div className="trimmer__loading-spinner" />
+                            <span>Loading video...</span>
+                        </div>
+                    )}
                     {duration > 0 && (
                         <RangeSlider
                             key={duration}

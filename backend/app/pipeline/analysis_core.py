@@ -1068,16 +1068,25 @@ def render_minimap_frame(frame_idx: int, tracks: dict,
             radius=14, pitch=pitch)
 
     # ── 球轨迹拖尾（最近30帧）────────────────────────────────────────
+    # 用 draw_points_on_pitch 绘制（position_minimap 是 config 坐标系，非像素坐标）
     if ball_trail and len(ball_trail) > 1:
         n = len(ball_trail)
-        for i in range(1, n):
-            alpha = i / n  # 0=oldest (faint) → 1=newest (bright)
-            thickness = max(1, int(alpha * 3))
-            color_intensity = int(alpha * 255)
-            trail_color = (0, color_intensity, 0)  # green, fades from dark to bright
-            pt1 = (int(ball_trail[i-1][0]), int(ball_trail[i-1][1]))
-            pt2 = (int(ball_trail[i][0]),   int(ball_trail[i][1]))
-            cv2.line(pitch, pt1, pt2, trail_color, thickness)
+        for i, pos in enumerate(ball_trail):
+            alpha = (i + 1) / n          # 0=oldest → 1=newest
+            intensity = int(alpha * 200) + 55   # 55→255 绿色渐变
+            hex_trail = f"#{0:02x}{intensity:02x}{0:02x}"
+            radius = max(3, int(alpha * 7))
+            try:
+                pitch = draw_points_on_pitch(
+                    config=config,
+                    xy=np.array([pos]),
+                    face_color=sv.Color.from_hex(hex_trail),
+                    edge_color=sv.Color.from_hex(hex_trail),
+                    radius=radius,
+                    pitch=pitch
+                )
+            except Exception:
+                pass  # 坐标越界时跳过
 
     # ── 足球 ─────────────────────────────────────────────────────────
     ball_pos = tracks["ball"][frame_idx].get(1, {}).get("position_minimap")
