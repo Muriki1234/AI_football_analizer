@@ -9,6 +9,8 @@ tasks.py - 所有后台任务实现（Flask 线程版）
        run_speed_chart      → 速度/距离图表 PNG
        run_possession_stats → 控球率饼图 PNG + JSON
        run_minimap_replay   → 小地图轨迹回放 MP4
+       run_sprint_analysis  → 冲刺爆发统计 PNG + JSON
+       run_defensive_line   → 防线渗透统计 PNG + JSON
 """
 
 # Standard imports
@@ -71,93 +73,6 @@ SAMURAI_SCRIPT     = os.environ.get("SAMURAI_SCRIPT",        "samurai/run_samura
 
 SHORT_VIDEO_FRAMES = 3000  # ≤3000 frames (~2min@24fps): read once into RAM for speed
                             # >3000 frames: use streaming to avoid OOM
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 阶段 0.8：自动检测 + 随机选球员 + 启动追踪（跳过手动选择）
-# ═══════════════════════════════════════════════════════════════════════
-
-def run_auto_detect_and_track(session_id: str, session: dict, sm: SessionManager):
-    """
-    自动流水线：从第一帧做 YOLO 检测 → 随机选一个球员 → 直接启动 SAMURAI 追踪。
-    前端上传完视频直接跳 Dashboard，不再经过 Trim / Configuration。
-    """
-    import random
-
-    try:
-        video_path = session["video_path"]
-        sm.update_status(session_id, "tracking", progress=5, stage="auto_detect")
-
-        # ── 1. 抽取第一帧 ──
-        if cv2 is None:
-            raise ImportError("cv2 is required")
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            raise RuntimeError(f"Cannot open video: {video_path}")
-        ret, frame = cap.read()
-        height, width = frame.shape[:2]
-        cap.release()
-        if not ret:
-            raise RuntimeError("Cannot read first frame")
-
-        print(f"🔍 Auto-detect: frame size {width}x{height}")
-
-        # ── 2. YOLO 检测球员 ──
-        players_data = []
-        try:
-            import requests as http_requests
-            import base64
-
-            rf_api_key  = os.environ.get("ROBOFLOW_API_KEY")
-            rf_model_id = os.environ.get("ROBOFLOW_MODEL_ID")
-            rf_version  = os.environ.get("ROBOFLOW_VERSION", "1")
-
-            if rf_api_key and rf_model_id:
-                print("🤖 Roboflow detection...")
-                _, buf = cv2.imencode('.jpg', frame)
-                img_b64 = base64.b64encode(buf).decode('ascii')
-                url = f"https://detect.roboflow.com/{rf_model_id}/{rf_version}?api_key={rf_api_key}"
-                resp = http_requests.post(url, data=img_b64,
-                                          headers={"Content-Type": "application/x-www-form-urlencoded"})
-                if resp.status_code == 200:
-                    for idx, pred in enumerate(resp.json().get("predictions", [])):
-                        if pred.get("class", "").lower() == "player":
-                            xc, yc = pred["x"], pred["y"]
-                            pw, ph = pred["width"], pred["height"]
-                            players_data.append({
-                                "id": idx + 1,
-                                "bbox": [int(xc - pw/2), int(yc - ph/2),
-                                         int(xc + pw/2), int(yc + ph/2)]
-                            })
-                else:
-                    raise Exception(f"Roboflow API {resp.status_code}")
-            else:
-                raise ImportError("Roboflow keys not set")
-        except Exception as e:
-            print(f"⚠️ Roboflow failed ({e}), using mock bboxes")
-            players_data = [
-                {"id": 1, "bbox": [int(width*0.2), int(height*0.4), int(width*0.25), int(height*0.55)]},
-                {"id": 2, "bbox": [int(width*0.4), int(height*0.5), int(width*0.45), int(height*0.65)]},
-                {"id": 3, "bbox": [int(width*0.6), int(height*0.3), int(width*0.65), int(height*0.45)]},
-                {"id": 4, "bbox": [int(width*0.8), int(height*0.6), int(width*0.85), int(height*0.75)]},
-            ]
-
-        if not players_data:
-            raise RuntimeError("No players detected in first frame")
-
-        # ── 3. 随机选一个球员 ──
-        chosen = random.choice(players_data)
-        x1, y1, x2, y2 = chosen["bbox"]
-        player_bbox = {"x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1, "frame": 0}
-        print(f"🎲 Auto-picked player #{chosen['id']} bbox={chosen['bbox']}")
-
-        # ── 4. 直接调用 SAMURAI 追踪（同一线程内继续） ──
-        sm.update_status(session_id, "tracking", progress=10, stage="samurai_init")
-        run_samurai_tracking(session_id, session, player_bbox, sm)
-
-    except Exception as e:
-        traceback.print_exc()
-        sm.update_status(session_id, "tracking_failed", error=str(e))
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -347,7 +262,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             if os.path.exists(KEYPOINT_MODEL_PATH) and HAS_SPORTS:
                 kp  = KeypointDetector(KEYPOINT_MODEL_PATH)
                 vt  = ViewTransformer()
-                kps = kp.predict(frames)
+                kps = kp.predict(frames, cam_movement=cam_mov)
                 vt.add_transformed_position_to_tracks(tracks, kps)
                 vt.interpolate_2d_positions(tracks)
             else:
@@ -373,7 +288,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             if os.path.exists(KEYPOINT_MODEL_PATH) and HAS_SPORTS:
                 kp  = KeypointDetector(KEYPOINT_MODEL_PATH)
                 vt  = ViewTransformer()
-                kps = kp.predict_streamed(video_path, total)
+                kps = kp.predict_streamed(video_path, total, cam_movement=cam_mov)
                 vt.add_transformed_position_to_tracks(tracks, kps)
                 vt.interpolate_2d_positions(tracks)
             else:
@@ -442,7 +357,8 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                     info["team_color"] = team_assigner.team_colors.get(tid, np.array([0,0,0]))
 
                 # 球权检测
-                ball_bbox = tracks["ball"][i].get(1, {}).get("bbox", [])
+                ball_info = tracks["ball"][i].get(1, {})
+                ball_bbox = ball_info.get("bbox", [])
                 if len(ball_bbox) == 4:
                     bp = ((ball_bbox[0]+ball_bbox[2])/2, (ball_bbox[1]+ball_bbox[3])/2)
                     ball_history.append(bp)
@@ -451,7 +367,10 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                 if len(ball_history) > 10:
                     ball_history.pop(0)
 
-                pid_has_ball = poss_detector.detect_possession(i, p_tracks, ball_bbox, ball_history)
+                ball_transformed_pos = ball_info.get("position_transformed")
+                pid_has_ball = poss_detector.detect_possession(
+                    i, p_tracks, ball_bbox, ball_history,
+                    ball_transformed_pos=ball_transformed_pos)
                 conf = poss_detector.get_confidence()
                 if pid_has_ball != -1 and pid_has_ball in p_tracks and conf > 0.5:
                     p_tracks[pid_has_ball]["has_ball"]             = True
@@ -1071,6 +990,323 @@ def _render_single_frame_worker_full(args):
         pass
         
     return i, frame
+
+
+# ── 3e. 冲刺爆发统计 ──────────────────────────────────────────────────────────
+
+def run_sprint_analysis(session_id: str, session: dict, task_id: str, sm: SessionManager):
+    """
+    统计被追踪球员的高强度冲刺（>25 km/h 且持续 ≥ 2s）：
+    输出冲刺次数、平均持续时间及每次冲刺的路径叠加在球场小地图上。
+    """
+    try:
+        sm.update_task(session_id, task_id, status="running", progress=10)
+        data = _load_cache(session)
+        tracks, tracked_bboxes = data["tracks"], data["tracked_bboxes"]
+        cap = cv2.VideoCapture(session["video_path"])
+        fps = cap.get(cv2.CAP_PROP_FPS) or 24
+        cap.release()
+
+        SPRINT_KMH     = 25.0   # 冲刺速度阈值
+        MIN_SPRINT_SEC = 2.0    # 最短持续时间
+        min_frames     = int(MIN_SPRINT_SEC * fps)
+
+        # 收集每帧的速度和位置（基于 minimap 坐标）
+        speeds, positions = [], []
+        for i in range(len(tracks["players"])):
+            info = None
+            if i in tracked_bboxes:
+                sx, sy, sw, sh = tracked_bboxes[i]
+                info = _find_matched_player(tracks["players"][i], (sx+sw/2, sy+sh/2))
+            speeds.append(info.get("speed", 0) if info else 0)
+            pos = None
+            if info:
+                pos = info.get("position_minimap") or info.get("position_transformed")
+            positions.append(pos if (pos and len(pos) == 2
+                                     and not any(np.isnan(p) for p in pos)) else None)
+
+        sm.update_task(session_id, task_id, progress=40)
+
+        # 识别冲刺段
+        sprint_segments = []   # [(start_frame, end_frame, [positions])]
+        in_sprint, sprint_start, sprint_pts = False, 0, []
+        for i, spd in enumerate(speeds):
+            if spd >= SPRINT_KMH:
+                if not in_sprint:
+                    in_sprint, sprint_start, sprint_pts = True, i, []
+                if positions[i]:
+                    sprint_pts.append(positions[i])
+            else:
+                if in_sprint:
+                    if (i - sprint_start) >= min_frames and len(sprint_pts) >= 2:
+                        sprint_segments.append((sprint_start, i - 1, list(sprint_pts)))
+                    in_sprint, sprint_pts = False, []
+        # 处理视频末尾的冲刺
+        if in_sprint and (len(speeds) - sprint_start) >= min_frames and len(sprint_pts) >= 2:
+            sprint_segments.append((sprint_start, len(speeds) - 1, list(sprint_pts)))
+
+        sm.update_task(session_id, task_id, progress=65)
+
+        durations = [(e - s) / fps for s, e, _ in sprint_segments]
+        result_data = {
+            "sprint_count":    len(sprint_segments),
+            "avg_duration_s":  round(float(np.mean(durations)), 2) if durations else 0.0,
+            "max_duration_s":  round(float(np.max(durations)),  2) if durations else 0.0,
+            "max_speed_kmh":   round(float(np.max(speeds)),     1),
+        }
+
+        output_path = sm.session_output_dir(session_id) / "sprint_analysis.png"
+        _draw_sprint_chart(sprint_segments, result_data, output_path)
+
+        _finish_task(sm, session_id, task_id, output_path, result=result_data)
+
+    except Exception as exc:
+        sm.update_task(session_id, task_id, status="failed", error=str(exc))
+        _log_error("sprint_analysis", session_id, exc)
+
+
+def _draw_sprint_chart(segments: list, stats: dict, output_path: Path):
+    BG    = "#1a1a2e"
+    GREEN = "#2d6a1e"
+    RED   = "#e74c3c"
+    GOLD  = "#f1c40f"
+
+    if HAS_SPORTS and segments:
+        config = SoccerPitchConfiguration()
+        pitch  = draw_pitch(config=config)
+        colors = [
+            sv.Color.from_hex(c) for c in
+            ["#e74c3c", "#e67e22", "#f1c40f", "#2ecc71", "#3498db",
+             "#9b59b6", "#1abc9c", "#e91e63", "#ff5722", "#607d8b"]
+        ]
+        for idx, (_, _, pts) in enumerate(segments):
+            col = colors[idx % len(colors)]
+            xy  = np.array(pts)
+            pitch = draw_points_on_pitch(config=config, xy=xy,
+                                          face_color=col, edge_color=col,
+                                          radius=3, pitch=pitch)
+            # 连线路径
+            for j in range(len(pts) - 1):
+                p1 = config.scale(pts[j])
+                p2 = config.scale(pts[j+1])
+                cv2.line(pitch, (int(p1[0]), int(p1[1])), (int(p2[0]), int(p2[1])),
+                         (col.r, col.g, col.b), 2)
+
+        # 文字叠加统计
+        h = pitch.shape[0]
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        lines = [
+            f"Sprint Bursts:  {stats['sprint_count']}",
+            f"Avg Duration:   {stats['avg_duration_s']}s",
+            f"Max Duration:   {stats['max_duration_s']}s",
+            f"Max Speed:      {stats['max_speed_kmh']} km/h",
+        ]
+        for li, txt in enumerate(lines):
+            cv2.putText(pitch, txt, (10, h - 20 - li * 24),
+                        font, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+        cv2.imwrite(str(output_path), pitch)
+        return
+
+    # 备用：matplotlib
+    fig, ax = plt.subplots(figsize=(12, 8), facecolor=BG)
+    ax.set_facecolor(GREEN)
+    for rect in [plt.Rectangle((0, 0), 105, 68, fill=False, ec="white", lw=2),
+                 plt.Rectangle((0, 23.2), 16.5, 21.6, fill=False, ec="white"),
+                 plt.Rectangle((88.5, 23.2), 16.5, 21.6, fill=False, ec="white")]:
+        ax.add_patch(rect)
+    palette = [RED, "#e67e22", GOLD, "#2ecc71", "#3498db"]
+    for idx, (_, _, pts) in enumerate(segments):
+        col  = palette[idx % len(palette)]
+        pts_arr = np.array(pts)
+        ax.plot(pts_arr[:, 0], pts_arr[:, 1], color=col, lw=2, alpha=0.85)
+        ax.scatter(pts_arr[0, 0], pts_arr[0, 1], c=col, s=60, zorder=5)
+    ax.set_xlim(0, 105); ax.set_ylim(0, 68)
+    info = (f"Sprint Bursts: {stats['sprint_count']}   "
+            f"Avg: {stats['avg_duration_s']}s   "
+            f"Max Speed: {stats['max_speed_kmh']} km/h")
+    ax.set_title(f"Sprint Analysis\n{info}", color="white", fontsize=13, fontweight="bold")
+    ax.tick_params(colors="white")
+    plt.tight_layout()
+    plt.savefig(str(output_path), dpi=150, bbox_inches="tight")
+    plt.close()
+
+
+# ── 3f. 防线渗透统计 ──────────────────────────────────────────────────────────
+
+def run_defensive_line(session_id: str, session: dict, task_id: str, sm: SessionManager):
+    """
+    防线渗透统计：在小地图上动态画出对方最后一道防线（按 x 坐标的前四名）。
+    标记追踪球员成功越过防线的帧，并给出渗透次数与路径图。
+    """
+    try:
+        sm.update_task(session_id, task_id, status="running", progress=10)
+        data = _load_cache(session)
+        tracks, tracked_bboxes = data["tracks"], data["tracked_bboxes"]
+
+        sm.update_task(session_id, task_id, progress=25)
+
+        # 确定追踪球员的队伍（取最频繁的队伍标签）
+        tracked_teams = []
+        for i in range(len(tracks["players"])):
+            if i not in tracked_bboxes: continue
+            sx, sy, sw, sh = tracked_bboxes[i]
+            info = _find_matched_player(tracks["players"][i], (sx+sw/2, sy+sh/2))
+            if info and info.get("team"):
+                tracked_teams.append(info["team"])
+        tracked_team = int(np.median(tracked_teams)) if tracked_teams else 1
+        opponent_team = 2 if tracked_team == 1 else 1
+
+        # 每帧：计算追踪球员位置 + 对方防线 x（取对方最深4名的均值）
+        frame_data = []   # [(tracked_x, defense_line_x, tracked_pos)]
+        for i in range(len(tracks["players"])):
+            tracked_pos = None
+            if i in tracked_bboxes:
+                sx, sy, sw, sh = tracked_bboxes[i]
+                info = _find_matched_player(tracks["players"][i], (sx+sw/2, sy+sh/2))
+                if info:
+                    pos = info.get("position_minimap") or info.get("position_transformed")
+                    if pos and len(pos) == 2 and not any(np.isnan(p) for p in pos):
+                        tracked_pos = pos
+
+            # 对方球员 x 坐标列表（升序 = 离追踪球员的球门更远的方向）
+            opp_xs = []
+            for pid, pinfo in tracks["players"][i].items():
+                if not pinfo or pinfo.get("team") != opponent_team: continue
+                pp = pinfo.get("position_minimap") or pinfo.get("position_transformed")
+                if pp and len(pp) == 2 and not any(np.isnan(v) for v in pp):
+                    opp_xs.append(pp[0])
+
+            if opp_xs and tracked_pos:
+                # 取对方最靠近追踪球员的4名球员均值作为防线
+                opp_xs.sort()
+                # 假设追踪球员朝 x 增大方向进攻（如不符合可翻转）
+                deepest = opp_xs[:4] if tracked_pos[0] < np.mean(opp_xs) else opp_xs[-4:]
+                defense_x = float(np.mean(deepest))
+                frame_data.append((tracked_pos[0], defense_x, tracked_pos))
+            else:
+                frame_data.append(None)
+
+        sm.update_task(session_id, task_id, progress=60)
+
+        # 识别渗透事件（追踪球员越过防线并保持 ≥ 3 帧）
+        penetrations = []
+        behind = False
+        consec = 0
+        pen_start_pos = None
+        for i, fd in enumerate(frame_data):
+            if fd is None:
+                consec = 0; behind = False; continue
+            tx, dx, tp = fd
+            if tx > dx:   # 越过防线
+                consec += 1
+                if not behind:
+                    pen_start_pos = tp
+                if consec >= 3 and not behind:
+                    penetrations.append(tp)
+                    behind = True
+            else:
+                consec = 0; behind = False
+
+        result_data = {
+            "penetration_count": len(penetrations),
+            "tracked_team":      tracked_team,
+            "opponent_team":     opponent_team,
+        }
+
+        output_path = sm.session_output_dir(session_id) / "defensive_line.png"
+        _draw_defensive_line_chart(frame_data, penetrations, result_data, output_path)
+
+        _finish_task(sm, session_id, task_id, output_path, result=result_data)
+
+    except Exception as exc:
+        sm.update_task(session_id, task_id, status="failed", error=str(exc))
+        _log_error("defensive_line", session_id, exc)
+
+
+def _draw_defensive_line_chart(frame_data: list, penetrations: list,
+                                stats: dict, output_path: Path):
+    BG    = "#1a1a2e"
+    GREEN = "#2d6a1e"
+    RED   = "#e74c3c"
+    CYAN  = "#00e5ff"
+    GOLD  = "#f1c40f"
+
+    # 提取追踪球员轨迹
+    track_pts = [fd[2] for fd in frame_data if fd is not None]
+
+    if HAS_SPORTS and track_pts:
+        config = SoccerPitchConfiguration()
+        pitch  = draw_pitch(config=config)
+
+        # 画追踪球员路径（白色）
+        white = sv.Color.from_hex("#FFFFFF")
+        track_arr = np.array(track_pts[::3])  # 每3帧取一个点
+        if len(track_arr) > 0:
+            pitch = draw_points_on_pitch(config=config, xy=track_arr,
+                                          face_color=white, edge_color=white,
+                                          radius=2, pitch=pitch)
+
+        # 画渗透点（红色爆炸点）
+        if penetrations:
+            red = sv.Color.from_hex(RED)
+            pens_arr = np.array(penetrations)
+            pitch = draw_points_on_pitch(config=config, xy=pens_arr,
+                                          face_color=red, edge_color=red,
+                                          radius=6, pitch=pitch)
+
+        # 防线平均位置（取所有有效帧的中位数）
+        dxs = [fd[1] for fd in frame_data if fd is not None]
+        if dxs:
+            median_dx = float(np.median(dxs))
+            p_left  = config.scale([median_dx, 0])
+            p_right = config.scale([median_dx, 68])
+            cv2.line(pitch,
+                     (int(p_left[0]),  int(p_left[1])),
+                     (int(p_right[0]), int(p_right[1])),
+                     (0, 229, 255), 2, cv2.LINE_AA)
+
+        h = pitch.shape[0]
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        lines = [
+            f"Penetrations:  {stats['penetration_count']}",
+            f"Tracked Team:  {stats['tracked_team']}",
+            f"Opponent Team: {stats['opponent_team']}",
+        ]
+        for li, txt in enumerate(lines):
+            cv2.putText(pitch, txt, (10, h - 20 - li * 24),
+                        font, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+        cv2.imwrite(str(output_path), pitch)
+        return
+
+    # 备用 matplotlib
+    fig, ax = plt.subplots(figsize=(12, 8), facecolor=BG)
+    ax.set_facecolor(GREEN)
+    for rect in [plt.Rectangle((0, 0), 105, 68, fill=False, ec="white", lw=2),
+                 plt.Rectangle((0, 23.2), 16.5, 21.6, fill=False, ec="white"),
+                 plt.Rectangle((88.5, 23.2), 16.5, 21.6, fill=False, ec="white")]:
+        ax.add_patch(rect)
+
+    if track_pts:
+        tp = np.array(track_pts[::3])
+        ax.plot(tp[:, 0], tp[:, 1], color="white", lw=1.2, alpha=0.6)
+
+    dxs = [fd[1] for fd in frame_data if fd is not None]
+    if dxs:
+        median_dx = float(np.median(dxs))
+        ax.axvline(x=median_dx, color=CYAN, lw=2, ls="--", label="Avg defense line")
+
+    if penetrations:
+        px = [p[0] for p in penetrations]; py = [p[1] for p in penetrations]
+        ax.scatter(px, py, c=RED, s=120, zorder=6, marker="*", label="Penetration")
+
+    ax.set_xlim(0, 105); ax.set_ylim(0, 68)
+    ax.set_title(f"Defensive Line Penetration — {stats['penetration_count']} penetration(s)",
+                 color="white", fontsize=13, fontweight="bold")
+    ax.legend(facecolor=BG, labelcolor="white", fontsize=9)
+    ax.tick_params(colors="white")
+    plt.tight_layout()
+    plt.savefig(str(output_path), dpi=150, bbox_inches="tight")
+    plt.close()
 
 
 def _load_cache(session: dict) -> dict:

@@ -84,13 +84,6 @@ export const analyzePlayer = async (videoId, playerId, coordinates = null) => {
     return response.data;
 };
 
-// ── Auto-Start Pipeline（跳过 Trim & 球员选择）────────────────────────
-
-export const autoStart = async (sessionId) => {
-    if (colab.isConfigured()) return colab.autoStart(sessionId);
-    const response = await api.post(`/${sessionId}/auto_start`);
-    return response.data;
-};
 
 // ── Analysis Pipeline（全部走 Colab）────────────────────────────────────
 
@@ -136,14 +129,18 @@ export const pollSessionStatus = (sessionId, targetStatus, onProgress, interval 
 
 export const generateFeature = async (sessionId, feature) => {
     if (colab.isConfigured()) {
-                const methods = {
-            heatmap: () => colab.generateHeatmap(sessionId),
-            speed_chart: () => colab.generateSpeedChart(sessionId),
-            possession: () => colab.generatePossession(sessionId),
-            minimap_replay: () => colab.generateMinimapReplay(sessionId),
-            full_replay: () => colab.generateFullReplay(sessionId),
+        const methods = {
+            heatmap:          () => colab.generateHeatmap(sessionId),
+            speed_chart:      () => colab.generateSpeedChart(sessionId),
+            possession:       () => colab.generatePossession(sessionId),
+            minimap_replay:   () => colab.generateMinimapReplay(sessionId),
+            full_replay:      () => colab.generateFullReplay(sessionId),
+            sprint_analysis:  () => colab.generateSprintAnalysis(sessionId),
+            defensive_line:   () => colab.generateDefensiveLine(sessionId),
         };
-        const taskId = await methods[feature]();
+        const fn = methods[feature];
+        if (!fn) throw new Error(`Unknown feature: ${feature}`);
+        const taskId = await fn();
         return { task_id: taskId, status: 'queued' };
     }
     const response = await api.post(`/${sessionId}/generate/${feature}`);

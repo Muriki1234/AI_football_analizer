@@ -7,7 +7,7 @@ import {
     HiArrowTrendingUp, HiPlayCircle
 } from 'react-icons/hi2';
 import {
-    autoStart, pollSessionStatus, startGlobalAnalysis,
+    pollSessionStatus, startGlobalAnalysis,
     generateFeature, pollTaskStatus, getSummary
 } from '../services/api';
 import colab from '../services/colabService';
@@ -21,6 +21,8 @@ const FEATURES = [
     { key: 'speed_chart', label: 'Speed & Distance', icon: HiBolt, color: '#f39c12', type: 'image' },
     { key: 'possession', label: 'Possession', icon: HiChartBar, color: '#3498db', type: 'image' },
     { key: 'minimap_replay', label: 'Minimap Replay', icon: HiArrowTrendingUp, color: '#00e59b', type: 'video' },
+    { key: 'sprint_analysis', label: 'Sprint Bursts', icon: HiBolt, color: '#9b59b6', type: 'image' },
+    { key: 'defensive_line', label: 'Defensive Line', icon: HiUserGroup, color: '#00bcd4', type: 'image' },
 ];
 
 const PHASE_LABELS = {
@@ -76,28 +78,11 @@ export default function Dashboard() {
     
     // (Canvas overlay 替代 full_replay — 不再需要自动下载)
 
-    const needsAutoStart = location.state?.autoStart;
-    const autoStartFired = useRef(false);
-
     useEffect(() => {
         if (!sessionId) return;
 
         (async () => {
             try {
-                // Step 0: Auto-start if coming straight from Upload (skip trim/configure)
-                // Guard against React StrictMode double-invoke
-                if (needsAutoStart && !autoStartFired.current) {
-                    autoStartFired.current = true;
-                    setPhase('tracking');
-                    setStageLabel('Auto-detecting players...');
-                    try {
-                        await autoStart(sessionId);
-                    } catch (e) {
-                        // 400 = already started (e.g. StrictMode second invoke) — safe to ignore
-                        if (e?.response?.status !== 400) throw e;
-                    }
-                }
-
                 // Step 1: Wait for tracking_done
                 const trackResult = await pollSessionStatus(
                     sessionId, 'tracking_done',

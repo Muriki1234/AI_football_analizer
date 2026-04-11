@@ -592,9 +592,26 @@ class KeypointDetector:
     def __init__(self, model_path: str):
         self.model = YOLO(model_path)
 
-    def predict(self, frames: list) -> list:
-        sampled = {}
-        indices = list(range(0, len(frames), KEYPOINT_STRIDE))
+    # 光流位移超过此像素值时强制触发关键点检测，防止快速平移期间单应性偏差
+    _PAN_TRIGGER_PX = 15.0
+
+    def predict(self, frames: list, cam_movement: list = None) -> list:
+        """
+        cam_movement: 可选，每帧 [dx, dy] 列表（来自 CameraMovementEstimator）。
+        若某帧的镜头位移幅度超过 _PAN_TRIGGER_PX，强制插入该帧做关键点检测，
+        打断 KEYPOINT_STRIDE 的冷却期，避免快速平移时单应性矩阵严重偏差。
+        """
+        sampled  = {}
+        base_set = set(range(0, len(frames), KEYPOINT_STRIDE))
+
+        # 检测高速平移帧并强制加入采样
+        if cam_movement is not None:
+            for fi, mv in enumerate(cam_movement):
+                if mv and len(mv) >= 2:
+                    if (mv[0]**2 + mv[1]**2) ** 0.5 > self._PAN_TRIGGER_PX:
+                        base_set.add(fi)
+
+        indices = sorted(base_set)
         for i in range(0, len(indices), YOLO_BATCH_SIZE):
             batch_idx = indices[i:i+YOLO_BATCH_SIZE]
             results   = self.model.predict([frames[j] for j in batch_idx],
@@ -620,14 +637,27 @@ class KeypointDetector:
 # ═══════════════════════════════════════════════════════════════════════
 
     def predict_streamed(self, video_path: str, total_frames: int,
-                          chunk_size: int = 500) -> list:
-        """流式关键点检测：KEYPOINT_STRIDE 采样，不加载全部帧。"""
+                          chunk_size: int = 500,
+                          cam_movement: list = None) -> list:
+        """
+        流式关键点检测：KEYPOINT_STRIDE 采样，不加载全部帧。
+        cam_movement: 可选，每帧 [dx, dy]，高速平移帧强制触发检测（同 predict）。
+        """
         sampled = {}
 
+        # 预计算需要强制检测的帧集合
+        forced = set()
+        if cam_movement is not None:
+            for fi, mv in enumerate(cam_movement):
+                if mv and len(mv) >= 2:
+                    if (mv[0]**2 + mv[1]**2) ** 0.5 > self._PAN_TRIGGER_PX:
+                        forced.add(fi)
+
         for start_idx, chunk in stream_video_chunks(video_path, chunk_size):
-            # 只处理落在步长边界上的帧
+            # 落在步长边界 或 强制触发 的帧
             kp_local = [j for j in range(len(chunk))
-                         if (start_idx + j) % KEYPOINT_STRIDE == 0]
+                         if (start_idx + j) % KEYPOINT_STRIDE == 0
+                         or (start_idx + j) in forced]
             if not kp_local:
                 continue
             for i in range(0, len(kp_local), YOLO_BATCH_SIZE):
@@ -801,10 +831,14 @@ class AccurateSpeedEstimator:
 # ═══════════════════════════════════════════════════════════════════════
 
 class TeamAssigner:
+    # 对全场球员颜色聚类时使用 k=5，以分离门将/裁判的颜色簇
+    _TEAM_CLUSTERS = 5
+
     def __init__(self):
         self.team_colors      = {}
         self.player_team_dict = {}
         self.kmeans           = None
+        self._cluster_to_team = {}  # cluster_id → team_id (1 or 2)
 
     def _get_player_color(self, frame, bbox) -> np.ndarray:
         img = frame[int(bbox[1]):int(bbox[3]), int(bbox[0]):int(bbox[2])]
@@ -815,13 +849,33 @@ class TeamAssigner:
         corners = [lbl[0,0], lbl[0,-1], lbl[-1,0], lbl[-1,-1]]
         return km.cluster_centers_[1 - max(set(corners), key=corners.count)]
 
+    def _fit_team_kmeans(self, all_colors: list):
+        """
+        KMeans(k=5) 对全场球员颜色聚类，选出人数最多的两个簇作为两支球队，
+        其余小簇（门将/裁判）不污染球队颜色中心。
+        """
+        if len(all_colors) < 2:
+            return
+        colors_arr = np.array(all_colors)
+        n_clusters = min(self._TEAM_CLUSTERS, len(colors_arr))
+        km = KMeans(n_clusters=n_clusters, init="k-means++", n_init=10,
+                    random_state=42).fit(colors_arr)
+
+        # 按簇大小降序排列，取前两个最大簇作为球队
+        cluster_sizes = np.bincount(km.labels_, minlength=n_clusters)
+        sorted_ids    = np.argsort(cluster_sizes)[::-1]
+        team_ids      = sorted_ids[:2]
+
+        self._cluster_to_team = {int(cid): (i + 1) for i, cid in enumerate(team_ids)}
+        self.kmeans           = km
+        self.team_colors[1]   = km.cluster_centers_[team_ids[0]]
+        self.team_colors[2]   = km.cluster_centers_[team_ids[1]]
+
     def assign_team_color(self, frame, player_detections: dict):
         colors = [self._get_player_color(frame, d["bbox"])
                   for d in player_detections.values() if d]
         if not colors: return
-        self.kmeans = KMeans(n_clusters=2, init="k-means++", n_init=10).fit(colors)
-        self.team_colors[1] = self.kmeans.cluster_centers_[0]
-        self.team_colors[2] = self.kmeans.cluster_centers_[1]
+        self._fit_team_kmeans(colors)
 
     def assign_team_color_multi(self, frames: list, tracks_players: list, n_samples: int = 8):
         """
@@ -850,11 +904,7 @@ class TeamAssigner:
                 except Exception:
                     pass
 
-        if len(all_colors) < 2:
-            return
-        self.kmeans = KMeans(n_clusters=2, init="k-means++", n_init=10, random_state=42).fit(np.array(all_colors))
-        self.team_colors[1] = self.kmeans.cluster_centers_[0]
-        self.team_colors[2] = self.kmeans.cluster_centers_[1]
+        self._fit_team_kmeans(all_colors)
 
     def assign_team_color_from_video(self, video_path: str, tracks_players: list,
                                       n_samples: int = 8):
@@ -882,20 +932,21 @@ class TeamAssigner:
                 except Exception:
                     pass
 
-        if len(all_colors) < 2:
-            return
-        self.kmeans = KMeans(n_clusters=2, init="k-means++", n_init=10,
-                             random_state=42).fit(np.array(all_colors))
-        self.team_colors[1] = self.kmeans.cluster_centers_[0]
-        self.team_colors[2] = self.kmeans.cluster_centers_[1]
+        self._fit_team_kmeans(all_colors)
 
     def get_player_team(self, frame, bbox, player_id: int) -> int:
         if player_id in self.player_team_dict:
             return self.player_team_dict[player_id]
         if self.kmeans is None:
             return 1  # fallback：kmeans 未初始化时默认队伍1
-        color = self._get_player_color(frame, bbox)
-        tid   = self.kmeans.predict(color.reshape(1,-1))[0] + 1
+        color      = self._get_player_color(frame, bbox)
+        cluster_id = int(self.kmeans.predict(color.reshape(1, -1))[0])
+        tid        = self._cluster_to_team.get(cluster_id)
+        if tid is None:
+            # 小簇（门将/裁判）：分配到颜色最近的球队
+            d1  = np.linalg.norm(color - self.team_colors.get(1, np.zeros(3)))
+            d2  = np.linalg.norm(color - self.team_colors.get(2, np.zeros(3)))
+            tid = 1 if d1 <= d2 else 2
         self.player_team_dict[player_id] = tid
         return tid
 
@@ -917,7 +968,8 @@ class SmartBallPossessionDetector:
         self.ball_state           = "controlled"
 
     def detect_possession(self, frame_num: int, players: dict,
-                          ball_bbox: list, ball_history: list) -> int:
+                          ball_bbox: list, ball_history: list,
+                          ball_transformed_pos: list = None) -> int:
         if len(ball_bbox) != 4 or not players: return -1
         ball_pos  = ((ball_bbox[0]+ball_bbox[2])/2, (ball_bbox[1]+ball_bbox[3])/2)
         ball_spd  = self._calc_ball_speed(ball_history)
@@ -931,7 +983,8 @@ class SmartBallPossessionDetector:
             pid = self._detect_contested(ball_pos, players)
         else:
             # Slow ball — check if any player is actually close enough
-            pid = self._detect_controlled(ball_pos, ball_history, players)
+            pid = self._detect_controlled(ball_pos, ball_history, players,
+                                          ball_transformed_pos)
             if pid == -1:
                 self.ball_state = "loose_ball"  # ball on ground, no one in range
             else:
@@ -952,19 +1005,43 @@ class SmartBallPossessionDetector:
         if len(self._speed_history)>5: self._speed_history.pop(0)
         return float(np.mean(self._speed_history))
 
-    def _detect_controlled(self, ball_pos, history, players):
+    # 真实距离阈值：球距脚底 < 1.2m 才算控球
+    _CONTROL_DIST_M = 1.2
+
+    def _detect_controlled(self, ball_pos, history, players,
+                           ball_transformed_pos=None):
+        """
+        优先使用单应性变换后的真实米数距离（< 1.2m）判断控球，
+        不可用时退回到像素距离（bbox 高度 1.5 倍）。
+        """
         best, best_s = -1, 0
+        use_real = (ball_transformed_pos is not None
+                    and len(ball_transformed_pos) == 2)
+
         for pid, info in players.items():
             if not info or "bbox" not in info: continue
             b    = info["bbox"]
             foot = ((b[0]+b[2])/2, b[3])
-            # 阈值 = bbox 高度的 1.5 倍，自适应球员大小和分辨率
+
+            if use_real:
+                pt = info.get("position_transformed")
+                if pt and len(pt) == 2:
+                    # 真实米数距离
+                    dx = ball_transformed_pos[0] - pt[0]
+                    dy = ball_transformed_pos[1] - pt[1]
+                    d_m = (dx*dx + dy*dy) ** 0.5
+                    if d_m > self._CONTROL_DIST_M: continue
+                    s = 100 / (d_m + 0.01)
+                    if s > best_s: best_s = s; best = pid
+                    continue  # 跳过像素回退
+
+            # 像素距离回退：阈值 = bbox 高度的 1.5 倍
             bbox_h   = max(b[3] - b[1], 1)
             max_dist = bbox_h * 1.5
-            d    = measure_distance(ball_pos, foot)
+            d = measure_distance(ball_pos, foot)
             if d > max_dist: continue
-            s = 100/(d+1)
-            if s > best_s: best_s=s; best=pid
+            s = 100 / (d + 1)
+            if s > best_s: best_s = s; best = pid
         return best
 
     def _detect_flying(self, ball_pos, history, players):
