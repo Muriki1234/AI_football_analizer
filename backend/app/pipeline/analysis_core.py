@@ -343,14 +343,15 @@ class Tracker:
 
             for d in d_tracks:
                 bbox, cid, tid = d[0].tolist(), d[3], d[4]
-                if   cid == self.player_id:   tracks["players"][fidx][tid]  = {"bbox": bbox}
-                elif cid == self.referee_id:  tracks["referees"][fidx][tid] = {"bbox": bbox}
+                if cid == self.player_id:
+                    tracks["players"][fidx][tid] = {"bbox": bbox}
+                # referees intentionally skipped
 
             # Ball: apply BALL_CONF post-filter
             ball_confs = det.boxes.conf.tolist() if det.boxes is not None else []
             for d, conf_val in zip(ds, ball_confs):
                 if d[3] == self.ball_id and conf_val >= BALL_CONF:
-                    tracks["ball"][fidx][1] = {"bbox": d[0].tolist()}
+                    tracks["ball"][fidx][1] = {"bbox": d[0].tolist(), "conf": conf_val}
 
         self._interpolate_tracks(tracks, total)
         return tracks
@@ -407,13 +408,14 @@ class Tracker:
                 d_tracks = self.tracker.update_with_detections(ds)
                 for d in d_tracks:
                     bbox, cid, tid = d[0].tolist(), d[3], d[4]
-                    if   cid == self.player_id:  tracks["players"][global_idx][tid]  = {"bbox": bbox}
-                    elif cid == self.referee_id: tracks["referees"][global_idx][tid] = {"bbox": bbox}
+                    if cid == self.player_id:
+                        tracks["players"][global_idx][tid] = {"bbox": bbox}
+                    # referees intentionally skipped
                 # Ball: apply BALL_CONF post-filter
                 ball_confs = det_dict[local_idx].boxes.conf.tolist() if det_dict[local_idx].boxes is not None else []
                 for d, conf_val in zip(ds, ball_confs):
                     if d[3] == self.ball_id and conf_val >= BALL_CONF:
-                        tracks["ball"][global_idx][1] = {"bbox": d[0].tolist()}
+                        tracks["ball"][global_idx][1] = {"bbox": d[0].tolist(), "conf": conf_val}
 
         self._interpolate_tracks(tracks, total_frames)
         return tracks
@@ -624,7 +626,7 @@ class KeypointDetector:
                              if res.keypoints.conf is not None
                              else np.ones(len(xy)))
                     for kid, (x, y) in enumerate(xy):
-                        if confs[kid] > 0.3 and (x!=0 or y!=0):
+                        if confs[kid] > 0.5 and (x!=0 or y!=0):
                             kps[kid] = [float(x), float(y)]
                 sampled[fidx] = kps
 
@@ -673,7 +675,7 @@ class KeypointDetector:
                                  if res.keypoints.conf is not None
                                  else np.ones(len(xy)))
                         for kid, (x, y) in enumerate(xy):
-                            if confs[kid] > 0.3 and (x != 0 or y != 0):
+                            if confs[kid] > 0.5 and (x != 0 or y != 0):
                                 kps[kid] = [float(x), float(y)]
                     sampled[global_idx] = kps
 
@@ -682,6 +684,41 @@ class KeypointDetector:
 
 
 class ViewTransformer:
+    # Soccana_Keypoint model (29 pts) → SoccerPitchConfiguration.vertices (0-indexed)
+    # Soccana IDs 10, 15, 26 are penalty-arc / field-center points not present in
+    # the sports library vertex list, so they are intentionally omitted.
+    SOCCANA_TO_SPORTS = {
+        0:  0,   # sideline_top_left
+        1:  1,   # big_rect_left_top_pt1
+        2:  9,   # big_rect_left_top_pt2
+        3:  4,   # big_rect_left_bottom_pt1
+        4:  12,  # big_rect_left_bottom_pt2
+        5:  2,   # small_rect_left_top_pt1
+        6:  6,   # small_rect_left_top_pt2
+        7:  3,   # small_rect_left_bottom_pt1
+        8:  7,   # small_rect_left_bottom_pt2
+        9:  5,   # sideline_bottom_left
+        # 10 → left_semicircle_right (no sports vertex)
+        11: 13,  # center_line_top
+        12: 16,  # center_line_bottom
+        13: 14,  # center_circle_top
+        14: 15,  # center_circle_bottom
+        # 15 → field_center (no sports vertex)
+        16: 24,  # sideline_top_right
+        17: 25,  # big_rect_right_top_pt1
+        18: 17,  # big_rect_right_top_pt2
+        19: 28,  # big_rect_right_bottom_pt1
+        20: 20,  # big_rect_right_bottom_pt2
+        21: 26,  # small_rect_right_top_pt1
+        22: 22,  # small_rect_right_top_pt2
+        23: 27,  # small_rect_right_bottom_pt1
+        24: 23,  # small_rect_right_bottom_pt2
+        25: 29,  # sideline_bottom_right
+        # 26 → right_semicircle_left (no sports vertex)
+        27: 30,  # center_circle_left
+        28: 31,  # center_circle_right
+    }
+
     def __init__(self):
         if not HAS_SPORTS:
             self.config = None; return
@@ -700,8 +737,9 @@ class ViewTransformer:
         for fnum, kps in enumerate(kps_list):
             src, dst = [], []
             for kid, pos in kps.items():
-                if kid < len(self.config.vertices):
-                    src.append(pos); dst.append(self.config.vertices[kid])
+                vi = self.SOCCANA_TO_SPORTS.get(kid)
+                if vi is not None and vi < len(self.config.vertices):
+                    src.append(pos); dst.append(self.config.vertices[vi])
 
             if len(src) >= 4:
                 transformer = SportsViewTransformer(source=np.array(src), target=np.array(dst))

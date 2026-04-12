@@ -960,13 +960,19 @@ def _render_single_frame_worker_full(args):
                 if confidence > 0.6:
                     frame = tracker.draw_triangle(frame, samurai_bbox_xyxy, (0, 0, 255))
 
-        # Draw ball (referees intentionally not drawn to keep replay clean)
-
+        # Draw ball with bbox rect + confidence label (referees intentionally not drawn)
         for _, info in tracks['ball'][i].items():
             if info and 'bbox' in info:
                 bbox = info['bbox']
                 if len(bbox) == 4 and bbox[2] > bbox[0] and bbox[3] > bbox[1]:
-                    frame = tracker.draw_triangle(frame, bbox, (0, 255, 0))
+                    x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
+                    conf = info.get('conf')
+                    label = f"Ball {conf:.2f}" if conf is not None else "Ball"
+                    (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+                    cv2.rectangle(frame, (x1, y1 - th - 8), (x1 + tw + 6, y1), (0, 255, 255), -1)
+                    cv2.putText(frame, label, (x1 + 3, y1 - 4),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
 
         frame = tracker.draw_team_ball_control(frame, i, np.array(team_control), team_assigner.team_colors)
 
