@@ -67,8 +67,8 @@ except ImportError:
     HAS_SPORTS = False
 
 # ── 环境变量配置（部署时设置）────────────────────────────────────────────────
-MODEL_PATH         = os.environ.get("YOLO_MODEL_PATH",      "Adit-jain/soccana")
-KEYPOINT_MODEL_PATH= os.environ.get("KEYPOINT_MODEL_PATH",  "Adit-jain/Soccana_Keypoint")
+MODEL_PATH         = os.environ.get("YOLO_MODEL_PATH",      "weights/football/best.pt")
+KEYPOINT_MODEL_PATH= os.environ.get("KEYPOINT_MODEL_PATH",  "weights/keypoints/best.pt")
 SAMURAI_SCRIPT     = os.environ.get("SAMURAI_SCRIPT",        "samurai/run_samurai.py")
 
 SHORT_VIDEO_FRAMES = 3000  # ≤3000 frames (~2min@24fps): read once into RAM for speed

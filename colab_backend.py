@@ -8,8 +8,8 @@ sys.path.insert(0, '/content/pitchlogic/backend')
 sys.path.insert(0, '/content/drive/MyDrive/samurai_env/samurai')
 sys.path.insert(0, '/content/drive/MyDrive/samurai_env/samurai/sam2')
 
-os.environ.setdefault('YOLO_MODEL_PATH',     'Adit-jain/soccana')
-os.environ.setdefault('KEYPOINT_MODEL_PATH', 'Adit-jain/Soccana_Keypoint')
+os.environ.setdefault('YOLO_MODEL_PATH',     '/content/pitchlogic/backend/weights/football/best.pt')
+os.environ.setdefault('KEYPOINT_MODEL_PATH', '/content/pitchlogic/backend/weights/keypoints/best.pt')
 os.environ.setdefault('SAMURAI_SCRIPT',      '/content/drive/MyDrive/samurai_env/samurai/scripts/demo.py')
 
 from app.pipeline.session_manager import SessionManager
