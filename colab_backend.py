@@ -111,7 +111,7 @@ def analyze_frame(sid):
     players = []
     for box in results.boxes:
         cls = int(box.cls[0])
-        if results.names[cls].lower() in ('player', 'person', 'goalkeeper'):
+        if results.names[cls].lower() in ('player', 'goalkeeper'):
             x1, y1, x2, y2 = box.xyxy[0].tolist()
             players.append({'id': len(players) + 1, 'name': results.names[cls].capitalize(),
                             'bbox': [x1, y1, x2, y2], 'avatar': '👤'})
