@@ -934,6 +934,14 @@ def _render_single_frame_worker_full(args):
                 if confidence > 0.6:
                     frame = tracker.draw_triangle(frame, bbox, (0, 0, 255))
 
+        # Draw referees — bright orange ellipse so users can identify at a glance
+        REF_COLOR = (0, 128, 255)  # BGR orange
+        for pid, info in tracks['referees'][i].items():
+            if not info or 'bbox' not in info: continue
+            bbox = info['bbox']
+            if len(bbox) < 4 or bbox[2] <= bbox[0] or bbox[3] <= bbox[1]: continue
+            frame = tracker.draw_ellipse(frame, bbox, REF_COLOR, pid, is_tracked=False)
+
         # Draw target player
         if samurai_bbox_xyxy is not None:
             y2 = int(samurai_bbox_xyxy[3])
