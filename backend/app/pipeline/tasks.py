@@ -66,10 +66,26 @@ try:
 except ImportError:
     HAS_SPORTS = False
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _resolve_model_path(env_var: str, preferred_name: str) -> str:
+    configured = os.environ.get(env_var)
+    if configured:
+        return configured
+
+    return str(REPO_ROOT / preferred_name)
+
+
+def _require_file(path: str, label: str) -> None:
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"{label} not found: {path}")
+
+
 # ── 环境变量配置（部署时设置）────────────────────────────────────────────────
-MODEL_PATH         = os.environ.get("YOLO_MODEL_PATH",      "weights/football/best.pt")
-KEYPOINT_MODEL_PATH= os.environ.get("KEYPOINT_MODEL_PATH",  "weights/keypoints/best.pt")
-SAMURAI_SCRIPT     = os.environ.get("SAMURAI_SCRIPT",        "samurai/run_samurai.py")
+MODEL_PATH          = _resolve_model_path("YOLO_MODEL_PATH", "soccana_best.pt")
+KEYPOINT_MODEL_PATH = _resolve_model_path("KEYPOINT_MODEL_PATH", "soccana_kpts_best.pt")
+SAMURAI_SCRIPT      = os.environ.get("SAMURAI_SCRIPT", "samurai/run_samurai.py")
 
 SHORT_VIDEO_FRAMES = 3000  # ≤3000 frames (~2min@24fps): read once into RAM for speed
                             # >3000 frames: use streaming to avoid OOM
@@ -242,6 +258,10 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
 
         # ── 2-4. 检测 + 光流 + 关键点（短视频一次读入内存，长视频流式）────────
         sm.update_status(session_id, "analyzing", progress=10, stage="yolo_detection")
+        _require_file(MODEL_PATH, "YOLO model")
+        _require_file(KEYPOINT_MODEL_PATH, "Keypoint model")
+        if not HAS_SPORTS:
+            raise ImportError("sports library is required for keypoint and minimap analysis")
         tracker = Tracker(MODEL_PATH)
 
         if total <= SHORT_VIDEO_FRAMES:
@@ -259,14 +279,11 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             cam.add_adjust_positions_to_tracks(tracks, cam_mov)
 
             sm.update_status(session_id, "analyzing", progress=50, stage="keypoint_detection")
-            if os.path.exists(KEYPOINT_MODEL_PATH) and HAS_SPORTS:
-                kp  = KeypointDetector(KEYPOINT_MODEL_PATH)
-                vt  = ViewTransformer()
-                kps = kp.predict(frames, cam_movement=cam_mov)
-                vt.add_transformed_position_to_tracks(tracks, kps)
-                vt.interpolate_2d_positions(tracks)
-            else:
-                print(f"[WARN] Keypoint model not found or sports lib missing — skipping perspective")
+            kp  = KeypointDetector(KEYPOINT_MODEL_PATH)
+            vt  = ViewTransformer()
+            kps = kp.predict(frames, cam_movement=cam_mov)
+            vt.add_transformed_position_to_tracks(tracks, kps)
+            vt.interpolate_2d_positions(tracks)
 
             del frames  # 释放内存
             import gc; gc.collect()
@@ -285,14 +302,11 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             cam.add_adjust_positions_to_tracks(tracks, cam_mov)
 
             sm.update_status(session_id, "analyzing", progress=50, stage="keypoint_detection")
-            if os.path.exists(KEYPOINT_MODEL_PATH) and HAS_SPORTS:
-                kp  = KeypointDetector(KEYPOINT_MODEL_PATH)
-                vt  = ViewTransformer()
-                kps = kp.predict_streamed(video_path, total, cam_movement=cam_mov)
-                vt.add_transformed_position_to_tracks(tracks, kps)
-                vt.interpolate_2d_positions(tracks)
-            else:
-                print(f"[WARN] Keypoint model not found or sports lib missing — skipping perspective")
+            kp  = KeypointDetector(KEYPOINT_MODEL_PATH)
+            vt  = ViewTransformer()
+            kps = kp.predict_streamed(video_path, total, cam_movement=cam_mov)
+            vt.add_transformed_position_to_tracks(tracks, kps)
+            vt.interpolate_2d_positions(tracks)
 
         # ── 5. 速度 & 距离 ───────────────────────────────────────────
         sm.update_status(session_id, "analyzing", progress=70, stage="speed_calculation")
