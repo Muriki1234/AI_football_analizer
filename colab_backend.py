@@ -303,9 +303,10 @@ def overlay_data(sid):
     返回逐帧标注数据（JSON），供前端 Canvas 实时渲染叠加层。
     分析完成即可调用，无需等待视频生成。
     格式:
-      { fps, video_w, video_h, t1, t2, frames: [{p, b, t, ctrl}, ...] }
+      { fps, video_w, video_h, t1, t2, frames: [{p, r, b, t, ctrl}, ...] }
       p = [[id, x1, y1, x2, y2, team, has_ball, speed], ...]
-      b = [x1, y1, x2, y2] | null
+      r = [[id, x1, y1, x2, y2], ...]
+      b = [x1, y1, x2, y2, conf] | null
       t = [x1, y1, x2, y2] | null  (SAMURAI tracked bbox)
       ctrl = 1 | 2 | 0
     """
@@ -355,12 +356,25 @@ def overlay_data(sid):
                 round(float(spd), 1) if spd is not None else 0.0
             ])
 
+        referees_list = []
+        for pid, info in tracks['referees'][i].items():
+            if not info or 'bbox' not in info: continue
+            b = info['bbox']
+            referees_list.append([
+                int(pid),
+                round(b[0], 1), round(b[1], 1), round(b[2], 1), round(b[3], 1),
+            ])
+
         # 足球
         ball_info = tracks['ball'][i].get(1, {})
         ball = None
         if ball_info and 'bbox' in ball_info:
             bb = ball_info['bbox']
-            ball = [round(bb[0],1), round(bb[1],1), round(bb[2],1), round(bb[3],1)]
+            conf = ball_info.get('conf')
+            ball = [
+                round(bb[0], 1), round(bb[1], 1), round(bb[2], 1), round(bb[3], 1),
+                round(float(conf), 2) if conf is not None else None
+            ]
 
         # 追踪目标（SAMURAI bbox → xyxy）
         tracked = None
@@ -369,7 +383,7 @@ def overlay_data(sid):
             tracked = [round(sx,1), round(sy,1), round(sx+sw,1), round(sy+sh,1)]
 
         ctrl = int(team_control[i]) if i < len(team_control) else 0
-        frames_out.append({'p': players_list, 'b': ball, 't': tracked, 'ctrl': ctrl})
+        frames_out.append({'p': players_list, 'r': referees_list, 'b': ball, 't': tracked, 'ctrl': ctrl})
 
     return jsonify({
         'fps':     fps,
