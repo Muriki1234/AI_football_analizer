@@ -7,7 +7,6 @@ import colab from '../services/colabService';
 import './VideoOverlayPlayer.css';
 
 const TRACKED_GOLD = '#00D7FF';  // OpenCV (0,215,255) → #00D7FF
-const REFEREE_ORANGE = '#FF8000';
 const BALL_CYAN = '#00FFFF';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -306,13 +305,6 @@ export default function VideoOverlayPlayer({ sessionId }) {
 
             // 持球三角（红色，置信度>0.6）
             if (p[6]) drawTriangle(ctx, bbox, '#0000FF');
-        }
-
-        // ── 裁判：橙色椭圆，不参与球队配色 ───────────────────────────
-        for (const r of (f.r || [])) {
-            const bbox = sc([r[1], r[2], r[3], r[4]]);
-            drawEllipse(ctx, bbox, REFEREE_ORANGE, 2);
-            drawIdLabel(ctx, bbox, REFEREE_ORANGE, r[0], false);
         }
 
         // ── 追踪目标 ────────────────────────────────────────────────
