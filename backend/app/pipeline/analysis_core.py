@@ -689,39 +689,40 @@ class KeypointDetector:
 
 
 class ViewTransformer:
-    # Soccana_Keypoint model (29 pts) → SoccerPitchConfiguration.vertices (0-indexed)
-    # Soccana IDs 10, 15, 26 are penalty-arc / field-center points not present in
-    # the sports library vertex list, so they are intentionally omitted.
-    SOCCANA_TO_SPORTS = {
-        0:  0,   # sideline_top_left
-        1:  1,   # big_rect_left_top_pt1
-        2:  9,   # big_rect_left_top_pt2
-        3:  4,   # big_rect_left_bottom_pt1
-        4:  12,  # big_rect_left_bottom_pt2
-        5:  2,   # small_rect_left_top_pt1
-        6:  6,   # small_rect_left_top_pt2
-        7:  3,   # small_rect_left_bottom_pt1
-        8:  7,   # small_rect_left_bottom_pt2
-        9:  5,   # sideline_bottom_left
-        # 10 → left_semicircle_right (no sports vertex)
-        11: 13,  # center_line_top
-        12: 16,  # center_line_bottom
-        13: 14,  # center_circle_top
-        14: 15,  # center_circle_bottom
-        # 15 → field_center (no sports vertex)
-        16: 24,  # sideline_top_right
-        17: 25,  # big_rect_right_top_pt1
-        18: 17,  # big_rect_right_top_pt2
-        19: 28,  # big_rect_right_bottom_pt1
-        20: 20,  # big_rect_right_bottom_pt2
-        21: 26,  # small_rect_right_top_pt1
-        22: 22,  # small_rect_right_top_pt2
-        23: 27,  # small_rect_right_bottom_pt1
-        24: 23,  # small_rect_right_bottom_pt2
-        25: 29,  # sideline_bottom_right
-        # 26 → right_semicircle_left (no sports vertex)
-        27: 30,  # center_circle_left
-        28: 31,  # center_circle_right
+    # Soccana_Keypoint (29 pts) → physical pitch coordinates
+    # Units match SoccerPitchConfiguration scale (12000 × 7000).
+    # KP 10 / 26: penalty spots used as D-arc proxies (closest available point).
+    # KP 15: field center (6000, 3500) — not in sports library, added manually.
+    SOCCANA_PITCH_COORDS = {
+        0:  (0,     0),      # sideline_top_left
+        1:  (0,     1945),   # big_rect_left_top_pt1
+        2:  (2015,  1945),   # big_rect_left_top_pt2
+        3:  (0,     5055),   # big_rect_left_bottom_pt1
+        4:  (2015,  5055),   # big_rect_left_bottom_pt2
+        5:  (0,     2584),   # small_rect_left_top_pt1
+        6:  (550,   2584),   # small_rect_left_top_pt2
+        7:  (0,     4416),   # small_rect_left_bottom_pt1
+        8:  (550,   4416),   # small_rect_left_bottom_pt2
+        9:  (0,     7000),   # sideline_bottom_left
+        10: (1100,  3500),   # left_semicircle_right  (penalty spot proxy)
+        11: (6000,  0),      # center_line_top
+        12: (6000,  7000),   # center_line_bottom
+        13: (6000,  2085),   # center_circle_top
+        14: (6000,  4915),   # center_circle_bottom
+        15: (6000,  3500),   # field_center
+        16: (12000, 0),      # sideline_top_right
+        17: (12000, 1945),   # big_rect_right_top_pt1
+        18: (9985,  1945),   # big_rect_right_top_pt2
+        19: (12000, 5055),   # big_rect_right_bottom_pt1
+        20: (9985,  5055),   # big_rect_right_bottom_pt2
+        21: (12000, 2584),   # small_rect_right_top_pt1
+        22: (11450, 2584),   # small_rect_right_top_pt2
+        23: (12000, 4416),   # small_rect_right_bottom_pt1
+        24: (11450, 4416),   # small_rect_right_bottom_pt2
+        25: (12000, 7000),   # sideline_bottom_right
+        26: (10900, 3500),   # right_semicircle_left  (penalty spot proxy)
+        27: (4085,  3500),   # center_circle_left
+        28: (7915,  3500),   # center_circle_right
     }
 
     def __init__(self):
@@ -742,9 +743,9 @@ class ViewTransformer:
         for fnum, kps in enumerate(kps_list):
             src, dst = [], []
             for kid, pos in kps.items():
-                vi = self.SOCCANA_TO_SPORTS.get(kid)
-                if vi is not None and vi < len(self.config.vertices):
-                    src.append(pos); dst.append(self.config.vertices[vi])
+                target = self.SOCCANA_PITCH_COORDS.get(kid)
+                if target is not None:
+                    src.append(pos); dst.append(target)
 
             if len(src) >= 4:
                 transformer = SportsViewTransformer(source=np.array(src), target=np.array(dst))
