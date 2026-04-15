@@ -7,7 +7,6 @@ import colab from '../services/colabService';
 import './VideoOverlayPlayer.css';
 
 const TRACKED_GOLD = '#00D7FF';  // OpenCV (0,215,255) → #00D7FF
-const BALL_CYAN = '#00FFFF';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 基础绘图工具
@@ -82,28 +81,6 @@ function drawTriangle(ctx, bbox, color) {
     ctx.strokeStyle = '#000';
     ctx.lineWidth = 2;
     ctx.stroke();
-    ctx.restore();
-}
-
-function drawBallBox(ctx, bbox, conf) {
-    const [x1, y1, x2, y2] = bbox;
-    const label = conf !== null && conf !== undefined ? `Ball ${conf.toFixed(2)}` : 'Ball';
-
-    ctx.save();
-    ctx.strokeStyle = BALL_CYAN;
-    ctx.lineWidth = 2;
-    ctx.strokeRect(x1, y1, Math.max(x2 - x1, 1), Math.max(y2 - y1, 1));
-
-    ctx.font = 'bold 12px Arial';
-    const tw = ctx.measureText(label).width;
-    const bh = 18;
-    const by = Math.max(0, y1 - bh - 4);
-    ctx.fillStyle = BALL_CYAN;
-    ctx.fillRect(x1, by, tw + 8, bh);
-    ctx.fillStyle = '#000';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'top';
-    ctx.fillText(label, x1 + 4, by + 3);
     ctx.restore();
 }
 
@@ -322,11 +299,8 @@ export default function VideoOverlayPlayer({ sessionId }) {
             if (tp?.at(6)) drawTriangle(ctx, tBbox, '#0000FF');
         }
 
-        // ── 球：青色 bbox + 置信度标签 ───────────────────────────────
-        if (f.b) {
-            const bbox = sc([f.b[0], f.b[1], f.b[2], f.b[3]]);
-            drawBallBox(ctx, bbox, f.b[4]);
-        }
+        // ── 球（绿色三角） ───────────────────────────────────────────
+        if (f.b) drawTriangle(ctx, sc(f.b), '#00FF00');
 
         // ── 控球率面板（右下角，累计） ───────────────────────────────
         drawPossessionPanel(ctx, cw, ch, pos.t1, pos.t2, t1c, t2c);

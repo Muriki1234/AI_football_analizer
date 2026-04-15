@@ -61,7 +61,7 @@ KEYPOINT_STRIDE       = 20   # 每20帧检测一次关键点（提升小地图�
 MINIMAP_SMOOTH_WINDOW = 25
 SPEED_SMOOTH_WINDOW   = 7
 PLAYER_CONF           = 0.1  # 球员/裁判检测置信度（低阈值，避免漏检）
-BALL_CONF             = float(os.environ.get("BALL_CONF", "0.2"))  # 适度抬高阈值，减少误检同时避免真球消失
+BALL_CONF             = float(os.environ.get("BALL_CONF", "0.1"))
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -297,6 +297,117 @@ def interpolate_ball_positions_spline(ball_positions: list) -> list:
     return result
 
 
+def filter_ball_detections(ball_positions: list, player_tracks: list,
+                           cam_movement: list = None) -> list:
+    """
+    Clean raw ball detections before interpolation.
+
+    Rules:
+    - Remove referee detections upstream; here we only process ball boxes.
+    - Keep detections that are confirmed by a nearby detection in an adjacent frame.
+    - Drop isolated single-frame flashes unless confidence is exceptionally high.
+    - Drop long static "ghost balls" that barely move for many consecutive frames
+      and stay far away from all player feet.
+    """
+    n = len(ball_positions)
+    if n == 0:
+        return ball_positions
+
+    def _center(bbox):
+        return ((bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0)
+
+    def _size(bbox):
+        return max((bbox[2] - bbox[0]) * (bbox[3] - bbox[1]), 1.0) ** 0.5
+
+    def _comp_center(frame_idx, bbox):
+        cx, cy = _center(bbox)
+        if cam_movement is not None and frame_idx < len(cam_movement):
+            mv = cam_movement[frame_idx]
+            return (cx - float(mv[0]), cy - float(mv[1]))
+        return (cx, cy)
+
+    def _nearest_player_dist(frame_idx, center):
+        if frame_idx >= len(player_tracks):
+            return float("inf")
+        min_d = float("inf")
+        for info in player_tracks[frame_idx].values():
+            bbox = info.get("bbox") if info else None
+            if not bbox or len(bbox) < 4:
+                continue
+            foot = get_foot_position(bbox)
+            min_d = min(min_d, measure_distance(center, foot))
+        return min_d
+
+    def _plausible_pair(a, b):
+        gap = max(1, b["frame"] - a["frame"])
+        dist = measure_distance(a["center"], b["center"])
+        size_ratio = max(a["size"], b["size"]) / max(min(a["size"], b["size"]), 1.0)
+        max_jump = 90.0 * gap
+        return dist <= max_jump and size_ratio <= 2.5
+
+    candidates = []
+    for i in range(n):
+        info = ball_positions[i].get(1, {})
+        bbox = info.get("bbox")
+        if bbox is None or len(bbox) != 4:
+            continue
+        if bbox[2] <= bbox[0] or bbox[3] <= bbox[1]:
+            continue
+        center = _comp_center(i, bbox)
+        candidates.append({
+            "frame": i,
+            "bbox": list(bbox),
+            "conf": float(info.get("conf", 0.0) or 0.0),
+            "center": center,
+            "size": _size(bbox),
+            "player_dist": _nearest_player_dist(i, center),
+        })
+
+    if len(candidates) < 2:
+        return ball_positions
+
+    blocked_frames = set()
+
+    def _maybe_block_static_run(run):
+        if len(run) < 45:
+            return
+        xs = [item["center"][0] for item in run]
+        ys = [item["center"][1] for item in run]
+        span_x = max(xs) - min(xs)
+        span_y = max(ys) - min(ys)
+        near_player_frames = sum(1 for item in run if item["player_dist"] < 110.0)
+        if span_x <= 18.0 and span_y <= 18.0 and near_player_frames <= len(run) * 0.2:
+            blocked_frames.update(item["frame"] for item in run)
+
+    run = [candidates[0]]
+    for cand in candidates[1:]:
+        if cand["frame"] == run[-1]["frame"] + 1:
+            run.append(cand)
+        else:
+            _maybe_block_static_run(run)
+            run = [cand]
+    _maybe_block_static_run(run)
+
+    filtered = [c for c in candidates if c["frame"] not in blocked_frames]
+    if not filtered:
+        return [{} for _ in range(n)]
+
+    confirmed_frames = set()
+    for idx, cand in enumerate(filtered):
+        prev_ok = idx > 0 and filtered[idx - 1]["frame"] == cand["frame"] - 1 and _plausible_pair(filtered[idx - 1], cand)
+        next_ok = idx + 1 < len(filtered) and filtered[idx + 1]["frame"] == cand["frame"] + 1 and _plausible_pair(cand, filtered[idx + 1])
+        high_conf = cand["conf"] >= 0.55
+        if high_conf or prev_ok or next_ok:
+            confirmed_frames.add(cand["frame"])
+
+    result = [{} for _ in range(n)]
+    for cand in filtered:
+        if cand["frame"] in confirmed_frames:
+            result[cand["frame"]] = {1: {"bbox": cand["bbox"], "conf": cand["conf"]}}
+
+    return result
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Tracker
 # ═══════════════════════════════════════════════════════════════════════
@@ -438,6 +549,10 @@ class Tracker:
     def interpolate_ball_positions(self, ball_positions: list) -> list:
         """Interpolate missing ball detections using cubic spline (short gaps) or linear (long gaps)."""
         return interpolate_ball_positions_spline(ball_positions)
+
+    def filter_ball_positions(self, ball_positions: list, player_tracks: list,
+                              cam_movement: list = None) -> list:
+        return filter_ball_detections(ball_positions, player_tracks, cam_movement)
 
 
     def draw_ellipse(self, frame, bbox, color, track_id, is_tracked=False):
