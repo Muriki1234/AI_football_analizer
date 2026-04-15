@@ -60,8 +60,8 @@ YOLO_BATCH_SIZE       = 60   # 单批处理帧数（60 = 更好GPU利用率）
 KEYPOINT_STRIDE       = 20   # 每20帧检测一次关键点（提升小地图精度，原为60）
 MINIMAP_SMOOTH_WINDOW = 25
 SPEED_SMOOTH_WINDOW   = 7
-PLAYER_CONF           = 0.1  # 球员/裁判检测置信度（低阈值，避免漏检）
-BALL_CONF             = float(os.environ.get("BALL_CONF", "0.1"))
+PLAYER_CONF           = 0.25  # 球员/裁判检测置信度
+BALL_CONF             = float(os.environ.get("BALL_CONF", "0.59"))
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -326,7 +326,7 @@ class Tracker:
         for i in range(0, len(det_indices), YOLO_BATCH_SIZE):
             batch_idx    = det_indices[i:i+YOLO_BATCH_SIZE]
             batch_frames = [frames[idx] for idx in batch_idx]
-            results      = self.model.predict(batch_frames, conf=0.1, verbose=False, half=True, imgsz=416)
+            results      = self.model.predict(batch_frames, conf=PLAYER_CONF, verbose=False, half=True, imgsz=416)
             for res, fidx in zip(results, batch_idx):
                 det_dict[fidx] = res
 
@@ -394,7 +394,7 @@ class Tracker:
             for i in range(0, len(det_local), YOLO_BATCH_SIZE):
                 batch_l  = det_local[i:i+YOLO_BATCH_SIZE]
                 results  = self.model.predict([chunk[j] for j in batch_l],
-                                              conf=0.1, verbose=False, half=True, imgsz=416)
+                                              conf=PLAYER_CONF, verbose=False, half=True, imgsz=416)
                 for res, local_idx in zip(results, batch_l):
                     det_dict[local_idx] = res
 
