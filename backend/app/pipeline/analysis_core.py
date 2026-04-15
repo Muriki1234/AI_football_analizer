@@ -349,10 +349,13 @@ class Tracker:
                 bbox, cid, tid = d[0].tolist(), d[3], d[4]
                 if cid == self.player_id:
                     tracks["players"][fidx][tid] = {"bbox": bbox}
-                elif cid == self.ball_id:
-                    tracks["ball"][fidx][1] = {"bbox": bbox}
                 elif cid == self.referee_id:
                     tracks["referees"][fidx][tid] = {"bbox": bbox}
+
+            # Ball: directly from YOLO, no ByteTrack needed (single object)
+            for i in range(len(ds)):
+                if ds.class_id[i] == self.ball_id:
+                    tracks["ball"][fidx][1] = {"bbox": ds.xyxy[i].tolist()}
 
         self._interpolate_tracks(tracks, total)
         return tracks
@@ -414,10 +417,13 @@ class Tracker:
                     bbox, cid, tid = d[0].tolist(), d[3], d[4]
                     if cid == self.player_id:
                         tracks["players"][global_idx][tid] = {"bbox": bbox}
-                    elif cid == self.ball_id:
-                        tracks["ball"][global_idx][1] = {"bbox": bbox}
                     elif cid == self.referee_id:
                         tracks["referees"][global_idx][tid] = {"bbox": bbox}
+
+                # Ball: directly from YOLO, no ByteTrack needed (single object)
+                for i in range(len(ds)):
+                    if ds.class_id[i] == self.ball_id:
+                        tracks["ball"][global_idx][1] = {"bbox": ds.xyxy[i].tolist()}
 
         self._interpolate_tracks(tracks, total_frames)
         return tracks
