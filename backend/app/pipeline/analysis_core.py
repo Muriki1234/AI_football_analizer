@@ -60,7 +60,7 @@ YOLO_BATCH_SIZE       = 60   # 单批处理帧数（60 = 更好GPU利用率）
 KEYPOINT_STRIDE       = 20   # 每20帧检测一次关键点（提升小地图精度，原为60）
 MINIMAP_SMOOTH_WINDOW = 25
 SPEED_SMOOTH_WINDOW   = 7
-PLAYER_CONF           = 0.25  # 球员/裁判检测置信度
+PLAYER_CONF           = 0.59  # 球员/球检测置信度
 BALL_CONF             = float(os.environ.get("BALL_CONF", "0.59"))
 
 
@@ -630,7 +630,7 @@ class KeypointDetector:
                              if res.keypoints.conf is not None
                              else np.ones(len(xy)))
                     for kid, (x, y) in enumerate(xy):
-                        if confs[kid] > 0.35 and (x!=0 or y!=0):
+                        if confs[kid] > 0.5 and (x!=0 or y!=0):
                             kps[kid] = [float(x), float(y)]
                 sampled[fidx] = kps
 
