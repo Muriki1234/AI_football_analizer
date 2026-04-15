@@ -631,7 +631,7 @@ class KeypointDetector:
                              if res.keypoints.conf is not None
                              else np.ones(len(xy)))
                     for kid, (x, y) in enumerate(xy):
-                        if confs[kid] > 0.5 and (x!=0 or y!=0):
+                        if confs[kid] > 0.35 and (x!=0 or y!=0):
                             kps[kid] = [float(x), float(y)]
                 sampled[fidx] = kps
 
