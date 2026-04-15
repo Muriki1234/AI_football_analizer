@@ -326,7 +326,7 @@ class Tracker:
         for i in range(0, len(det_indices), YOLO_BATCH_SIZE):
             batch_idx    = det_indices[i:i+YOLO_BATCH_SIZE]
             batch_frames = [frames[idx] for idx in batch_idx]
-            results      = self.model.predict(batch_frames, conf=PLAYER_CONF, verbose=False, half=True, imgsz=416)
+            results      = self.model.predict(batch_frames, conf=PLAYER_CONF, iou=0.45, verbose=False, half=True, imgsz=1280)
             for res, fidx in zip(results, batch_idx):
                 det_dict[fidx] = res
 
@@ -394,7 +394,7 @@ class Tracker:
             for i in range(0, len(det_local), YOLO_BATCH_SIZE):
                 batch_l  = det_local[i:i+YOLO_BATCH_SIZE]
                 results  = self.model.predict([chunk[j] for j in batch_l],
-                                              conf=PLAYER_CONF, verbose=False, half=True, imgsz=416)
+                                              conf=PLAYER_CONF, iou=0.45, verbose=False, half=True, imgsz=1280)
                 for res, local_idx in zip(results, batch_l):
                     det_dict[local_idx] = res
 
@@ -622,7 +622,7 @@ class KeypointDetector:
         for i in range(0, len(indices), YOLO_BATCH_SIZE):
             batch_idx = indices[i:i+YOLO_BATCH_SIZE]
             results   = self.model.predict([frames[j] for j in batch_idx],
-                                           conf=0.1, verbose=False, half=True, imgsz=416)
+                                           conf=0.1, verbose=False, half=True, imgsz=640)
             for res, fidx in zip(results, batch_idx):
                 kps = {}
                 if res.keypoints is not None and res.keypoints.xy.shape[1] > 0:
@@ -670,7 +670,7 @@ class KeypointDetector:
             for i in range(0, len(kp_local), YOLO_BATCH_SIZE):
                 batch_l  = kp_local[i:i+YOLO_BATCH_SIZE]
                 results  = self.model.predict([chunk[j] for j in batch_l],
-                                               conf=0.1, verbose=False, half=True, imgsz=416)
+                                               conf=0.1, verbose=False, half=True, imgsz=640)
                 for res, local_idx in zip(results, batch_l):
                     global_idx = start_idx + local_idx
                     kps = {}
