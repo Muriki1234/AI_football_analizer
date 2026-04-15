@@ -703,12 +703,12 @@ class ViewTransformer:
         7:  (0,     4416),   # small_rect_left_bottom_pt1
         8:  (550,   4416),   # small_rect_left_bottom_pt2
         9:  (0,     7000),   # sideline_bottom_left
-        # 10: left_semicircle_right — D弧顶点不稳定，跳过
+        10: (1100,  3500),   # left_semicircle_right (penalty spot proxy)
         11: (6000,  0),      # center_line_top
         12: (6000,  7000),   # center_line_bottom
         13: (6000,  2085),   # center_circle_top
         14: (6000,  4915),   # center_circle_bottom
-        # 15: field_center — 草坪无明显标记，模型易误检，跳过
+        15: (6000,  3500),   # field_center
         16: (12000, 0),      # sideline_top_right
         17: (12000, 1945),   # big_rect_right_top_pt1
         18: (9985,  1945),   # big_rect_right_top_pt2
@@ -719,7 +719,7 @@ class ViewTransformer:
         23: (12000, 4416),   # small_rect_right_bottom_pt1
         24: (11450, 4416),   # small_rect_right_bottom_pt2
         25: (12000, 7000),   # sideline_bottom_right
-        # 26: right_semicircle_left — 同上，跳过
+        26: (10900, 3500),   # right_semicircle_left (penalty spot proxy)
         27: (4085,  3500),   # center_circle_left
         28: (7915,  3500),   # center_circle_right
     }
