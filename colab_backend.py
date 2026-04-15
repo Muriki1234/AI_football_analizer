@@ -107,7 +107,7 @@ def analyze_frame(sid):
     if not ret:
         return jsonify({'error': 'Extract frame failed'}), 500
     model = YOLO(os.environ.get('YOLO_MODEL_PATH', '/content/pitchlogic/soccana_best.pt'))
-    results = model.predict(frame, conf=0.25, verbose=False)[0]
+    results = model.predict(frame, conf=0.25, iou=0.45, imgsz=1280, verbose=False)[0]
     players = []
     for box in results.boxes:
         cls = int(box.cls[0])
