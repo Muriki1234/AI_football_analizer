@@ -392,7 +392,9 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                     i, p_tracks, ball_bbox, ball_history,
                     ball_transformed_pos=ball_transformed_pos)
                 conf = poss_detector.get_confidence()
-                if pid_has_ball != -1 and pid_has_ball in p_tracks and conf > 0.3:
+                if (pid_has_ball != -1 and pid_has_ball in p_tracks
+                        and conf > 0.3
+                        and poss_detector.ball_state == "controlled"):
                     p_tracks[pid_has_ball]["has_ball"]             = True
                     p_tracks[pid_has_ball]["possession_confidence"] = conf
                     team_control.append(p_tracks[pid_has_ball].get("team", 0))
@@ -404,9 +406,10 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         player_summary = _compute_player_summary(tracks, tracked_bboxes, team_control, fps=fps)
 
         cache_payload = {
-            "tracks":         tracks,
-            "tracked_bboxes": tracked_bboxes,
-            "team_control":   team_control,
+            "tracks":              tracks,
+            "tracked_bboxes":      tracked_bboxes,
+            "team_control":        team_control,
+            "possession_switches": player_summary.get("possession_switches", 0),
             # 颜色序列化（numpy array → list）
             "team_colors": {
                 k: v.tolist() for k, v in team_assigner.team_colors.items()
@@ -452,6 +455,15 @@ def _compute_player_summary(tracks: dict, tracked_bboxes: dict,
     t1, t2 = int(np.sum(arr == 1)), int(np.sum(arr == 2))
     total_ctrl = t1 + t2 or 1
 
+    # Count possession switches (team changes between non-zero values)
+    possession_switches = 0
+    prev_team = 0
+    for t in team_control:
+        if t != 0 and t != prev_team and prev_team != 0:
+            possession_switches += 1
+        if t != 0:
+            prev_team = t
+
     return {
         "max_speed_kmh":        round(float(max(speeds)),        1) if speeds else 0,
         "avg_speed_kmh":        round(float(np.mean(speeds)),    1) if speeds else 0,
@@ -459,6 +471,7 @@ def _compute_player_summary(tracks: dict, tracked_bboxes: dict,
         "possession_seconds":   round(has_ball_count / fps,      1),
         "team1_possession_pct": round(t1 / total_ctrl * 100,     1),
         "team2_possession_pct": round(t2 / total_ctrl * 100,     1),
+        "possession_switches":  possession_switches,
     }
 
 

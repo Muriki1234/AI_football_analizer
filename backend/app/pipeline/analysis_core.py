@@ -887,10 +887,16 @@ class TeamAssigner:
         img = frame[int(bbox[1]):int(bbox[3]), int(bbox[0]):int(bbox[2])]
         if img.shape[0]==0 or img.shape[1]==0: return np.array([0,0,0])
         top = img[:img.shape[0]//2, :]
-        km  = KMeans(n_clusters=2, init="k-means++", n_init=1).fit(top.reshape(-1,3))
+        # Convert to HSV for lighting-robust clustering
+        top_hsv = cv2.cvtColor(top, cv2.COLOR_BGR2HSV)
+        km  = KMeans(n_clusters=2, init="k-means++", n_init=1).fit(top_hsv.reshape(-1,3))
         lbl = km.labels_.reshape(top.shape[0], top.shape[1])
         corners = [lbl[0,0], lbl[0,-1], lbl[-1,0], lbl[-1,-1]]
-        return km.cluster_centers_[1 - max(set(corners), key=corners.count)]
+        bg_cluster = max(set(corners), key=corners.count)
+        kit_cluster = 1 - bg_cluster
+        # Return the kit cluster center converted back to BGR for downstream use
+        kit_hsv = km.cluster_centers_[kit_cluster].astype(np.uint8).reshape(1,1,3)
+        return cv2.cvtColor(kit_hsv, cv2.COLOR_HSV2BGR).reshape(3).astype(float)
 
     def _fit_team_kmeans(self, all_colors: list):
         """
