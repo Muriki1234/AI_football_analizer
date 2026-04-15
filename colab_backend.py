@@ -8,8 +8,8 @@ sys.path.insert(0, '/content/pitchlogic/backend')
 sys.path.insert(0, '/content/drive/MyDrive/samurai_env/samurai')
 sys.path.insert(0, '/content/drive/MyDrive/samurai_env/samurai/sam2')
 
-os.environ.setdefault('YOLO_MODEL_PATH',     '/content/drive/MyDrive/samurai_env/samurai/weight_football/best.pt')
-os.environ.setdefault('KEYPOINT_MODEL_PATH', '/content/drive/MyDrive/samurai_env/samurai/weights_keypoints/best.pt')
+os.environ.setdefault('YOLO_MODEL_PATH',     '/content/pitchlogic/soccana_best.pt')
+os.environ.setdefault('KEYPOINT_MODEL_PATH', '/content/pitchlogic/soccana_kpts_best.pt')
 os.environ.setdefault('SAMURAI_SCRIPT',      '/content/drive/MyDrive/samurai_env/samurai/scripts/demo.py')
 
 from app.pipeline.session_manager import SessionManager
@@ -106,7 +106,7 @@ def analyze_frame(sid):
     cap.release()
     if not ret:
         return jsonify({'error': 'Extract frame failed'}), 500
-    model = YOLO(os.environ.get('YOLO_MODEL_PATH', '/content/drive/MyDrive/samurai_env/samurai/weight_football/best.pt'))
+    model = YOLO(os.environ.get('YOLO_MODEL_PATH', '/content/pitchlogic/soccana_best.pt'))
     results = model.predict(frame, conf=0.25, verbose=False)[0]
     players = []
     for box in results.boxes:
