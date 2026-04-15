@@ -269,14 +269,13 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             print(f"[INFO] Short video ({total} frames) — loading into RAM for speed")
             frames = read_video(video_path)
             tracks = tracker.get_object_tracks(frames)
+            # 球插值先于 add_position_to_tracks，让插值帧也能获得 position/position_minimap
+            tracks["ball"] = tracker.interpolate_ball_positions(tracks["ball"])
+            tracker.add_position_to_tracks(tracks)
 
             sm.update_status(session_id, "analyzing", progress=35, stage="camera_motion")
             cam = CameraMovementEstimator(frames[0])
             cam_mov = cam.get_camera_movement(frames)
-            tracks["ball"] = tracker.filter_ball_positions(tracks["ball"], tracks["players"], cam_mov)
-            # 球插值先于 add_position_to_tracks，让插值帧也能获得 position/position_minimap
-            tracks["ball"] = tracker.interpolate_ball_positions(tracks["ball"])
-            tracker.add_position_to_tracks(tracks)
             cam.add_adjust_positions_to_tracks(tracks, cam_mov)
 
             sm.update_status(session_id, "analyzing", progress=50, stage="keypoint_detection")
@@ -293,14 +292,13 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             # 长视频：流式处理，内存恒定
             print(f"[INFO] Long video ({total} frames) — using streaming mode")
             tracks = tracker.get_object_tracks_streamed(video_path, total)
+            # 球插值先于 add_position_to_tracks，让插值帧也能获得 position/position_minimap
+            tracks["ball"] = tracker.interpolate_ball_positions(tracks["ball"])
+            tracker.add_position_to_tracks(tracks)
 
             sm.update_status(session_id, "analyzing", progress=35, stage="camera_motion")
             cam     = CameraMovementEstimator.from_video_path(video_path)
             cam_mov = cam.get_camera_movement_streamed(video_path, total)
-            tracks["ball"] = tracker.filter_ball_positions(tracks["ball"], tracks["players"], cam_mov)
-            # 球插值先于 add_position_to_tracks，让插值帧也能获得 position/position_minimap
-            tracks["ball"] = tracker.interpolate_ball_positions(tracks["ball"])
-            tracker.add_position_to_tracks(tracks)
             cam.add_adjust_positions_to_tracks(tracks, cam_mov)
 
             sm.update_status(session_id, "analyzing", progress=50, stage="keypoint_detection")
