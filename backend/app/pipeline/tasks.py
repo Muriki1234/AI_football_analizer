@@ -234,9 +234,17 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
     try:
         import time as _time
         _t_total = _time.perf_counter()
+        _bench_log = []
         def _bench(label, t0):
             elapsed = _time.perf_counter() - t0
-            print(f"[BENCH] {label:<25}: {elapsed:.1f}s")
+            _bench_log.append(f"{label:<25}: {elapsed:.1f}s")
+            # Also write to file so it's readable from Colab cell
+            try:
+                log_path = os.path.join(os.path.dirname(__file__), "..", "..", "benchmark.log")
+                with open(os.path.abspath(log_path), "a") as _f:
+                    _f.write(f"[BENCH] {label:<25}: {elapsed:.1f}s\n")
+            except Exception:
+                pass
             return elapsed
 
         video_path   = session["video_path"]
@@ -429,6 +437,12 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
 
         # ── 8. 摘要 & 缓存 ────────────────────────────────────────────
         _bench("TOTAL", _t_total)
+        try:
+            log_path = os.path.join(os.path.dirname(__file__), "..", "..", "benchmark.log")
+            with open(os.path.abspath(log_path), "a") as _f:
+                _f.write("-" * 40 + "\n")
+        except Exception:
+            pass
         sm.update_status(session_id, "analyzing", progress=92, stage="computing_summary")
         player_summary = _compute_player_summary(tracks, tracked_bboxes, team_control, fps=fps)
 
