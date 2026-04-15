@@ -304,6 +304,7 @@ def interpolate_ball_positions_spline(ball_positions: list) -> list:
 class Tracker:
     def __init__(self, model_path: str):
         self.model        = YOLO(model_path)
+        # sv.ByteTrack kept as fallback; model.track() uses YOLO's internal tracker
         self.tracker      = sv.ByteTrack()
         self.class_names  = self.model.names
         self.player_id = self.ball_id = self.referee_id = None
@@ -314,6 +315,45 @@ class Tracker:
             elif "referee" in n:                  self.referee_id  = i
         if self.player_id is None: self.player_id = 0
 
+    def _parse_track_result(self, result, fidx: int, tracks: dict):
+        """Parse a single model.track() result into tracks dict."""
+        tracks["players"][fidx] = {}
+        tracks["referees"][fidx] = {}
+        tracks["ball"][fidx] = {}
+
+        boxes = result.boxes
+        if boxes is None or len(boxes) == 0:
+            return
+
+        ids   = boxes.id   # may be None if tracker lost all objects
+        xyxys = boxes.xyxy
+        clses = boxes.cls.int()
+
+        # Ball: highest-confidence ball detection, no tracking needed
+        ball_best_conf = -1
+        for k in range(len(boxes)):
+            cid = int(clses[k])
+            if cid == self.ball_id:
+                conf = float(boxes.conf[k])
+                if conf > ball_best_conf:
+                    ball_best_conf = conf
+                    tracks["ball"][fidx][1] = {"bbox": xyxys[k].tolist()}
+
+        if ids is None:
+            return
+
+        for k in range(len(boxes)):
+            cid = int(clses[k])
+            tid = int(ids[k])
+            # Goalkeeper → player
+            if "goalkeeper" in self.class_names[cid].lower():
+                cid = self.player_id
+            # Skip referees
+            if self.referee_id is not None and cid == self.referee_id:
+                continue
+            if cid == self.player_id:
+                tracks["players"][fidx][tid] = {"bbox": xyxys[k].tolist()}
+
     def get_object_tracks(self, frames: list) -> dict:
         total = len(frames)
         tracks = {"players":  [{} for _ in range(total)],
@@ -321,39 +361,16 @@ class Tracker:
                   "ball":     [{} for _ in range(total)]}
 
         det_indices = list(range(0, total, YOLO_DETECTION_STRIDE))
-        det_dict    = {}
 
         for i in range(0, len(det_indices), YOLO_BATCH_SIZE):
             batch_idx    = det_indices[i:i+YOLO_BATCH_SIZE]
             batch_frames = [frames[idx] for idx in batch_idx]
-            results      = self.model.predict(batch_frames, conf=PLAYER_CONF, iou=0.45, verbose=False, half=True, imgsz=1280)
+            # model.track() maintains internal ByteTrack state with persist=True
+            results = self.model.track(batch_frames, conf=PLAYER_CONF, iou=0.45,
+                                       verbose=False, half=True, imgsz=1280,
+                                       persist=True, tracker="bytetrack.yaml")
             for res, fidx in zip(results, batch_idx):
-                det_dict[fidx] = res
-
-        for fidx, det in det_dict.items():
-            ds = sv.Detections.from_ultralytics(det)
-            for k, cid in enumerate(ds.class_id):
-                if "goalkeeper" in self.class_names[cid].lower():
-                    ds.class_id[k] = self.player_id
-
-            # Frontend 不需要裁判检测，避免被画框或误参与后续展示
-            if self.referee_id is not None and len(ds) > 0:
-                ds = ds[ds.class_id != self.referee_id]
-
-            d_tracks = self.tracker.update_with_detections(ds)
-            tracks["players"][fidx]  = {}
-            tracks["referees"][fidx] = {}
-            tracks["ball"][fidx]     = {}
-
-            for d in d_tracks:
-                bbox, cid, tid = d[0].tolist(), d[3], d[4]
-                if cid == self.player_id:
-                    tracks["players"][fidx][tid] = {"bbox": bbox}
-
-            # Ball: directly from YOLO, no ByteTrack needed (single object)
-            for i in range(len(ds)):
-                if ds.class_id[i] == self.ball_id:
-                    tracks["ball"][fidx][1] = {"bbox": ds.xyxy[i].tolist()}
+                self._parse_track_result(res, fidx, tracks)
 
         self._interpolate_tracks(tracks, total)
         return tracks
@@ -381,45 +398,24 @@ class Tracker:
 
     def get_object_tracks_streamed(self, video_path: str, total_frames: int,
                                     chunk_size: int = 500) -> dict:
-        """流式版本：分块处理视频，不把所有帧加载到内存。ByteTrack 跨块保持连续状态。"""
+        """流式版本：分块处理视频，model.track(persist=True) 跨块保持追踪状态。"""
         tracks = {"players":  [{} for _ in range(total_frames)],
                   "referees": [{} for _ in range(total_frames)],
                   "ball":     [{} for _ in range(total_frames)]}
 
         for start_idx, chunk in stream_video_chunks(video_path, chunk_size):
-            # YOLO 推理：对块内帧批处理
             det_local = list(range(0, len(chunk), YOLO_DETECTION_STRIDE))
-            det_dict  = {}
             for i in range(0, len(det_local), YOLO_BATCH_SIZE):
-                batch_l  = det_local[i:i+YOLO_BATCH_SIZE]
-                results  = self.model.predict([chunk[j] for j in batch_l],
-                                              conf=PLAYER_CONF, iou=0.45, verbose=False, half=True, imgsz=1280)
+                batch_l = det_local[i:i+YOLO_BATCH_SIZE]
+                results = self.model.track([chunk[j] for j in batch_l],
+                                           conf=PLAYER_CONF, iou=0.45,
+                                           verbose=False, half=True, imgsz=1280,
+                                           persist=True, tracker="bytetrack.yaml")
                 for res, local_idx in zip(results, batch_l):
-                    det_dict[local_idx] = res
-
-            # ByteTrack 更新：必须按帧序处理以维持追踪状态（跨块也连续）
-            for local_idx in sorted(det_dict.keys()):
-                global_idx = start_idx + local_idx
-                if global_idx >= total_frames:
-                    break
-                ds = sv.Detections.from_ultralytics(det_dict[local_idx])
-                for k, cid in enumerate(ds.class_id):
-                    if "goalkeeper" in self.class_names[cid].lower():
-                        ds.class_id[k] = self.player_id
-
-                if self.referee_id is not None and len(ds) > 0:
-                    ds = ds[ds.class_id != self.referee_id]
-
-                d_tracks = self.tracker.update_with_detections(ds)
-                for d in d_tracks:
-                    bbox, cid, tid = d[0].tolist(), d[3], d[4]
-                    if cid == self.player_id:
-                        tracks["players"][global_idx][tid] = {"bbox": bbox}
-
-                # Ball: directly from YOLO, no ByteTrack needed (single object)
-                for i in range(len(ds)):
-                    if ds.class_id[i] == self.ball_id:
-                        tracks["ball"][global_idx][1] = {"bbox": ds.xyxy[i].tolist()}
+                    global_idx = start_idx + local_idx
+                    if global_idx >= total_frames:
+                        break
+                    self._parse_track_result(res, global_idx, tracks)
 
         self._interpolate_tracks(tracks, total_frames)
         return tracks

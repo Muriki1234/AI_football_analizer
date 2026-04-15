@@ -232,6 +232,13 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
     结果缓存为 tracks.pkl，按需任务直接读取，不重复跑 YOLO。
     """
     try:
+        import time as _time
+        _t_total = _time.perf_counter()
+        def _bench(label, t0):
+            elapsed = _time.perf_counter() - t0
+            print(f"[BENCH] {label:<25}: {elapsed:.1f}s")
+            return elapsed
+
         video_path   = session["video_path"]
         samurai_pkl  = session["samurai_cache_path"]
         output_dir   = sm.session_output_dir(session_id)
@@ -267,23 +274,28 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         if total <= SHORT_VIDEO_FRAMES:
             # 短视频：一次读入内存，三个模块共享同一份帧（省去2次重复IO）
             print(f"[INFO] Short video ({total} frames) — loading into RAM for speed")
+            _t = _time.perf_counter()
             frames = read_video(video_path)
             tracks = tracker.get_object_tracks(frames)
-            # 球插值先于 add_position_to_tracks，让插值帧也能获得 position/position_minimap
             tracks["ball"] = tracker.interpolate_ball_positions(tracks["ball"])
             tracker.add_position_to_tracks(tracks)
+            _bench("yolo_detection", _t)
 
             sm.update_status(session_id, "analyzing", progress=35, stage="camera_motion")
+            _t = _time.perf_counter()
             cam = CameraMovementEstimator(frames[0])
             cam_mov = cam.get_camera_movement(frames)
             cam.add_adjust_positions_to_tracks(tracks, cam_mov)
+            _bench("camera_motion", _t)
 
             sm.update_status(session_id, "analyzing", progress=50, stage="keypoint_detection")
+            _t = _time.perf_counter()
             kp  = KeypointDetector(KEYPOINT_MODEL_PATH)
             vt  = ViewTransformer()
             kps = kp.predict(frames, cam_movement=cam_mov)
             vt.add_transformed_position_to_tracks(tracks, kps)
             vt.interpolate_2d_positions(tracks)
+            _bench("keypoint_detection", _t)
 
             del frames  # 释放内存
             import gc; gc.collect()
@@ -291,27 +303,34 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         else:
             # 长视频：流式处理，内存恒定
             print(f"[INFO] Long video ({total} frames) — using streaming mode")
+            _t = _time.perf_counter()
             tracks = tracker.get_object_tracks_streamed(video_path, total)
-            # 球插值先于 add_position_to_tracks，让插值帧也能获得 position/position_minimap
             tracks["ball"] = tracker.interpolate_ball_positions(tracks["ball"])
             tracker.add_position_to_tracks(tracks)
+            _bench("yolo_detection", _t)
 
             sm.update_status(session_id, "analyzing", progress=35, stage="camera_motion")
+            _t = _time.perf_counter()
             cam     = CameraMovementEstimator.from_video_path(video_path)
             cam_mov = cam.get_camera_movement_streamed(video_path, total)
             cam.add_adjust_positions_to_tracks(tracks, cam_mov)
+            _bench("camera_motion", _t)
 
             sm.update_status(session_id, "analyzing", progress=50, stage="keypoint_detection")
+            _t = _time.perf_counter()
             kp  = KeypointDetector(KEYPOINT_MODEL_PATH)
             vt  = ViewTransformer()
             kps = kp.predict_streamed(video_path, total, cam_movement=cam_mov)
             vt.add_transformed_position_to_tracks(tracks, kps)
             vt.interpolate_2d_positions(tracks)
+            _bench("keypoint_detection", _t)
 
         # ── 5. 速度 & 距离 ───────────────────────────────────────────
         sm.update_status(session_id, "analyzing", progress=70, stage="speed_calculation")
+        _t = _time.perf_counter()
         speed_est = AccurateSpeedEstimator()
         speed_est.add_speed_and_distance_to_tracks(tracks)
+        _bench("speed_calculation", _t)
 
         # ── 7. 队伍颜色 + 球权检测 ────────────────────────────────────
         sm.update_status(session_id, "analyzing", progress=80, stage="team_assignment")
@@ -321,8 +340,10 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         ball_history  = []
 
         # 多帧聚合初始化队伍颜色（流式 seek 采样 8 帧）
+        _t = _time.perf_counter()
         team_assigner.assign_team_color_from_video(video_path, tracks["players"], n_samples=8)
         team_color_initialized = bool(team_assigner.kmeans is not None)
+        _bench("team_color_init", _t)
         if team_color_initialized:
             print(f"[INFO] Team colors initialized from 8 sampled frames")
         else:
@@ -330,6 +351,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
 
         if team_color_initialized:
             # ── 多帧投票：按索引 seek 采样帧，不缓存全部帧 ──
+            _t = _time.perf_counter()
             from collections import Counter
             player_vote_dict = {}
             SAMPLE_STEP = max(1, total // 20)   # 最多20帧投票，短视频无需120帧
@@ -365,8 +387,10 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                 pid: Counter(votes).most_common(1)[0][0]
                 for pid, votes in player_vote_dict.items() if votes
             }
+            _bench("team_voting", _t)
             print(f"[INFO] Multi-frame voting done: {len(player_final_team)} players assigned")
 
+            _t = _time.perf_counter()
             for i, p_tracks in enumerate(tracks["players"]):
                 for pid, info in p_tracks.items():
                     if not info:
@@ -401,7 +425,10 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                 else:
                     team_control.append(0)
 
+            _bench("possession_detection", _t)
+
         # ── 8. 摘要 & 缓存 ────────────────────────────────────────────
+        _bench("TOTAL", _t_total)
         sm.update_status(session_id, "analyzing", progress=92, stage="computing_summary")
         player_summary = _compute_player_summary(tracks, tracked_bboxes, team_control, fps=fps)
 
