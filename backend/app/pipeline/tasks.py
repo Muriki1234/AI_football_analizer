@@ -332,7 +332,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             # ── 多帧投票：按索引 seek 采样帧，不缓存全部帧 ──
             from collections import Counter
             player_vote_dict = {}
-            SAMPLE_STEP = max(1, total // 120)
+            SAMPLE_STEP = max(1, total // 20)   # 最多20帧投票，短视频无需120帧
             vote_indices = list(range(0, total, SAMPLE_STEP))
 
             # 分批 seek（每批50帧，避免长时间无进度）
