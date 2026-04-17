@@ -763,14 +763,24 @@ class ViewTransformer:
                     src.append(pos); dst.append(target)
 
             if len(src) >= 6:
-                dst_arr = np.array(dst)
+                dst_arr = np.array(dst, dtype=np.float32)
+                src_arr = np.array(src, dtype=np.float32)
                 x_span  = dst_arr[:, 0].max() - dst_arr[:, 0].min()
                 y_span  = dst_arr[:, 1].max() - dst_arr[:, 1].min()
                 # 关键点必须在场地上有足够分布才更新，否则退化矩阵
                 # x_span > 3000 (~25% 场长) 且 y_span > 1500 (~21% 场宽)
                 if x_span > 3000 and y_span > 1500:
-                    transformer = SportsViewTransformer(source=np.array(src), target=dst_arr)
-                    self._last_transformer = transformer
+                    # RANSAC inlier 检查：inlier < 50% 说明 keypoint ID 乱了，拒绝更新
+                    import cv2 as _cv2
+                    _, mask = _cv2.findHomography(src_arr, dst_arr, _cv2.RANSAC, 500.0)
+                    inlier_ratio = float(mask.sum()) / len(mask) if mask is not None else 0.0
+                    if inlier_ratio >= 0.5:
+                        transformer = SportsViewTransformer(source=src_arr, target=dst_arr)
+                        self._last_transformer = transformer
+                    elif self._last_transformer is not None:
+                        transformer = self._last_transformer
+                    else:
+                        continue
                 elif self._last_transformer is not None:
                     transformer = self._last_transformer
                 else:
