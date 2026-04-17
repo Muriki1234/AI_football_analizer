@@ -747,9 +747,12 @@ class ViewTransformer:
                     if target is not None:
                         src0.append(pos); dst0.append(target)
                 if len(src0) >= 8:
-                    self._last_transformer = SportsViewTransformer(
-                        source=np.array(src0), target=np.array(dst0))
-                    break
+                    d0 = np.array(dst0)
+                    if (d0[:,0].max()-d0[:,0].min() > 3000 and
+                            d0[:,1].max()-d0[:,1].min() > 1500):
+                        self._last_transformer = SportsViewTransformer(
+                            source=np.array(src0), target=d0)
+                        break
 
         for fnum, kps in enumerate(kps_list):
             src, dst = [], []
@@ -758,11 +761,21 @@ class ViewTransformer:
                 if target is not None:
                     src.append(pos); dst.append(target)
 
-            if len(src) >= 4:
-                transformer = SportsViewTransformer(source=np.array(src), target=np.array(dst))
-                self._last_transformer = transformer
+            if len(src) >= 6:
+                dst_arr = np.array(dst)
+                x_span  = dst_arr[:, 0].max() - dst_arr[:, 0].min()
+                y_span  = dst_arr[:, 1].max() - dst_arr[:, 1].min()
+                # 关键点必须在场地上有足够分布才更新，否则退化矩阵
+                # x_span > 3000 (~25% 场长) 且 y_span > 1500 (~21% 场宽)
+                if x_span > 3000 and y_span > 1500:
+                    transformer = SportsViewTransformer(source=np.array(src), target=dst_arr)
+                    self._last_transformer = transformer
+                elif self._last_transformer is not None:
+                    transformer = self._last_transformer
+                else:
+                    continue
             elif self._last_transformer is not None:
-                # 用上一帧有效的 homography 做 fallback，避免小地图断续
+                # 关键点不足 → 用上一个稳定 homography 做 fallback
                 transformer = self._last_transformer
             else:
                 continue
