@@ -60,8 +60,7 @@ YOLO_BATCH_SIZE       = 60   # 单批处理帧数（60 = 更好GPU利用率）
 KEYPOINT_STRIDE       = 20   # 每20帧检测一次关键点（提升小地图精度，原为60）
 MINIMAP_SMOOTH_WINDOW = 25
 SPEED_SMOOTH_WINDOW   = 7
-PLAYER_CONF           = 0.59  # 球员/球检测置信度
-BALL_CONF             = float(os.environ.get("BALL_CONF", "0.59"))
+PLAYER_CONF           = 0.59  # 球员/球检测置信度（同时适用于球）
 
 
 # ═══════════════════════════════════════════════════════════════════════
