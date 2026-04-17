@@ -47,6 +47,7 @@ from .analysis_core import (
     stream_video_chunks,
     read_frames_at_indices,
     read_video,
+    _check_memory_and_gc,
     KeypointDetector,
     ViewTransformer,
     AccurateSpeedEstimator,
@@ -307,15 +308,31 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
 
             del frames  # 释放内存
             import gc; gc.collect()
+            _check_memory_and_gc()
 
         else:
             # 长视频：流式处理，内存恒定
             print(f"[INFO] Long video ({total} frames) — using streaming mode")
             _t = _time.perf_counter()
-            tracks = tracker.get_object_tracks_streamed(video_path, total)
+
+            # 进度回调：YOLO 阶段占 10%→35%（25 个百分点）
+            _yolo_p0, _yolo_range = 10, 25
+
+            def _yolo_progress(ratio, frames_done, frames_total, eta_sec):
+                pct = int(_yolo_p0 + ratio * _yolo_range)
+                eta_str = (f"{int(eta_sec // 60)}m{int(eta_sec % 60):02d}s"
+                           if eta_sec > 0 else "?")
+                sm.update_status(
+                    session_id, "analyzing", progress=pct,
+                    stage=f"yolo_detection ({frames_done}/{frames_total} frames, ETA {eta_str})"
+                )
+
+            tracks = tracker.get_object_tracks_streamed(
+                video_path, total, progress_callback=_yolo_progress)
             tracks["ball"] = tracker.interpolate_ball_positions(tracks["ball"])
             tracker.add_position_to_tracks(tracks)
             _bench("yolo_detection", _t)
+            _check_memory_and_gc()
 
             sm.update_status(session_id, "analyzing", progress=35, stage="camera_motion")
             _t = _time.perf_counter()
@@ -323,6 +340,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             cam_mov = cam.get_camera_movement_streamed(video_path, total)
             cam.add_adjust_positions_to_tracks(tracks, cam_mov)
             _bench("camera_motion", _t)
+            _check_memory_and_gc()
 
             sm.update_status(session_id, "analyzing", progress=50, stage="keypoint_detection")
             _t = _time.perf_counter()
@@ -332,6 +350,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             vt.add_transformed_position_to_tracks(tracks, kps)
             vt.interpolate_2d_positions(tracks)
             _bench("keypoint_detection", _t)
+            _check_memory_and_gc()
 
         # ── 5. 速度 & 距离 ───────────────────────────────────────────
         sm.update_status(session_id, "analyzing", progress=70, stage="speed_calculation")
@@ -339,6 +358,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         speed_est = AccurateSpeedEstimator()
         speed_est.add_speed_and_distance_to_tracks(tracks)
         _bench("speed_calculation", _t)
+        _check_memory_and_gc()
 
         # ── 7. 队伍颜色 + 球权检测 ────────────────────────────────────
         sm.update_status(session_id, "analyzing", progress=80, stage="team_assignment")

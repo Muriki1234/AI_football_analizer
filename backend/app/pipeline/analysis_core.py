@@ -179,6 +179,23 @@ def stream_video_chunks(video_path: str, chunk_size: int = 500):
     cap.release()
 
 
+def _check_memory_and_gc(threshold_pct: float = 85.0) -> float:
+    """检查内存使用率（%），超阈值时强制 GC。返回当前使用率（无 psutil 返回 -1）。"""
+    try:
+        import psutil, gc
+        mem = psutil.virtual_memory()
+        used_pct = mem.percent
+        used_mb  = mem.used  // 1024 // 1024
+        total_mb = mem.total // 1024 // 1024
+        print(f"[MEM] RAM {used_pct:.1f}%  {used_mb}MB / {total_mb}MB")
+        if used_pct > threshold_pct:
+            print(f"[MEM] ⚠ usage > {threshold_pct:.0f}% — forcing gc.collect()")
+            gc.collect()
+        return used_pct
+    except ImportError:
+        return -1.0
+
+
 def read_frames_at_indices(video_path: str, indices) -> dict:
     """Read specific frames from video by seeking. Returns {frame_idx: frame} dict."""
     indices = sorted(set(int(i) for i in indices if i >= 0))
@@ -395,11 +412,21 @@ class Tracker:
                             tracks[obj][fi][tid] = {"bbox": ib}
 
     def get_object_tracks_streamed(self, video_path: str, total_frames: int,
-                                    chunk_size: int = 500) -> dict:
-        """流式版本：分块处理视频，ByteTrack 跨块保持连续状态。"""
+                                    chunk_size: int = 500,
+                                    progress_callback=None) -> dict:
+        """流式版本：分块处理视频，ByteTrack 跨块保持连续状态。
+
+        Args:
+            progress_callback: 每个 chunk 完成后调用，签名：
+                               callback(ratio: float, frames_done: int,
+                                        frames_total: int, eta_sec: float)
+        """
+        import time as _time
         tracks = {"players":  [{} for _ in range(total_frames)],
                   "referees": [{} for _ in range(total_frames)],
                   "ball":     [{} for _ in range(total_frames)]}
+
+        t_start = _time.perf_counter()
 
         for start_idx, chunk in stream_video_chunks(video_path, chunk_size):
             det_local = list(range(0, len(chunk), YOLO_DETECTION_STRIDE))
@@ -419,6 +446,19 @@ class Tracker:
                     break
                 ds = sv.Detections.from_ultralytics(det_dict[local_idx])
                 self._process_detections(ds, global_idx, tracks)
+
+            # ── 进度汇报 + ETA ─────────────────────────────────────────
+            frames_done = min(start_idx + len(chunk), total_frames)
+            ratio = frames_done / total_frames if total_frames > 0 else 1.0
+            elapsed = _time.perf_counter() - t_start
+            eta = (elapsed / ratio) * (1.0 - ratio) if ratio > 0 else 0.0
+            print(f"[YOLO] {frames_done}/{total_frames} frames "
+                  f"({ratio*100:.0f}%)  elapsed {elapsed:.0f}s  ETA {eta:.0f}s")
+            if progress_callback:
+                progress_callback(ratio, frames_done, total_frames, eta)
+
+            # ── 内存监控 + 必要时 GC ───────────────────────────────────
+            _check_memory_and_gc()
 
         self._interpolate_tracks(tracks, total_frames)
         return tracks
