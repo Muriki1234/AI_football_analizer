@@ -692,10 +692,10 @@ class ViewTransformer:
     # KP 15: field center (6000, 3500) — not in sports library, added manually.
     SOCCANA_PITCH_COORDS = {
         0:  (0,     0),      # sideline_top_left
-        1:  (0,     1945),   # big_rect_left_top_pt1
-        2:  (2015,  1945),   # big_rect_left_top_pt2
-        3:  (0,     5055),   # big_rect_left_bottom_pt1
-        4:  (2015,  5055),   # big_rect_left_bottom_pt2
+        1:  (0,     1450),   # big_rect_left_top_pt1
+        2:  (2015,  1450),   # big_rect_left_top_pt2
+        3:  (0,     5550),   # big_rect_left_bottom_pt1
+        4:  (2015,  5550),   # big_rect_left_bottom_pt2
         5:  (0,     2584),   # small_rect_left_top_pt1
         6:  (550,   2584),   # small_rect_left_top_pt2
         7:  (0,     4416),   # small_rect_left_bottom_pt1
@@ -704,22 +704,22 @@ class ViewTransformer:
         # 10: left_semicircle_right — 跳过，影响homography精度
         11: (6000,  0),      # center_line_top
         12: (6000,  7000),   # center_line_bottom
-        13: (6000,  2085),   # center_circle_top
-        14: (6000,  4915),   # center_circle_bottom
+        13: (6000,  2585),   # center_circle_top
+        14: (6000,  4415),   # center_circle_bottom
         # 15: field_center — 跳过，影响homography精度
         16: (12000, 0),      # sideline_top_right
-        17: (12000, 1945),   # big_rect_right_top_pt1
-        18: (9985,  1945),   # big_rect_right_top_pt2
-        19: (12000, 5055),   # big_rect_right_bottom_pt1
-        20: (9985,  5055),   # big_rect_right_bottom_pt2
+        17: (12000, 1450),   # big_rect_right_top_pt1
+        18: (9985,  1450),   # big_rect_right_top_pt2
+        19: (12000, 5550),   # big_rect_right_bottom_pt1
+        20: (9985,  5550),   # big_rect_right_bottom_pt2
         21: (12000, 2584),   # small_rect_right_top_pt1
         22: (11450, 2584),   # small_rect_right_top_pt2
         23: (12000, 4416),   # small_rect_right_bottom_pt1
         24: (11450, 4416),   # small_rect_right_bottom_pt2
         25: (12000, 7000),   # sideline_bottom_right
         # 26: right_semicircle_left — 跳过，影响homography精度
-        27: (4085,  3500),   # center_circle_left
-        28: (7915,  3500),   # center_circle_right
+        27: (5085,  3500),   # center_circle_left
+        28: (6915,  3500),   # center_circle_right
     }
 
     def __init__(self):
@@ -746,7 +746,7 @@ class ViewTransformer:
                     target = self.SOCCANA_PITCH_COORDS.get(kid)
                     if target is not None:
                         src0.append(pos); dst0.append(target)
-                if len(src0) >= 6:
+                if len(src0) >= 8:
                     self._last_transformer = SportsViewTransformer(
                         source=np.array(src0), target=np.array(dst0))
                     break
