@@ -55,7 +55,7 @@ except ImportError:
     HAS_SPORTS = False
 
 # ── 配置 ────────────────────────────────────────────────────────────────────
-YOLO_DETECTION_STRIDE = 1    # 每帧都检测（不跳帧）
+YOLO_DETECTION_STRIDE = 2    # 每2帧检测一次
 YOLO_BATCH_SIZE       = 60   # 单批处理帧数（60 = 更好GPU利用率）
 KEYPOINT_STRIDE       = 20   # 每20帧检测一次关键点（提升小地图精度，原为60）
 MINIMAP_SMOOTH_WINDOW = 25
@@ -736,6 +736,20 @@ class ViewTransformer:
 
     def add_transformed_position_to_tracks(self, tracks: dict, kps_list: list):
         if not HAS_SPORTS: return
+
+        # 提前热身：扫描所有帧，找到第一个可靠 homography（≥6 个关键点）
+        # 作为初始 fallback，避免开头几秒因 _last_transformer=None 被跳过
+        if self._last_transformer is None:
+            for kps in kps_list:
+                src0, dst0 = [], []
+                for kid, pos in kps.items():
+                    target = self.SOCCANA_PITCH_COORDS.get(kid)
+                    if target is not None:
+                        src0.append(pos); dst0.append(target)
+                if len(src0) >= 6:
+                    self._last_transformer = SportsViewTransformer(
+                        source=np.array(src0), target=np.array(dst0))
+                    break
 
         for fnum, kps in enumerate(kps_list):
             src, dst = [], []
