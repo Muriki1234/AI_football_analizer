@@ -258,5 +258,17 @@ def get_video(video_id):
     session = video_sessions[video_id]
     directory = os.path.dirname(session['filepath'])
     filename = os.path.basename(session['filepath'])
-    
+
     return send_from_directory(directory, filename)
+
+
+@api.route('/api/benchmark', methods=['GET'])
+def get_benchmark():
+    """Return the latest benchmark.log content — readable from a Colab cell."""
+    from pathlib import Path
+    log_path = Path(__file__).resolve().parents[2] / "benchmark.log"
+    if not log_path.exists():
+        return jsonify({"lines": [], "raw": "", "message": "benchmark.log not found yet"}), 200
+    raw = log_path.read_text()
+    lines = [l for l in raw.splitlines() if l.strip()]
+    return jsonify({"lines": lines, "raw": raw}), 200
