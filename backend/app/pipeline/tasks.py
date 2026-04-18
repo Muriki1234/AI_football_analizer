@@ -17,9 +17,11 @@ tasks.py - 所有后台任务实现（Flask 线程版）
 import os
 import subprocess
 import pickle
+import threading
 import traceback
+from collections import OrderedDict
+from contextlib import contextmanager
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
 
 # Try-wrapped heavy imports
 try:
@@ -93,6 +95,49 @@ SAMURAI_SCRIPT      = os.environ.get("SAMURAI_SCRIPT", "samurai/run_samurai.py")
 SHORT_VIDEO_FRAMES = 3000  # ≤3000 frames (~2min@24fps): read once into RAM for speed
                             # >3000 frames: use streaming to avoid OOM
 
+# SAMURAI 插值：缺口 ≤ 30 帧线性插，超过则保留 NaN 由下游跳过
+MAX_INTERP_GAP_FRAMES = 30
+
+
+@contextmanager
+def _video_capture(path: str):
+    """cv2.VideoCapture 上下文管理器，保证异常也释放句柄"""
+    cap = cv2.VideoCapture(path)
+    try:
+        yield cap
+    finally:
+        cap.release()
+
+
+def _atomic_pickle_dump(obj, target_path: Path) -> None:
+    """原子写 pickle：先写 .tmp → fsync → os.replace"""
+    target_path = Path(target_path)
+    tmp_path = target_path.with_suffix(target_path.suffix + ".tmp")
+    with open(tmp_path, "wb") as f:
+        pickle.dump(obj, f)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, target_path)
+
+
+def _probe_fps(path: str):
+    """用 ffprobe 获取 fps（VideoCapture 返回 0 时的 fallback）"""
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "0", "-select_streams", "v:0",
+             "-show_entries", "stream=r_frame_rate",
+             "-of", "csv=p=0", path],
+            capture_output=True, text=True, timeout=10
+        ).stdout.strip()
+        if "/" in out:
+            num, den = out.split("/")
+            den_f = float(den)
+            return float(num) / den_f if den_f else None
+    except Exception:
+        return None
+    return None
+
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # 阶段 1：SAMURAI 追踪
@@ -125,13 +170,12 @@ def run_samurai_tracking(session_id: str, session: dict,
         RESIZE_FACTOR = 0.5
         SKIP_STEP = 10
         
-        cap = cv2.VideoCapture(video_path)
-        orig_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        orig_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        total_orig_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        with _video_capture(video_path) as cap:
+            orig_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            orig_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            total_orig_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         if total_orig_frames <= 0:
             total_orig_frames = 1500
-        cap.release()
 
         new_w, new_h = int(orig_w * RESIZE_FACTOR), int(orig_h * RESIZE_FACTOR)
 
@@ -210,14 +254,22 @@ def run_samurai_tracking(session_id: str, session: dict,
             if f_idx <= end_index:
                 df.loc[f_idx] = box
         
-        df = df.astype(float).interpolate(method='linear', limit_direction='both').bfill().ffill()
-        
+        # 只在短缺口内线性插值；长缺口（>MAX_INTERP_GAP_FRAMES）保留 NaN，
+        # 下游 `if i not in bboxes_dict: continue` 自动跳过，避免"幻觉轨迹"
+        df = df.astype(float).interpolate(
+            method='linear',
+            limit=MAX_INTERP_GAP_FRAMES,
+            limit_direction='both',
+        )
+
         bboxes_dict = {}
         for f_idx, row in df.iterrows():
+            if pd.isna(row['x']) or pd.isna(row['y']):
+                continue
             bboxes_dict[f_idx] = (row['x'], row['y'], row['w'], row['h'])
 
-        with open(cache_path, "wb") as f:
-            pickle.dump({"bboxes": bboxes_dict}, f)
+        # 原子写：tmp → fsync → rename，避免 partial pickle 被下游读到
+        _atomic_pickle_dump({"bboxes": bboxes_dict}, cache_path)
 
         # 清理中间帧目录（12,960 jpg ≈ 650MB，不清会占满 Colab /content）
         import shutil
@@ -270,14 +322,22 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
 
         # ── 1. 读取视频元数据（不加载帧到内存）────────────────────────
         sm.update_status(session_id, "analyzing", progress=5, stage="loading_video")
-        cap_meta = cv2.VideoCapture(video_path)
-        fps    = cap_meta.get(cv2.CAP_PROP_FPS) or 24
-        total  = int(cap_meta.get(cv2.CAP_PROP_FRAME_COUNT))
-        _vid_w = int(cap_meta.get(cv2.CAP_PROP_FRAME_WIDTH))  or 1920
-        _vid_h = int(cap_meta.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 1080
-        cap_meta.release()
+        with _video_capture(video_path) as cap_meta:
+            raw_fps = cap_meta.get(cv2.CAP_PROP_FPS)
+            total   = int(cap_meta.get(cv2.CAP_PROP_FRAME_COUNT))
+            _vid_w  = int(cap_meta.get(cv2.CAP_PROP_FRAME_WIDTH))  or 1920
+            _vid_h  = int(cap_meta.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 1080
+        # FPS fallback：容器/编解码器有时不报 fps（返回 0 或异常值），用 ffprobe 兜底
+        if not raw_fps or raw_fps <= 1 or raw_fps > 240:
+            raw_fps = _probe_fps(video_path) or 25.0
+        fps = float(raw_fps)
         if total <= 0:
             total = 1500
+        # 把真实 fps / 尺寸写入 session，下游按需任务不再 cap.get(FPS) 重开视频
+        sm.update_status(
+            session_id, "analyzing", progress=5, stage="loading_video",
+            video_fps=fps, video_width=_vid_w, video_height=_vid_h,
+        )
         print(f"[INFO] Video: {total} frames @ {fps:.1f}fps, {_vid_w}x{_vid_h}")
 
         with open(samurai_pkl, "rb") as f:
@@ -505,8 +565,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                 k: bgr_to_hex(v) for k, v in team_assigner.team_colors.items()
             },
         }
-        with open(tracks_cache, "wb") as f:
-            pickle.dump(cache_payload, f)
+        _atomic_pickle_dump(cache_payload, tracks_cache)
 
         sm.update_status(
             session_id, "analysis_done",
@@ -747,7 +806,7 @@ def run_speed_chart(session_id: str, session: dict, task_id: str, sm: SessionMan
         sm.update_task(session_id, task_id, status="running", progress=10)
         data = _load_cache(session)
         tracks, tracked_bboxes = data["tracks"], data["tracked_bboxes"]
-        cap = cv2.VideoCapture(session["video_path"]); fps = cap.get(cv2.CAP_PROP_FPS) or 24; cap.release()
+        fps = float(session.get("video_fps") or 25.0)
 
         speeds, distances, times = [], [], []
         for i in range(len(tracks["players"])):
@@ -831,7 +890,7 @@ def run_possession_stats(session_id: str, session: dict, task_id: str, sm: Sessi
         hex_colors   = data["team_colors_hex"]
 
         t1  = int(np.sum(team_control == 1))
-        cap = cv2.VideoCapture(session["video_path"]); fps = cap.get(cv2.CAP_PROP_FPS) or 24; cap.release()
+        fps = float(session.get("video_fps") or 25.0)
         t2  = int(np.sum(team_control == 2))
         neu = int(np.sum(team_control == 0))
         total = t1 + t2 + neu or 1
@@ -918,9 +977,7 @@ def run_minimap_replay(session_id: str, session: dict, task_id: str, sm: Session
 
         sm.update_task(session_id, task_id, progress=10)
 
-        cap = cv2.VideoCapture(session["video_path"])
-        fps = cap.get(cv2.CAP_PROP_FPS) or 24
-        cap.release()
+        fps = float(session.get("video_fps") or 25.0)
 
         # 预渲染球场底图（只算一次，后续每帧 copy — 核心加速点）
         pitch_bg = make_pitch_background()
@@ -947,35 +1004,37 @@ def run_minimap_replay(session_id: str, session: dict, task_id: str, sm: Session
             "-vcodec", "libx264", "-pix_fmt", "yuv420p",
             str(output_path)
         ]
-        proc = sp.Popen(ffmpeg_cmd, stdin=sp.PIPE,
-                        stdout=sp.DEVNULL, stderr=sp.DEVNULL)
-
-        # 写第一帧
-        proc.stdin.write(first_frame.tobytes())
-
-        # 流式渲染后续帧
-        for i in range(1, total_frames):
-            ball_info = tracks["ball"][i].get(1, {}) if i < len(tracks["ball"]) else {}
-            ball_mp = ball_info.get("position_minimap") if ball_info else None
-            if ball_mp:
-                ball_trail.append((ball_mp[0], ball_mp[1]))
-                if len(ball_trail) > 30:
-                    ball_trail.pop(0)
+        # with 语法：确保异常时也 wait()+kill 子进程（避免 zombie ffmpeg）
+        with sp.Popen(ffmpeg_cmd, stdin=sp.PIPE,
+                      stdout=sp.DEVNULL, stderr=sp.DEVNULL) as proc:
             try:
-                frame = render_minimap_frame(i, tracks, tracked_bboxes, team_control,
-                                              config, hex_t1, hex_t2,
-                                              ball_trail=list(ball_trail),
-                                              pitch_bg=pitch_bg, fps=fps)
-            except Exception:
-                frame = np.zeros((mh, mw, 3), dtype=np.uint8)
-            proc.stdin.write(frame.tobytes())
+                # 写第一帧
+                proc.stdin.write(first_frame.tobytes())
 
-            if i % 120 == 0:
-                pct = int(10 + (i / total_frames) * 85)
-                sm.update_task(session_id, task_id, progress=pct)
+                # 流式渲染后续帧
+                for i in range(1, total_frames):
+                    ball_info = tracks["ball"][i].get(1, {}) if i < len(tracks["ball"]) else {}
+                    ball_mp = ball_info.get("position_minimap") if ball_info else None
+                    if ball_mp:
+                        ball_trail.append((ball_mp[0], ball_mp[1]))
+                        if len(ball_trail) > 30:
+                            ball_trail.pop(0)
+                    try:
+                        frame = render_minimap_frame(i, tracks, tracked_bboxes, team_control,
+                                                      config, hex_t1, hex_t2,
+                                                      ball_trail=list(ball_trail),
+                                                      pitch_bg=pitch_bg, fps=fps)
+                    except Exception:
+                        frame = np.zeros((mh, mw, 3), dtype=np.uint8)
+                    proc.stdin.write(frame.tobytes())
 
-        proc.stdin.close()
-        proc.wait()
+                    if i % 120 == 0:
+                        pct = int(10 + (i / total_frames) * 85)
+                        sm.update_task(session_id, task_id, progress=pct)
+            finally:
+                if proc.stdin:
+                    try: proc.stdin.close()
+                    except Exception: pass
 
         print(f"[MEM] Minimap replay done — streamed {total_frames} frames")
         _finish_task(sm, session_id, task_id, output_path)
@@ -1040,48 +1099,51 @@ def run_full_replay(session_id: str, session: dict, task_id: str, sm: SessionMan
         team_assigner.team_colors = team_colors
         config = SoccerPitchConfiguration() if HAS_SPORTS else None
 
-        # Open video for sequential reading
-        cap = cv2.VideoCapture(session["video_path"])
-        fps = cap.get(cv2.CAP_PROP_FPS) or 24
-        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        # Open video for sequential reading (use context manager for safe cleanup)
+        fps = float(session.get("video_fps") or 25.0)
+        _vw = int(session.get("video_width")  or 0)
+        _vh = int(session.get("video_height") or 0)
 
-        output_path = sm.session_output_dir(session_id) / "full_replay.mp4"
+        with _video_capture(session["video_path"]) as cap:
+            w = _vw or int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            h = _vh or int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-        # Start ffmpeg pipe
-        ffmpeg_cmd = [
-            "ffmpeg", "-y",
-            "-f", "rawvideo", "-vcodec", "rawvideo",
-            "-s", f"{w}x{h}", "-pix_fmt", "bgr24",
-            "-r", str(fps), "-i", "pipe:",
-            "-vcodec", "libx264", "-pix_fmt", "yuv420p",
-            str(output_path)
-        ]
-        proc = sp.Popen(ffmpeg_cmd, stdin=sp.PIPE,
-                        stdout=sp.DEVNULL, stderr=sp.DEVNULL)
+            output_path = sm.session_output_dir(session_id) / "full_replay.mp4"
 
-        sm.update_task(session_id, task_id, progress=15)
+            # Start ffmpeg pipe
+            ffmpeg_cmd = [
+                "ffmpeg", "-y",
+                "-f", "rawvideo", "-vcodec", "rawvideo",
+                "-s", f"{w}x{h}", "-pix_fmt", "bgr24",
+                "-r", str(fps), "-i", "pipe:",
+                "-vcodec", "libx264", "-pix_fmt", "yuv420p",
+                str(output_path)
+            ]
+            with sp.Popen(ffmpeg_cmd, stdin=sp.PIPE,
+                          stdout=sp.DEVNULL, stderr=sp.DEVNULL) as proc:
+                try:
+                    sm.update_task(session_id, task_id, progress=15)
 
-        # Stream: read frame → render → write → discard
-        for i in range(total_frames):
-            ret, frame = cap.read()
-            if not ret:
-                frame = np.zeros((h, w, 3), dtype=np.uint8)
+                    # Stream: read frame → render → write → discard
+                    for i in range(total_frames):
+                        ret, frame = cap.read()
+                        if not ret:
+                            frame = np.zeros((h, w, 3), dtype=np.uint8)
 
-            # Render single frame (same logic as _render_single_frame_worker_full)
-            args = (i, frame, tracks, tracked_bboxes, team_control,
-                    team_assigner, tracker_obj, config, hex_t1, hex_t2)
-            _, rendered = _render_single_frame_worker_full(args)
+                        # Render single frame (same logic as _render_single_frame_worker_full)
+                        args = (i, frame, tracks, tracked_bboxes, team_control,
+                                team_assigner, tracker_obj, config, hex_t1, hex_t2)
+                        _, rendered = _render_single_frame_worker_full(args)
 
-            proc.stdin.write(rendered.tobytes())
+                        proc.stdin.write(rendered.tobytes())
 
-            if i % 60 == 0:
-                pct = int(15 + (i / total_frames) * 80)
-                sm.update_task(session_id, task_id, progress=pct)
-
-        proc.stdin.close()
-        proc.wait()
-        cap.release()
+                        if i % 60 == 0:
+                            pct = int(15 + (i / total_frames) * 80)
+                            sm.update_task(session_id, task_id, progress=pct)
+                finally:
+                    if proc.stdin:
+                        try: proc.stdin.close()
+                        except Exception: pass
 
         print(f"[MEM] Full replay done — streamed {total_frames} frames, no bulk load")
         _finish_task(sm, session_id, task_id, output_path)
@@ -1199,9 +1261,7 @@ def run_sprint_analysis(session_id: str, session: dict, task_id: str, sm: Sessio
         sm.update_task(session_id, task_id, status="running", progress=10)
         data = _load_cache(session)
         tracks, tracked_bboxes = data["tracks"], data["tracked_bboxes"]
-        cap = cv2.VideoCapture(session["video_path"])
-        fps = cap.get(cv2.CAP_PROP_FPS) or 24
-        cap.release()
+        fps = float(session.get("video_fps") or 25.0)
 
         SPRINT_KMH     = 25.0   # 冲刺速度阈值
         MIN_SPRINT_SEC = 2.0    # 最短持续时间
@@ -1527,12 +1587,11 @@ def _render_gemini_video(video_path: str, bboxes_dict: dict,
     try:
         import subprocess as _sp
 
-        cap = cv2.VideoCapture(video_path)
-        fps  = cap.get(cv2.CAP_PROP_FPS) or 24
-        w    = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h    = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
-        cap.release()
+        with _video_capture(video_path) as cap:
+            fps  = cap.get(cv2.CAP_PROP_FPS) or 24
+            w    = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            h    = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
 
         out_fps = max(1.0, fps / stride)
         total_out = (total_frames + stride - 1) // stride  # 预估输出帧数
@@ -1559,58 +1618,65 @@ def _render_gemini_video(video_path: str, bboxes_dict: dict,
             "-vcodec", "libx264", "-pix_fmt", "yuv420p", "-crf", "22",
             str(output_path),
         ]
-        encode_proc = _sp.Popen(encode_cmd, stdin=_sp.PIPE,
-                                stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+        # with 语法确保 encode_proc 异常退出也能 wait() 回收
+        with _sp.Popen(encode_cmd, stdin=_sp.PIPE,
+                       stdout=_sp.DEVNULL, stderr=_sp.DEVNULL) as encode_proc:
+            try:
+                # 先尝试 CUDA，失败重试 CPU
+                frame_size = w * h * 3
+                frames_written = 0
+                for use_cuda in (True, False):
+                    with _sp.Popen(_make_decode_cmd(use_cuda),
+                                   stdout=_sp.PIPE, stderr=_sp.DEVNULL) as decode_proc:
+                        try:
+                            frames_written = 0
+                            orig_idx       = 0   # 对应原始视频帧号
+                            ok = True
+                            while True:
+                                raw = decode_proc.stdout.read(frame_size)
+                                if len(raw) < frame_size:
+                                    break
+                                frame = np.frombuffer(raw, dtype=np.uint8).reshape((h, w, 3)).copy()
 
-        # 先尝试 CUDA，失败重试 CPU
-        frame_size = w * h * 3
-        for use_cuda in (True, False):
-            decode_proc = _sp.Popen(_make_decode_cmd(use_cuda),
-                                    stdout=_sp.PIPE, stderr=_sp.DEVNULL)
-            frames_written = 0
-            orig_idx       = 0   # 对应原始视频帧号
-            ok = True
-            while True:
-                raw = decode_proc.stdout.read(frame_size)
-                if len(raw) < frame_size:
-                    break
-                frame = np.frombuffer(raw, dtype=np.uint8).reshape((h, w, 3)).copy()
+                                # 叠加追踪框（bboxes_dict 已插值到每帧原始分辨率）
+                                if orig_idx in bboxes_dict:
+                                    bx, by, bw_, bh_ = bboxes_dict[orig_idx]
+                                    x1, y1 = int(bx), int(by)
+                                    x2, y2 = int(bx + bw_), int(by + bh_)
+                                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 4)
+                                    cv2.putText(frame, "TRACKED",
+                                                (x1, max(y1 - 10, 20)),
+                                                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
 
-                # 叠加追踪框（bboxes_dict 已插值到每帧原始分辨率）
-                if orig_idx in bboxes_dict:
-                    bx, by, bw_, bh_ = bboxes_dict[orig_idx]
-                    x1, y1 = int(bx), int(by)
-                    x2, y2 = int(bx + bw_), int(by + bh_)
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 4)
-                    cv2.putText(frame, "TRACKED",
-                                (x1, max(y1 - 10, 20)),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+                                # 时间戳左上角
+                                secs = orig_idx / fps
+                                cv2.putText(frame,
+                                            f"{int(secs // 60):02d}:{secs % 60:04.1f}",
+                                            (10, 36), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
 
-                # 时间戳左上角
-                secs = orig_idx / fps
-                cv2.putText(frame,
-                            f"{int(secs // 60):02d}:{secs % 60:04.1f}",
-                            (10, 36), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+                                try:
+                                    encode_proc.stdin.write(frame.tobytes())
+                                except BrokenPipeError:
+                                    ok = False
+                                    break
 
-                try:
-                    encode_proc.stdin.write(frame.tobytes())
-                except BrokenPipeError:
-                    ok = False
-                    break
-
-                frames_written += 1
-                orig_idx       += stride
-                if progress_cb and frames_written % 300 == 0:
-                    progress_cb(frames_written, total_out)
-
-            decode_proc.wait()
-            if ok and frames_written > 0:
-                break   # 成功，不需要重试 CPU
-            if use_cuda:
-                print("[AI_SUMMARY] CUDA decode failed, retrying with CPU...")
-
-        encode_proc.stdin.close()
-        encode_proc.wait()
+                                frames_written += 1
+                                orig_idx       += stride
+                                if progress_cb and frames_written % 300 == 0:
+                                    progress_cb(frames_written, total_out)
+                        finally:
+                            # with 块自动 wait()，这里显式关 stdout 便于立即回收
+                            if decode_proc.stdout:
+                                try: decode_proc.stdout.close()
+                                except Exception: pass
+                    if ok and frames_written > 0:
+                        break   # 成功，不需要重试 CPU
+                    if use_cuda:
+                        print("[AI_SUMMARY] CUDA decode failed, retrying with CPU...")
+            finally:
+                if encode_proc.stdin:
+                    try: encode_proc.stdin.close()
+                    except Exception: pass
 
         success = output_path.exists() and output_path.stat().st_size > 0
         print(f"[AI_SUMMARY] gemini_video: {frames_written} frames written, "
@@ -1664,9 +1730,7 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
         player_summary = session.get("player_summary", {})
         total_frames   = int(session.get("total_frames", 0))
 
-        cap = cv2.VideoCapture(session["video_path"])
-        fps = cap.get(cv2.CAP_PROP_FPS) or 24
-        cap.release()
+        fps = float(session.get("video_fps") or 25.0)
 
         t1  = int(np.sum(team_control == 1)) if team_control.size else 0
         t2  = int(np.sum(team_control == 2)) if team_control.size else 0
@@ -1828,7 +1892,9 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
 
 
 # ── 模块级 tracks.pkl 缓存（避免并发任务多次读 500MB）──────────────────────
-_TRACKS_CACHE: dict = {}   # {cache_path: data}
+# 多个按需任务（热力图/速度/小地图...）并发时会同时命中这里，需要锁防止重复加载。
+_TRACKS_CACHE: "OrderedDict[str, dict]" = OrderedDict()
+_TRACKS_CACHE_LOCK = threading.Lock()
 _TRACKS_CACHE_MAX = 2      # 最多缓存 2 个 session（Colab 单用户足够）
 
 
@@ -1836,12 +1902,15 @@ def _load_cache(session: dict) -> dict:
     cache_path = session.get("tracks_cache_path")
     if not cache_path or not Path(cache_path).exists():
         raise FileNotFoundError("tracks.pkl not found — global analysis may have failed")
-    if cache_path not in _TRACKS_CACHE:
-        if len(_TRACKS_CACHE) >= _TRACKS_CACHE_MAX:
-            _TRACKS_CACHE.clear()   # 超限时清空（简单 LRU）
-        with open(cache_path, "rb") as f:
-            _TRACKS_CACHE[cache_path] = pickle.load(f)
-    return _TRACKS_CACHE[cache_path]
+    with _TRACKS_CACHE_LOCK:
+        if cache_path not in _TRACKS_CACHE:
+            with open(cache_path, "rb") as f:
+                _TRACKS_CACHE[cache_path] = pickle.load(f)
+        # LRU：命中后移到末尾，超限时逐出最旧
+        _TRACKS_CACHE.move_to_end(cache_path)
+        while len(_TRACKS_CACHE) > _TRACKS_CACHE_MAX:
+            _TRACKS_CACHE.popitem(last=False)
+        return _TRACKS_CACHE[cache_path]
 
 
 def _find_matched_player(player_frame: dict, target_center: tuple,
