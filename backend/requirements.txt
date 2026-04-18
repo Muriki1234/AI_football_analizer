@@ -2,6 +2,10 @@ flask>=3.0.0
 flask-cors>=4.0.0
 python-dotenv>=1.0.0
 requests>=2.25.0
+# AI summary (Google Gemini)
+google-generativeai>=0.8.0
+# Memory monitoring
+psutil>=5.9.0
 # CV & ML
 opencv-python>=4.9.0
 ultralytics>=8.1.0

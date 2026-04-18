@@ -1437,6 +1437,173 @@ def _draw_defensive_line_chart(frame_data: list, penetrations: list,
     plt.close()
 
 
+# ── 3h. AI 总结（Gemini 多模态）──────────────────────────────────────────────
+
+def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionManager):
+    """
+    多模态 AI 战术分析：把 SAMURAI 标注视频 + 统计 JSON 送给 Gemini 生成报告。
+
+    工作流：
+      1. 加载 tracks.pkl（统计数据 + 分段 + 颜色）
+      2. 拼装统计 JSON（控球率 / 速度 / 分段 / 球员 summary）
+      3. 选择视频源：优先 samurai_temp.mp4（带追踪框），否则原视频
+      4. 上传视频到 Gemini Files API → 等待 ACTIVE
+      5. 调用 Gemini（多模态输入）生成 markdown 报告
+      6. 写入 task.result + 落盘 ai_summary.md
+    """
+    try:
+        import json
+        sm.update_task(session_id, task_id, status="running", progress=5,
+                       stage="loading_data")
+
+        # ── 1. 依赖检查 & 配置 ──
+        api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+        if not api_key:
+            raise RuntimeError("GEMINI_API_KEY not set in environment")
+        model_name = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
+
+        try:
+            import google.generativeai as genai
+        except ImportError as ie:
+            raise RuntimeError(
+                "google-generativeai not installed. "
+                "Run: pip install google-generativeai>=0.8.0") from ie
+
+        genai.configure(api_key=api_key)
+
+        # ── 2. 加载统计数据 ──
+        data           = _load_cache(session)
+        team_control   = np.array(data.get("team_control", []))
+        hex_colors     = data.get("team_colors_hex", {})
+        segments       = data.get("segments", [])
+        player_summary = session.get("player_summary", {})
+        total_frames   = int(session.get("total_frames", 0))
+
+        cap = cv2.VideoCapture(session["video_path"])
+        fps = cap.get(cv2.CAP_PROP_FPS) or 24
+        cap.release()
+
+        t1  = int(np.sum(team_control == 1)) if team_control.size else 0
+        t2  = int(np.sum(team_control == 2)) if team_control.size else 0
+        neu = int(np.sum(team_control == 0)) if team_control.size else 0
+        total_ctrl = t1 + t2 + neu or 1
+
+        # ── 3. 组织给 Gemini 的 JSON ──
+        stats_payload = {
+            "video": {
+                "total_frames":   total_frames,
+                "duration_sec":   round(total_frames / fps, 1) if fps else 0,
+                "fps":            round(fps, 1),
+            },
+            "possession": {
+                "team1_pct":      round(t1  / total_ctrl * 100, 1),
+                "team2_pct":      round(t2  / total_ctrl * 100, 1),
+                "neutral_pct":    round(neu / total_ctrl * 100, 1),
+                "team1_color":    hex_colors.get(1, "#3498db"),
+                "team2_color":    hex_colors.get(2, "#e74c3c"),
+                "switches":       int(data.get("possession_switches", 0)),
+            },
+            "segments":       segments,
+            "tracked_player": player_summary,
+        }
+        stats_json = json.dumps(stats_payload, ensure_ascii=False, indent=2)
+
+        sm.update_task(session_id, task_id, progress=15, stage="selecting_video")
+
+        # ── 4. 选视频源：优先 SAMURAI 带框视频 ──
+        output_dir = sm.session_output_dir(session_id)
+        samurai_annotated = output_dir / "samurai_temp.mp4"
+        if samurai_annotated.exists() and samurai_annotated.stat().st_size > 0:
+            video_for_ai = str(samurai_annotated)
+            video_source = "samurai_annotated"
+        else:
+            video_for_ai = session["video_path"]
+            video_source = "raw_video"
+        print(f"[AI_SUMMARY] Using video source: {video_source} → {video_for_ai}")
+
+        # ── 5. 上传到 Gemini Files API（异步，需轮询）──
+        sm.update_task(session_id, task_id, progress=25, stage="uploading_video")
+        uploaded = genai.upload_file(path=video_for_ai, mime_type="video/mp4")
+        print(f"[AI_SUMMARY] Uploaded as {uploaded.name}, waiting for ACTIVE...")
+
+        import time as _time
+        wait_start = _time.perf_counter()
+        while uploaded.state.name == "PROCESSING":
+            _time.sleep(2)
+            uploaded = genai.get_file(uploaded.name)
+            elapsed = _time.perf_counter() - wait_start
+            if elapsed > 300:  # 5min 上限
+                raise RuntimeError(f"Gemini file processing timeout ({elapsed:.0f}s)")
+            sm.update_task(session_id, task_id, progress=25 + min(30, int(elapsed / 2)),
+                           stage=f"gemini_processing_{int(elapsed)}s")
+
+        if uploaded.state.name != "ACTIVE":
+            raise RuntimeError(f"Gemini file failed to activate: {uploaded.state.name}")
+        print(f"[AI_SUMMARY] File ACTIVE after {_time.perf_counter() - wait_start:.1f}s")
+
+        # ── 6. 组 prompt + 调用 Gemini ──
+        sm.update_task(session_id, task_id, progress=70, stage="gemini_reasoning")
+
+        system_text = (
+            "你是一个专业足球战术分析师。视频中的高亮框是正在被追踪的核心球员。"
+            "结合以下统计数据和视频画面，生成一份**中文 Markdown 报告**，"
+            "包含以下章节（严格按顺序、标题用 ## 二级标题）：\n\n"
+            "## 比赛概览\n"
+            "简述双方控球对比、关键跑动数据、比赛节奏。\n\n"
+            "## 被追踪球员分析\n"
+            "重点分析视频中带高亮框的那名球员：跑位、速度爆发、控球、影响力。\n\n"
+            "## 战术观察\n"
+            "阵型特征、进攻模式、防守组织，基于画面实际观察。\n\n"
+            "## 改进建议\n"
+            "3 条具体可执行的训练/战术建议。\n\n"
+            "要求：语言简练，数据引用具体，不要泛泛而谈。"
+        )
+
+        prompt_parts = [
+            uploaded,
+            f"{system_text}\n\n## 统计数据\n```json\n{stats_json}\n```\n\n请生成报告："
+        ]
+
+        model = genai.GenerativeModel(model_name)
+        response = model.generate_content(
+            prompt_parts,
+            generation_config={
+                "temperature":      0.4,
+                "top_p":            0.9,
+                "max_output_tokens": 2048,
+            },
+            request_options={"timeout": 600},
+        )
+
+        report_md = (response.text or "").strip()
+        if not report_md:
+            raise RuntimeError("Gemini returned empty response")
+
+        # ── 7. 落盘 + 完成任务 ──
+        sm.update_task(session_id, task_id, progress=95, stage="saving_report")
+        report_path = output_dir / "ai_summary.md"
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write(report_md)
+
+        # 尝试清理远端文件（不影响结果）
+        try:
+            genai.delete_file(uploaded.name)
+        except Exception:
+            pass
+
+        result_data = {
+            "report_markdown": report_md,
+            "video_source":    video_source,
+            "model":           model_name,
+            "char_count":      len(report_md),
+        }
+        _finish_task(sm, session_id, task_id, report_path, result=result_data)
+
+    except Exception as exc:
+        sm.update_task(session_id, task_id, status="failed", error=str(exc))
+        _log_error("ai_summary", session_id, exc)
+
+
 def _load_cache(session: dict) -> dict:
     cache_path = session.get("tracks_cache_path")
     if not cache_path or not Path(cache_path).exists():

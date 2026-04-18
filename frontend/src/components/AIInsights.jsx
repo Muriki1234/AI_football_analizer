@@ -1,53 +1,103 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { HiSparkles, HiDocumentArrowDown, HiShare } from 'react-icons/hi2';
+import { HiSparkles, HiDocumentArrowDown, HiExclamationCircle } from 'react-icons/hi2';
+import { generateFeature, pollTaskStatus } from '../services/api';
 import './AIInsights.css';
 
-const REPORT_TEXT = `## Tactical Analysis — Marcus R. (#10)
+const STAGE_LABELS = {
+    loading_data:        '加载统计数据...',
+    selecting_video:     '选择视频源...',
+    uploading_video:     '上传视频到 Gemini...',
+    gemini_reasoning:    'Gemini 正在分析比赛...',
+    saving_report:       '保存报告...',
+};
 
-**Positioning:** Excellent positional awareness in the attacking third. Consistently finds space between the opposition's midfield and defensive lines.
+function stageLabel(stage) {
+    if (!stage) return 'AI 正在分析...';
+    if (STAGE_LABELS[stage]) return STAGE_LABELS[stage];
+    if (stage.startsWith('gemini_processing_')) {
+        const sec = stage.split('_').pop().replace('s', '');
+        return `Gemini 处理视频中 ${sec}s...`;
+    }
+    return stage;
+}
 
-**Sprint Burst Patterns:** 3 key sprints recorded in the 25th, 55th, and 75th minutes, each exceeding 30 km/h. Recovery time between sprints is within optimal range (< 45 seconds).
+export default function AIInsights({ sessionId }) {
+    const [phase, setPhase]           = useState('idle'); // idle | running | streaming | done | error
+    const [progress, setProgress]     = useState(0);
+    const [stage, setStage]           = useState('');
+    const [errorMsg, setErrorMsg]     = useState(null);
+    const [fullText, setFullText]     = useState('');
+    const [displayedText, setShown]   = useState('');
 
-**Improvement Areas:**
-1. **Defensive Transition:** When possession is lost, player takes an average of 3.2 seconds to begin pressing, compared to the team's ideal of 2.0 seconds. Recommend drills focused on reaction to lost possession.
-2. **Left-side Coverage:** 78% of runs are through the right channel. Introducing training that encourages left-side movement will create better balance.
-3. **Endurance Optimization:** Performance intensity drops by ~18% after the 70th minute. A targeted high-intensity interval training (HIIT) program is recommended.
-
-**Overall Rating:** 8.2 / 10 — Above average performance with clear areas for tactical development.`;
-
-export default function AIInsights() {
-    const [generating, setGenerating] = useState(false);
-    const [displayedText, setDisplayedText] = useState('');
-    const [done, setDone] = useState(false);
-    const indexRef = useRef(0);
+    const indexRef     = useRef(0);
     const containerRef = useRef(null);
 
-    const generate = () => {
-        setGenerating(true);
-        setDisplayedText('');
-        setDone(false);
+    // ── 触发生成 ─────────────────────────────────────────────────────
+    const generate = async () => {
+        if (!sessionId) {
+            setErrorMsg('session_id missing');
+            setPhase('error');
+            return;
+        }
+        setPhase('running');
+        setProgress(0);
+        setStage('');
+        setErrorMsg(null);
+        setFullText('');
+        setShown('');
         indexRef.current = 0;
+
+        try {
+            const { task_id } = await generateFeature(sessionId, 'ai_summary');
+            const task = await pollTaskStatus(sessionId, task_id, (t) => {
+                if (typeof t.progress === 'number') setProgress(t.progress);
+                if (t.stage) setStage(t.stage);
+            });
+            const md = task?.result?.report_markdown || '';
+            if (!md) throw new Error('Empty report');
+            setFullText(md);
+            setPhase('streaming');
+        } catch (e) {
+            console.error('[AIInsights] generate failed:', e);
+            setErrorMsg(e.message || String(e));
+            setPhase('error');
+        }
     };
 
+    // ── 打字机：full → displayed ──────────────────────────────────────
     useEffect(() => {
-        if (!generating) return;
-        const interval = setInterval(() => {
-            indexRef.current += 3;
-            if (indexRef.current >= REPORT_TEXT.length) {
-                setDisplayedText(REPORT_TEXT);
-                setDone(true);
-                setGenerating(false);
-                clearInterval(interval);
+        if (phase !== 'streaming' || !fullText) return;
+        const tick = setInterval(() => {
+            indexRef.current += 4;
+            if (indexRef.current >= fullText.length) {
+                setShown(fullText);
+                setPhase('done');
+                clearInterval(tick);
             } else {
-                setDisplayedText(REPORT_TEXT.slice(0, indexRef.current));
+                setShown(fullText.slice(0, indexRef.current));
             }
             if (containerRef.current) {
                 containerRef.current.scrollTop = containerRef.current.scrollHeight;
             }
-        }, 12);
-        return () => clearInterval(interval);
-    }, [generating]);
+        }, 15);
+        return () => clearInterval(tick);
+    }, [phase, fullText]);
+
+    // ── 导出 MD ──────────────────────────────────────────────────────
+    const exportMarkdown = () => {
+        const blob = new Blob([fullText], { type: 'text/markdown;charset=utf-8' });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href     = url;
+        a.download = `ai_summary_${sessionId || 'report'}.md`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+    };
+
+    const isBusy = phase === 'running';
 
     return (
         <motion.div
@@ -58,11 +108,11 @@ export default function AIInsights() {
         >
             <div className="ai-panel__header">
                 <HiSparkles className="ai-panel__sparkle" />
-                <h3>AI Insights</h3>
+                <h3>AI Insights <span className="ai-panel__badge">Gemini 1.5</span></h3>
             </div>
 
             <AnimatePresence mode="wait">
-                {!displayedText && !generating ? (
+                {phase === 'idle' && (
                     <motion.div
                         key="empty"
                         className="ai-panel__empty"
@@ -70,12 +120,34 @@ export default function AIInsights() {
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
                     >
-                        <p>Click below to generate an AI-powered tactical report.</p>
-                        <button className="btn btn-primary" onClick={generate}>
+                        <p>点击下方按钮，让 AI 结合追踪视频 + 数据生成战术分析报告。</p>
+                        <button className="btn btn-primary" onClick={generate} disabled={!sessionId}>
                             <HiSparkles /> Generate Report
                         </button>
                     </motion.div>
-                ) : (
+                )}
+
+                {phase === 'running' && (
+                    <motion.div
+                        key="loading"
+                        className="ai-panel__empty"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                    >
+                        <p>{stageLabel(stage)}</p>
+                        <div style={{ marginTop: 12, width: '100%', background: '#2a2a3a',
+                                       borderRadius: 6, height: 6, overflow: 'hidden' }}>
+                            <div style={{
+                                width: `${progress}%`, height: '100%',
+                                background: 'linear-gradient(90deg, #00e59b, #3498db)',
+                                transition: 'width 0.3s ease'
+                            }}/>
+                        </div>
+                        <p style={{ marginTop: 8, fontSize: 12, opacity: 0.7 }}>{progress}%</p>
+                    </motion.div>
+                )}
+
+                {(phase === 'streaming' || phase === 'done') && (
                     <motion.div
                         key="report"
                         initial={{ opacity: 0 }}
@@ -83,23 +155,39 @@ export default function AIInsights() {
                     >
                         <div className="ai-panel__report" ref={containerRef}>
                             <pre className="ai-panel__text">{displayedText}</pre>
-                            {generating && <span className="ai-panel__cursor" />}
+                            {phase === 'streaming' && <span className="ai-panel__cursor" />}
                         </div>
 
-                        {done && (
+                        {phase === 'done' && (
                             <motion.div
                                 className="ai-panel__actions"
                                 initial={{ opacity: 0, y: 10 }}
                                 animate={{ opacity: 1, y: 0 }}
                             >
-                                <button className="btn btn-secondary">
-                                    <HiDocumentArrowDown /> Export PDF
+                                <button className="btn btn-secondary" onClick={exportMarkdown}>
+                                    <HiDocumentArrowDown /> Export MD
                                 </button>
-                                <button className="btn btn-secondary">
-                                    <HiShare /> Share
+                                <button className="btn btn-secondary" onClick={generate}>
+                                    <HiSparkles /> Regenerate
                                 </button>
                             </motion.div>
                         )}
+                    </motion.div>
+                )}
+
+                {phase === 'error' && (
+                    <motion.div
+                        key="error"
+                        className="ai-panel__empty"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                    >
+                        <p style={{ color: '#e74c3c', display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <HiExclamationCircle /> {errorMsg}
+                        </p>
+                        <button className="btn btn-primary" onClick={generate}>
+                            <HiSparkles /> Retry
+                        </button>
                     </motion.div>
                 )}
             </AnimatePresence>

@@ -137,6 +137,7 @@ export const generateFeature = async (sessionId, feature) => {
             full_replay:      () => colab.generateFullReplay(sessionId),
             sprint_analysis:  () => colab.generateSprintAnalysis(sessionId),
             defensive_line:   () => colab.generateDefensiveLine(sessionId),
+            ai_summary:       () => colab.generateAiSummary(sessionId),
         };
         const fn = methods[feature];
         if (!fn) throw new Error(`Unknown feature: ${feature}`);

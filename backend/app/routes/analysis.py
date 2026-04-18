@@ -190,6 +190,16 @@ def generate_defensive_line(session_id: str):
     return jsonify({'task_id': task_id, 'status': 'queued'}), 200
 
 
+@analysis.route('/api/<session_id>/generate/ai_summary', methods=['POST'])
+def generate_ai_summary(session_id: str):
+    """Gemini 多模态战术分析报告（带追踪框视频 + 统计 JSON）"""
+    session, err = _require_analysis_done(session_id)
+    if err: return err
+    task_id = sm.create_task(session_id, 'ai_summary')
+    _fire_thread(tasks.run_ai_summary, session_id, session, task_id, sm)
+    return jsonify({'task_id': task_id, 'status': 'queued'}), 200
+
+
 # ── Status & Summary ─────────────────────────────────────────────────────────
 
 _STAGE_LABELS = {
@@ -213,7 +223,7 @@ def _get_available_features(session: dict) -> list:
     status = session['status']
     if status == 'analysis_done':
         return ['heatmap', 'speed_chart', 'possession', 'minimap_replay', 'full_replay',
-                'sprint_analysis', 'defensive_line', 'summary']
+                'sprint_analysis', 'defensive_line', 'ai_summary', 'summary']
     if status == 'tracking_done':
         return ['analyze']
     if status == 'uploaded':

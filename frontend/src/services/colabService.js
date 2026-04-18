@@ -201,6 +201,12 @@ async function generateDefensiveLine(sessionId) {
   return data.task_id
 }
 
+/** Gemini 多模态 AI 战术报告，返回 task_id */
+async function generateAiSummary(sessionId) {
+  const { data } = await http.post(`/api/${sessionId}/generate/ai_summary`)
+  return data.task_id
+}
+
 /**
  * 查询任务状态
  * @returns {{ status, progress, file_path, url, result, error }}
@@ -420,6 +426,7 @@ const colabService = {
   generateFullReplay,
   generateSprintAnalysis,
   generateDefensiveLine,
+  generateAiSummary,
   getTask,
   getSummary,
   getFileUrl,

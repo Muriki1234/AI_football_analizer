@@ -13,6 +13,7 @@ import {
 import colab from '../services/colabService';
 import StepNav from '../components/StepNav';
 import VideoOverlayPlayer from '../components/VideoOverlayPlayer';
+import AIInsights from '../components/AIInsights';
 import './Dashboard.css';
 
 // Feature cards config (full_replay 已移除，改用 Canvas 实时播放)
@@ -313,6 +314,18 @@ export default function Dashboard() {
                     );
                 })}
             </div>
+
+            {/* AI Insights — Gemini 多模态战术分析，仅 analysis 完成后展示 */}
+            {isPipelineDone && (
+                <motion.div
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.3 }}
+                    style={{ marginTop: '2rem' }}
+                >
+                    <AIInsights sessionId={sessionId} />
+                </motion.div>
+            )}
 
             {/* Footer */}
             <motion.div className="dashboard__actions-footer" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }}>
