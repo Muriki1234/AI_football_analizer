@@ -1321,109 +1321,179 @@ class SmartBallPossessionDetector:
 # render_minimap_frame  ← 小地图回放专用渲染函数
 # ═══════════════════════════════════════════════════════════════════════
 
+# ── 纯 OpenCV 小地图渲染（替代 sports lib，速度快 10-20x）────────────────
+
+_MM_W      = 840   # 输出宽度（像素）
+_MM_H      = 560   # 输出高度（像素）
+_MM_MARGIN = 40    # 球场边距（像素）
+_PITCH_LEN = 105.0 # 球场长度（米）
+_PITCH_WID = 68.0  # 球场宽度（米）
+
+
+def _mm_p2px(pos, fps_w=_MM_W, fps_h=_MM_H, margin=_MM_MARGIN):
+    """将球场坐标（米, 0-105 × 0-68）转换为像素坐标。"""
+    pw = fps_w - 2 * margin
+    ph = fps_h - 2 * margin
+    px = margin + int(float(pos[0]) / _PITCH_LEN * pw)
+    py = margin + int(float(pos[1]) / _PITCH_WID * ph)
+    return (px, py)
+
+
+def _hex_to_bgr(hex_str: str) -> tuple:
+    """'#RRGGBB' → (B, G, R) for OpenCV."""
+    h = hex_str.lstrip('#')
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return (b, g, r)
+
+
+def make_pitch_background(width=_MM_W, height=_MM_H, margin=_MM_MARGIN) -> np.ndarray:
+    """
+    纯 OpenCV 绘制标准足球场底图（只需生成一次，后续每帧 copy）。
+    坐标系：(0,0)=左上角球门线，(105,68)=右下角球门线。
+    """
+    bg = np.full((height, width, 3), (34, 120, 34), dtype=np.uint8)  # 绿草地
+
+    def p(x, y):  # 米 → 像素（简写）
+        return _mm_p2px((x, y), width, height, margin)
+
+    W = (255, 255, 255)  # 白色线条
+    LT = 2               # 线宽
+
+    # ── 外框 ──
+    cv2.rectangle(bg, p(0, 0), p(105, 68), W, LT)
+
+    # ── 中线 ──
+    cv2.line(bg, p(52.5, 0), p(52.5, 68), W, LT)
+
+    # ── 中圆 ──
+    cx, cy = p(52.5, 34)
+    r_px = int(9.15 / _PITCH_LEN * (width - 2 * margin))
+    cv2.circle(bg, (cx, cy), r_px, W, LT)
+    cv2.circle(bg, (cx, cy), 4, W, -1)
+
+    # ── 禁区（左、右）──
+    cv2.rectangle(bg, p(0, 13.84),  p(16.5, 54.16), W, LT)
+    cv2.rectangle(bg, p(88.5, 13.84), p(105, 54.16), W, LT)
+
+    # ── 小禁区 ──
+    cv2.rectangle(bg, p(0, 24.84),  p(5.5, 43.16), W, LT)
+    cv2.rectangle(bg, p(99.5, 24.84), p(105, 43.16), W, LT)
+
+    # ── 点球点 ──
+    cv2.circle(bg, p(11, 34), 4, W, -1)
+    cv2.circle(bg, p(94, 34), 4, W, -1)
+
+    # ── 点球弧（只画禁区外的部分）──
+    cv2.ellipse(bg, p(11, 34), (r_px, r_px), 0, -53, 53, W, LT)
+    cv2.ellipse(bg, p(94, 34), (r_px, r_px), 0, 127, 233, W, LT)
+
+    # ── 角球弧 ──
+    cr = int(1.0 / _PITCH_LEN * (width - 2 * margin))
+    cv2.ellipse(bg, p(0,   0),  (cr, cr), 0,   0,  90, W, LT)
+    cv2.ellipse(bg, p(105, 0),  (cr, cr), 0,  90, 180, W, LT)
+    cv2.ellipse(bg, p(0,  68),  (cr, cr), 0, 270, 360, W, LT)
+    cv2.ellipse(bg, p(105, 68), (cr, cr), 0, 180, 270, W, LT)
+
+    return bg
+
+
 def render_minimap_frame(frame_idx: int, tracks: dict,
                          tracked_bboxes: dict, team_control: np.ndarray,
                          config, hex_t1: str, hex_t2: str,
-                         ball_trail: list = None) -> np.ndarray:
+                         ball_trail: list = None,
+                         pitch_bg: np.ndarray = None,
+                         fps: float = 24.0) -> np.ndarray:
     """
-    渲染单帧小地图图像（不含原始视频画面）。
-    输出尺寸约 700×400（由 draw_pitch 决定），可直接写入 MP4。
-    """
-    if not HAS_SPORTS:
-        return np.zeros((400, 700, 3), dtype=np.uint8)
+    纯 OpenCV 单帧小地图渲染（不再调用 draw_pitch/draw_points_on_pitch）。
 
-    pitch = draw_pitch(config=config)
+    pitch_bg: 预渲染的球场底图（make_pitch_background() 结果）。
+              若为 None 则临时生成（兼容旧调用，但较慢）。
+    fps:      用于时间戳显示（默认 24）。
+    """
+    # 底图：优先使用传入的预渲染版本
+    frame = (pitch_bg.copy() if pitch_bg is not None
+             else make_pitch_background())
+    h, w = frame.shape[:2]
+
+    bgr_t1 = _hex_to_bgr(hex_t1)
+    bgr_t2 = _hex_to_bgr(hex_t2)
 
     # ── 找被追踪目标 ──────────────────────────────────────────────────
     tracked_pos  = None
     tracked_team = None
-    if frame_idx in tracked_bboxes:
+    if frame_idx in tracked_bboxes and frame_idx < len(tracks["players"]):
         sx, sy, sw, sh = tracked_bboxes[frame_idx]
-        center = (sx+sw/2, sy+sh/2)
+        center = (sx + sw / 2, sy + sh / 2)
         min_d  = 150
         for pid, info in tracks["players"][frame_idx].items():
-            if not info or "bbox" not in info: continue
-            b  = info["bbox"]
-            cx = (b[0]+b[2])/2; cy = (b[1]+b[3])/2
-            d  = measure_distance(center, (cx, cy))
+            if not info or "bbox" not in info:
+                continue
+            b = info["bbox"]
+            cx, cy = (b[0]+b[2])/2, (b[1]+b[3])/2
+            d = measure_distance(center, (cx, cy))
             if d < min_d:
                 min_d = d
                 tp = info.get("position_minimap")
-                if tp and len(tp)==2 and not any(np.isnan(p) for p in tp):
+                if tp and len(tp) == 2 and not any(np.isnan(p) for p in tp):
                     tracked_pos  = tp
                     tracked_team = info.get("team")
 
-    # ── 分组队伍位置 ──────────────────────────────────────────────────
-    t1_pos, t2_pos = [], []
-    for pid, info in tracks["players"][frame_idx].items():
-        if not info: continue
-        pos = info.get("position_minimap")
-        if not pos or len(pos)!=2 or any(np.isnan(p) for p in pos): continue
-        if info.get("team")==1: t1_pos.append(pos)
-        else:                   t2_pos.append(pos)
-
-    # ── 绘制球员点 ────────────────────────────────────────────────────
-    if t1_pos:
-        pitch = draw_points_on_pitch(config=config, xy=np.array(t1_pos),
-            face_color=sv.Color.from_hex(hex_t1), edge_color=sv.Color.BLACK,
-            radius=12, pitch=pitch)
-    if t2_pos:
-        pitch = draw_points_on_pitch(config=config, xy=np.array(t2_pos),
-            face_color=sv.Color.from_hex(hex_t2), edge_color=sv.Color.BLACK,
-            radius=12, pitch=pitch)
-
-    # ── 高亮被追踪球员 ────────────────────────────────────────────────
-    if tracked_pos:
-        pitch = draw_points_on_pitch(config=config, xy=np.array([tracked_pos]),
-            face_color=sv.Color.from_hex("#FFD700"),
-            edge_color=sv.Color.from_hex("#FFD700"), radius=22, pitch=pitch)
-        inner = hex_t1 if tracked_team==1 else hex_t2
-        pitch = draw_points_on_pitch(config=config, xy=np.array([tracked_pos]),
-            face_color=sv.Color.from_hex(inner), edge_color=sv.Color.BLACK,
-            radius=14, pitch=pitch)
-
-    # ── 球轨迹拖尾（最近30帧）────────────────────────────────────────
-    # 用 draw_points_on_pitch 绘制（position_minimap 是 config 坐标系，非像素坐标）
+    # ── 球轨迹拖尾（最近 30 帧）──────────────────────────────────────
     if ball_trail and len(ball_trail) > 1:
         n = len(ball_trail)
-        for i, pos in enumerate(ball_trail):
-            alpha = (i + 1) / n          # 0=oldest → 1=newest
-            intensity = int(alpha * 200) + 55   # 55→255 绿色渐变
-            hex_trail = f"#{0:02x}{intensity:02x}{0:02x}"
-            radius = max(3, int(alpha * 7))
+        for bi, pos in enumerate(ball_trail):
             try:
-                pitch = draw_points_on_pitch(
-                    config=config,
-                    xy=np.array([pos]),
-                    face_color=sv.Color.from_hex(hex_trail),
-                    edge_color=sv.Color.from_hex(hex_trail),
-                    radius=radius,
-                    pitch=pitch
-                )
+                alpha = (bi + 1) / n                    # 0=旧 → 1=新
+                intensity = int(alpha * 200) + 55       # 55→255
+                r_trail   = max(2, int(alpha * 6))
+                cv2.circle(frame, _mm_p2px(pos, w, h),
+                           r_trail, (0, intensity, 0), -1)
             except Exception:
-                pass  # 坐标越界时跳过
+                pass
+
+    # ── 绘制普通球员点 ────────────────────────────────────────────────
+    if frame_idx < len(tracks["players"]):
+        for pid, info in tracks["players"][frame_idx].items():
+            if not info:
+                continue
+            pos = info.get("position_minimap")
+            if not pos or len(pos) != 2 or any(np.isnan(p) for p in pos):
+                continue
+            px = _mm_p2px(pos, w, h)
+            color = bgr_t1 if info.get("team") == 1 else bgr_t2
+            cv2.circle(frame, px, 10, (0, 0, 0),  -1)   # 黑边
+            cv2.circle(frame, px,  8, color,       -1)   # 队伍色
+
+    # ── 高亮追踪球员（金环 + 队伍色内芯）─────────────────────────────
+    if tracked_pos is not None:
+        tpx = _mm_p2px(tracked_pos, w, h)
+        inner = bgr_t1 if tracked_team == 1 else bgr_t2
+        cv2.circle(frame, tpx, 18, (0, 215, 255), -1)   # 金色外环
+        cv2.circle(frame, tpx, 12, (0,   0,   0), -1)   # 黑边
+        cv2.circle(frame, tpx, 10, inner,          -1)   # 队伍色内芯
 
     # ── 足球 ─────────────────────────────────────────────────────────
-    ball_pos = tracks["ball"][frame_idx].get(1, {}).get("position_minimap")
-    if ball_pos and len(ball_pos)==2 and not any(np.isnan(p) for p in ball_pos):
-        pitch = draw_points_on_pitch(config=config, xy=np.array([ball_pos]),
-            face_color=sv.Color.from_hex("#FFFFFF"),
-            edge_color=sv.Color.BLACK, radius=8, pitch=pitch)
+    ball_pos = tracks["ball"][frame_idx].get(1, {}).get("position_minimap") \
+               if frame_idx < len(tracks["ball"]) else None
+    if ball_pos and len(ball_pos) == 2 and not any(np.isnan(p) for p in ball_pos):
+        bpx = _mm_p2px(ball_pos, w, h)
+        cv2.circle(frame, bpx, 7, (0, 0, 0),       -1)  # 黑边
+        cv2.circle(frame, bpx, 5, (255, 255, 255),  -1)  # 白球
 
-    # ── 控球率角标 ────────────────────────────────────────────────────
-    ctrl = team_control[:frame_idx+1]
-    t1c  = int(np.sum(ctrl==1)); t2c = int(np.sum(ctrl==2))
-    tot  = t1c+t2c or 1
-    h, w = pitch.shape[:2]
-    overlay = pitch.copy()
-    cv2.rectangle(overlay, (w-220, 5), (w-5, 55), (0,0,0), -1)
-    cv2.addWeighted(overlay, 0.6, pitch, 0.4, 0, pitch)
-    cv2.putText(pitch, f"T1:{t1c/tot*100:.0f}%  T2:{t2c/tot*100:.0f}%",
-                (w-215, 38), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255,255,255), 1)
+    # ── 控球率角标（右上角半透明黑底）────────────────────────────────
+    ctrl = team_control[:frame_idx + 1]
+    t1c  = int(np.sum(ctrl == 1))
+    t2c  = int(np.sum(ctrl == 2))
+    tot  = t1c + t2c or 1
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (w - 225, 5), (w - 5, 58), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.55, frame, 0.45, 0, frame)
+    cv2.putText(frame, f"T1 {t1c/tot*100:.0f}%   T2 {t2c/tot*100:.0f}%",
+                (w - 220, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
 
-    # ── 帧号时间戳 ────────────────────────────────────────────────────
-    secs = frame_idx / 24
-    cv2.putText(pitch, f"{int(secs//60):02d}:{secs%60:04.1f}",
-                (8, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
+    # ── 时间戳（左上角）──────────────────────────────────────────────
+    secs = frame_idx / max(fps, 1.0)
+    cv2.putText(frame, f"{int(secs // 60):02d}:{secs % 60:04.1f}",
+                (8, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
-    return pitch
+    return frame

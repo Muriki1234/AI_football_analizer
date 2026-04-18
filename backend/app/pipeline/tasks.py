@@ -49,6 +49,7 @@ from .analysis_core import (
     read_frames_at_indices,
     read_video,
     _check_memory_and_gc,
+    make_pitch_background,
     KeypointDetector,
     ViewTransformer,
     AccurateSpeedEstimator,
@@ -859,7 +860,11 @@ def run_minimap_replay(session_id: str, session: dict, task_id: str, sm: Session
         fps = cap.get(cv2.CAP_PROP_FPS) or 24
         cap.release()
 
-        # 先渲染第一帧拿到尺寸
+        # 预渲染球场底图（只算一次，后续每帧 copy — 核心加速点）
+        pitch_bg = make_pitch_background()
+        mh, mw  = pitch_bg.shape[:2]
+
+        # 第一帧
         ball_trail: list = []
         ball_info_0 = tracks["ball"][0].get(1, {}) if len(tracks["ball"]) > 0 else {}
         ball_mp_0 = ball_info_0.get("position_minimap") if ball_info_0 else None
@@ -867,8 +872,8 @@ def run_minimap_replay(session_id: str, session: dict, task_id: str, sm: Session
             ball_trail.append((ball_mp_0[0], ball_mp_0[1]))
         first_frame = render_minimap_frame(0, tracks, tracked_bboxes, team_control,
                                             config, hex_t1, hex_t2,
-                                            ball_trail=list(ball_trail))
-        mh, mw = first_frame.shape[:2]
+                                            ball_trail=list(ball_trail),
+                                            pitch_bg=pitch_bg, fps=fps)
 
         output_path = sm.session_output_dir(session_id) / "minimap_replay.mp4"
 
@@ -897,7 +902,8 @@ def run_minimap_replay(session_id: str, session: dict, task_id: str, sm: Session
             try:
                 frame = render_minimap_frame(i, tracks, tracked_bboxes, team_control,
                                               config, hex_t1, hex_t2,
-                                              ball_trail=list(ball_trail))
+                                              ball_trail=list(ball_trail),
+                                              pitch_bg=pitch_bg, fps=fps)
             except Exception:
                 frame = np.zeros((mh, mw, 3), dtype=np.uint8)
             proc.stdin.write(frame.tobytes())
