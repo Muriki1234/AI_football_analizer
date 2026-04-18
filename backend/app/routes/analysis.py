@@ -215,9 +215,13 @@ _STAGE_LABELS = {
     'ball_interpolation': 'Ball trajectory interpolation...',
     'speed_calculation':  'Calculating speed & distance...',
     'team_assignment':    'Identifying team colors...',
-    'scene_segmentation': 'Detecting match segments...',
-    'computing_summary':  'Generating summary...',
-    'done':               'Done',
+    'scene_segmentation':       'Detecting match segments...',
+    'computing_summary':        'Generating summary...',
+    'rendering_gemini_video':   'Rendering annotated video for AI...',
+    'uploading_video':          'Uploading video to Gemini...',
+    'saving_report':            'Saving AI report...',
+    'gemini_reasoning':         'Gemini is analyzing...',
+    'done':                     'Done',
 }
 
 

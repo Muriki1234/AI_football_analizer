@@ -1507,16 +1507,133 @@ def _draw_defensive_line_chart(frame_data: list, penetrations: list,
 
 # ── 3h. AI 总结（Gemini 多模态）──────────────────────────────────────────────
 
+def _render_gemini_video(video_path: str, bboxes_dict: dict,
+                          output_path: Path, stride: int = 5,
+                          progress_cb=None) -> bool:
+    """
+    为 Gemini 生成全分辨率带框视频（不重跑检测，直接复用 bboxes_dict）。
+
+    原理：
+      FFmpeg 解码原始视频（优先 CUDA 加速） → Python 每 stride 帧叠一次 bbox
+      → FFmpeg 编码 H264 输出。
+      纯绘图，零 AI 推理。stride=5 ≈ 4.8fps，比 samurai_temp.mp4 的 2.4fps 好 2×，
+      分辨率完全保留原始（1080p）。
+
+    Args:
+        progress_cb: (frames_written, total_to_write) → None，用于外层更新进度
+    Returns:
+        True 成功，False 失败（调用方 fallback 到 samurai_temp.mp4）
+    """
+    try:
+        import subprocess as _sp
+
+        cap = cv2.VideoCapture(video_path)
+        fps  = cap.get(cv2.CAP_PROP_FPS) or 24
+        w    = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h    = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
+        cap.release()
+
+        out_fps = max(1.0, fps / stride)
+        total_out = (total_frames + stride - 1) // stride  # 预估输出帧数
+
+        # ── FFmpeg 解码端（优先 CUDA，失败自动降级 CPU）──
+        def _make_decode_cmd(hwaccel: bool) -> list:
+            base = ["ffmpeg"]
+            if hwaccel:
+                base += ["-hwaccel", "cuda"]
+            base += [
+                "-i", video_path,
+                "-vf", f"select='not(mod(n\\,{stride}))',setpts=N/FRAME_RATE/TB",
+                "-vsync", "vfr",
+                "-f", "rawvideo", "-pix_fmt", "bgr24", "pipe:1",
+            ]
+            return base
+
+        # ── FFmpeg 编码端 ──
+        encode_cmd = [
+            "ffmpeg", "-y",
+            "-f", "rawvideo", "-vcodec", "rawvideo",
+            "-s", f"{w}x{h}", "-pix_fmt", "bgr24",
+            "-r", str(out_fps), "-i", "pipe:0",
+            "-vcodec", "libx264", "-pix_fmt", "yuv420p", "-crf", "22",
+            str(output_path),
+        ]
+        encode_proc = _sp.Popen(encode_cmd, stdin=_sp.PIPE,
+                                stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+
+        # 先尝试 CUDA，失败重试 CPU
+        frame_size = w * h * 3
+        for use_cuda in (True, False):
+            decode_proc = _sp.Popen(_make_decode_cmd(use_cuda),
+                                    stdout=_sp.PIPE, stderr=_sp.DEVNULL)
+            frames_written = 0
+            orig_idx       = 0   # 对应原始视频帧号
+            ok = True
+            while True:
+                raw = decode_proc.stdout.read(frame_size)
+                if len(raw) < frame_size:
+                    break
+                frame = np.frombuffer(raw, dtype=np.uint8).reshape((h, w, 3)).copy()
+
+                # 叠加追踪框（bboxes_dict 已插值到每帧原始分辨率）
+                if orig_idx in bboxes_dict:
+                    bx, by, bw_, bh_ = bboxes_dict[orig_idx]
+                    x1, y1 = int(bx), int(by)
+                    x2, y2 = int(bx + bw_), int(by + bh_)
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 4)
+                    cv2.putText(frame, "TRACKED",
+                                (x1, max(y1 - 10, 20)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+
+                # 时间戳左上角
+                secs = orig_idx / fps
+                cv2.putText(frame,
+                            f"{int(secs // 60):02d}:{secs % 60:04.1f}",
+                            (10, 36), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+
+                try:
+                    encode_proc.stdin.write(frame.tobytes())
+                except BrokenPipeError:
+                    ok = False
+                    break
+
+                frames_written += 1
+                orig_idx       += stride
+                if progress_cb and frames_written % 300 == 0:
+                    progress_cb(frames_written, total_out)
+
+            decode_proc.wait()
+            if ok and frames_written > 0:
+                break   # 成功，不需要重试 CPU
+            if use_cuda:
+                print("[AI_SUMMARY] CUDA decode failed, retrying with CPU...")
+
+        encode_proc.stdin.close()
+        encode_proc.wait()
+
+        success = output_path.exists() and output_path.stat().st_size > 0
+        print(f"[AI_SUMMARY] gemini_video: {frames_written} frames written, "
+              f"size={output_path.stat().st_size // 1024 // 1024}MB" if success else
+              f"[AI_SUMMARY] gemini_video render failed")
+        return success
+
+    except Exception as exc:
+        print(f"[AI_SUMMARY] _render_gemini_video error: {exc}")
+        return False
+
+
 def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionManager):
     """
-    多模态 AI 战术分析：把 SAMURAI 标注视频 + 统计 JSON 送给 Gemini 生成报告。
+    多模态 AI 战术分析：把全分辨率标注视频 + 统计 JSON 送给 Gemini 生成报告。
 
     工作流：
       1. 加载 tracks.pkl（统计数据 + 分段 + 颜色）
       2. 拼装统计 JSON（控球率 / 速度 / 分段 / 球员 summary）
-      3. 选择视频源：优先 samurai_temp.mp4（带追踪框），否则原视频
+      3. 渲染 gemini_video.mp4：原始分辨率 + stride=5 ≈ 5fps + 追踪框（CUDA 加速）
+         fallback → samurai_temp.mp4（低质但已存在）
       4. 上传视频到 Gemini Files API → 等待 ACTIVE
-      5. 调用 Gemini（多模态输入）生成 markdown 报告
+      5. 调用 Gemini（多模态输入）生成 markdown 报告（附进度模拟线程）
       6. 写入 task.result + 落盘 ai_summary.md
     """
     try:
@@ -1576,50 +1693,84 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
         }
         stats_json = json.dumps(stats_payload, ensure_ascii=False, indent=2)
 
-        sm.update_task(session_id, task_id, progress=15, stage="selecting_video")
+        # ── 4. 渲染全分辨率带框视频（CUDA 加速，不重跑检测）──────────────────
+        output_dir       = sm.session_output_dir(session_id)
+        tracked_bboxes   = data.get("tracked_bboxes", {})
+        gemini_vid_path  = output_dir / "gemini_video.mp4"
 
-        # ── 4. 选视频源：优先 SAMURAI 带框视频 ──
-        output_dir = sm.session_output_dir(session_id)
-        samurai_annotated = output_dir / "samurai_temp.mp4"
-        if samurai_annotated.exists() and samurai_annotated.stat().st_size > 0:
-            video_for_ai = str(samurai_annotated)
-            video_source = "samurai_annotated"
+        sm.update_task(session_id, task_id, progress=10, stage="rendering_gemini_video")
+
+        def _render_progress(done, total_est):
+            pct = int(10 + min(14, done / max(total_est, 1) * 14))
+            sm.update_task(session_id, task_id, progress=pct,
+                           stage="rendering_gemini_video")
+
+        rendered = _render_gemini_video(
+            session["video_path"], tracked_bboxes, gemini_vid_path,
+            stride=5, progress_cb=_render_progress,
+        )
+
+        if rendered:
+            video_for_ai  = str(gemini_vid_path)
+            video_source  = "full_res_annotated"
         else:
-            video_for_ai = session["video_path"]
-            video_source = "raw_video"
-        print(f"[AI_SUMMARY] Using video source: {video_source} → {video_for_ai}")
+            # fallback：samurai_temp.mp4（低质量但已存在）
+            samurai_annotated = output_dir / "samurai_temp.mp4"
+            if samurai_annotated.exists() and samurai_annotated.stat().st_size > 0:
+                video_for_ai = str(samurai_annotated)
+                video_source = "samurai_annotated"
+            else:
+                video_for_ai = session["video_path"]
+                video_source = "raw_video"
+        print(f"[AI_SUMMARY] Video source: {video_source} → {video_for_ai}")
 
-        # ── 5. 上传到 Gemini Files API（异步，需轮询）──
+        # ── 5. 上传到 Gemini Files API（异步，需轮询）──────────────────────────
+        import time as _time
         sm.update_task(session_id, task_id, progress=25, stage="uploading_video")
         uploaded = genai.upload_file(path=video_for_ai, mime_type="video/mp4")
         print(f"[AI_SUMMARY] Uploaded as {uploaded.name}, waiting for ACTIVE...")
 
-        import time as _time
         wait_start = _time.perf_counter()
         while uploaded.state.name == "PROCESSING":
             _time.sleep(2)
             uploaded = genai.get_file(uploaded.name)
-            elapsed = _time.perf_counter() - wait_start
-            if elapsed > 600:  # 10min 上限（长视频 Files API 处理常需 3-8min）
+            elapsed  = _time.perf_counter() - wait_start
+            if elapsed > 600:
                 raise RuntimeError(f"Gemini file processing timeout ({elapsed:.0f}s)")
-            sm.update_task(session_id, task_id, progress=25 + min(30, int(elapsed / 2)),
+            sm.update_task(session_id, task_id,
+                           progress=25 + min(44, int(elapsed / 2)),
                            stage=f"gemini_processing_{int(elapsed)}s")
 
         if uploaded.state.name != "ACTIVE":
             raise RuntimeError(f"Gemini file failed to activate: {uploaded.state.name}")
         print(f"[AI_SUMMARY] File ACTIVE after {_time.perf_counter() - wait_start:.1f}s")
 
-        # ── 6. 组 prompt + 调用 Gemini ──
+        # ── 6. 组 prompt + 调用 Gemini（附进度模拟线程，避免进度条冻结）────────
         sm.update_task(session_id, task_id, progress=70, stage="gemini_reasoning")
 
+        import threading as _threading
+        _stop_sim = _threading.Event()
+        def _sim_progress():
+            t0 = _time.perf_counter()
+            while not _stop_sim.is_set():
+                elapsed = _time.perf_counter() - t0
+                # 70 → 93 linearly over 120 s，之后在 93 等待
+                sim_pct = min(93, int(70 + elapsed / 120 * 23))
+                sm.update_task(session_id, task_id,
+                               progress=sim_pct, stage="gemini_reasoning")
+                _time.sleep(4)
+        _sim_thread = _threading.Thread(target=_sim_progress, daemon=True)
+        _sim_thread.start()
+
         system_text = (
-            "你是一个专业足球战术分析师。视频中的高亮框是正在被追踪的核心球员。"
+            "你是一个专业足球战术分析师。"
+            f"视频为原始比赛画面（约 5fps），视频中绿色高亮框（TRACKED）标注的是正在被追踪的核心球员。"
             "结合以下统计数据和视频画面，生成一份**中文 Markdown 报告**，"
             "包含以下章节（严格按顺序、标题用 ## 二级标题）：\n\n"
             "## 比赛概览\n"
             "简述双方控球对比、关键跑动数据、比赛节奏。\n\n"
             "## 被追踪球员分析\n"
-            "重点分析视频中带高亮框的那名球员：跑位、速度爆发、控球、影响力。\n\n"
+            "重点分析视频中绿色框标注的那名球员：跑位、速度爆发、控球、影响力。\n\n"
             "## 战术观察\n"
             "阵型特征、进攻模式、防守组织，基于画面实际观察。\n\n"
             "## 改进建议\n"
@@ -1632,16 +1783,20 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
             f"{system_text}\n\n## 统计数据\n```json\n{stats_json}\n```\n\n请生成报告："
         ]
 
-        model = genai.GenerativeModel(model_name)
-        response = model.generate_content(
-            prompt_parts,
-            generation_config={
-                "temperature":      0.4,
-                "top_p":            0.9,
-                "max_output_tokens": 4096,
-            },
-            request_options={"timeout": 600},
-        )
+        model_obj = genai.GenerativeModel(model_name)
+        try:
+            response = model_obj.generate_content(
+                prompt_parts,
+                generation_config={
+                    "temperature":       0.4,
+                    "top_p":             0.9,
+                    "max_output_tokens": 4096,
+                },
+                request_options={"timeout": 600},
+            )
+        finally:
+            _stop_sim.set()
+            _sim_thread.join(timeout=2)
 
         report_md = (response.text or "").strip()
         if not report_md:
