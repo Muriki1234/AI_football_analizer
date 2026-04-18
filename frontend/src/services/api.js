@@ -64,7 +64,8 @@ export const trimVideo = async (videoId, start, end) => {
 };
 
 export const analyzeFrame = async (videoId, timeInSeconds) => {
-    // 始终使用本地后端进行单帧分析 (Roboflow 或 Mock)，保证选框精准度
+    // Colab 配置时走 GPU（Soccana YOLO 模型），结果保存在 Colab；否则走本地（Roboflow / Mock）
+    if (colab.isConfigured()) return colab.analyzeFrame(videoId, timeInSeconds);
     const response = await api.post('/analyze_frame', {
         video_id: videoId,
         time_in_seconds: timeInSeconds

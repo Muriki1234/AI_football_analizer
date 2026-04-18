@@ -85,9 +85,9 @@ def bgr_to_hex(bgr) -> str:
 
 
 def clamp_pitch_position(x: float, y: float,
-                          x_max: float = 120.0, y_max: float = 70.0):
+                          x_max: float = 105.0, y_max: float = 68.0):
     """Clamp a transformed pitch coordinate to valid field bounds.
-    Bounds match SoccerPitchConfiguration: 12000×7000 cm → 120×70 m after ×0.01."""
+    Aligned with _PITCH_LEN/WID used by _mm_p2px and make_pitch_background (FIFA: 105×68 m)."""
     return (max(0.0, min(float(x), x_max)),
             max(0.0, min(float(y), y_max)))
 

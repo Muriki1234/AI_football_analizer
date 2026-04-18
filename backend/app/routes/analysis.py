@@ -205,6 +205,7 @@ def generate_ai_summary(session_id: str):
 _STAGE_LABELS = {
     'auto_detect':        'Auto-detecting players...',
     'samurai_init':       'Initializing tracker...',
+    'extracting_frames':  'Extracting frames (FFmpeg)...',
     'samurai_running':    'SAMURAI tracking...',
     'samurai_done':       'Tracking complete',
     'loading_video':      'Loading video...',
@@ -214,9 +215,23 @@ _STAGE_LABELS = {
     'ball_interpolation': 'Ball trajectory interpolation...',
     'speed_calculation':  'Calculating speed & distance...',
     'team_assignment':    'Identifying team colors...',
+    'scene_segmentation': 'Detecting match segments...',
     'computing_summary':  'Generating summary...',
     'done':               'Done',
 }
+
+
+def _translate_stage(stage: str) -> str:
+    """Map internal stage key → human-readable label.
+    Handles static keys and dynamic 'yolo_detection (X/Y frames, ETA ...)' suffix."""
+    if not stage:
+        return ''
+    if stage in _STAGE_LABELS:
+        return _STAGE_LABELS[stage]
+    # Dynamic YOLO progress label already readable — pass through
+    if stage.startswith('yolo_detection ('):
+        return stage
+    return stage
 
 
 def _get_available_features(session: dict) -> list:
@@ -240,7 +255,7 @@ def get_session_status(session_id: str):
         'status':             session['status'],
         'progress':           session.get('progress', 0),
         'stage':              session.get('stage', ''),
-        'stage_label':        _STAGE_LABELS.get(session.get('stage', ''), session.get('stage', '')),
+        'stage_label':        _translate_stage(session.get('stage', '')),
         'error':              session.get('error'),
         'available_features': _get_available_features(session),
     }), 200

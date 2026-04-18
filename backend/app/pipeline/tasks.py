@@ -172,7 +172,7 @@ def run_samurai_tracking(session_id: str, session: dict,
         env["HYDRA_FULL_ERROR"] = "1"
         
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=900, env=env, cwd=samurai_root
+            cmd, capture_output=True, text=True, timeout=None, env=env, cwd=samurai_root
         )
 
         if result.returncode != 0:
@@ -196,6 +196,14 @@ def run_samurai_tracking(session_id: str, session: dict,
                     if w > 0 and h > 0:
                         sparse_bboxes[original_fid] = [x * scale_back, y * scale_back, w * scale_back, h * scale_back]
 
+        if not sparse_bboxes:
+            total_lines = sum(1 for _ in open(res_txt))
+            raise RuntimeError(
+                f"SAMURAI output unparseable — {res_txt} has {total_lines} lines "
+                f"but no valid bbox rows (expected ≥6 comma-separated fields per line). "
+                f"Check SAMURAI script output format."
+            )
+
         end_index = max(sparse_bboxes.keys()) if sparse_bboxes else start_index
         df = pd.DataFrame(index=range(start_index, end_index + 1), columns=['x', 'y', 'w', 'h'])
         for f_idx, box in sparse_bboxes.items():
@@ -210,6 +218,11 @@ def run_samurai_tracking(session_id: str, session: dict,
 
         with open(cache_path, "wb") as f:
             pickle.dump({"bboxes": bboxes_dict}, f)
+
+        # 清理中间帧目录（12,960 jpg ≈ 650MB，不清会占满 Colab /content）
+        import shutil
+        shutil.rmtree(frames_dir, ignore_errors=True)
+        print(f"[INFO] Cleaned up samurai_frames dir: {frames_dir}")
 
         sm.update_status(
             session_id, "tracking_done",
@@ -562,18 +575,67 @@ def _compute_player_summary(tracks: dict, tracked_bboxes: dict,
                             segments: list = None) -> dict:
     """从 tracks 中提取被追踪球员的关键数字（存入 session，立即可用）
 
-    若提供 segments，会额外返回 by_segment 字段（上下半场分别统计）。
+    若提供 segments，overall 只统计实际比赛帧（排除 halftime），
+    并额外返回 by_segment 字段（上下半场分别统计）。
     """
     total_frames = len(tracks["players"])
-    overall = _summary_for_range(tracks, tracked_bboxes, team_control,
-                                  0, total_frames, fps)
+
+    # ── Overall：若有中场则只统计比赛帧，避免中场零速度稀释均值 ──
+    has_halftime = segments and any(s["type"] == "halftime" for s in segments)
+    if has_halftime:
+        match_ranges = [(s["start_frame"], s["end_frame"])
+                        for s in segments if s["type"] != "halftime"]
+    else:
+        match_ranges = [(0, total_frames)]
+
+    speeds, distances, has_ball_count = [], [], 0
+    all_sub_ctrl = []
+    for rng_start, rng_end in match_ranges:
+        rng_end = min(rng_end, total_frames)
+        for i in range(rng_start, rng_end):
+            if i not in tracked_bboxes:
+                continue
+            sx, sy, sw, sh = tracked_bboxes[i]
+            matched = _find_matched_player(tracks["players"][i], (sx + sw / 2, sy + sh / 2))
+            if matched:
+                speeds.append(matched.get("speed", 0))
+                distances.append(matched.get("distance", 0))
+                if matched.get("has_ball"):
+                    has_ball_count += 1
+        sub = team_control[rng_start:min(rng_end, len(team_control))]
+        all_sub_ctrl.extend(sub)
+
+    arr = np.array(all_sub_ctrl) if all_sub_ctrl else np.array([])
+    t1  = int(np.sum(arr == 1)) if arr.size else 0
+    t2  = int(np.sum(arr == 2)) if arr.size else 0
+    total_ctrl = t1 + t2 or 1
+
+    possession_switches = 0
+    prev_team = 0
+    for t in all_sub_ctrl:
+        if t != 0 and t != prev_team and prev_team != 0:
+            possession_switches += 1
+        if t != 0:
+            prev_team = t
+
+    dist_delta = float(max(distances) - min(distances)) if distances else 0.0
+
+    overall = {
+        "max_speed_kmh":        round(float(max(speeds)),        1) if speeds else 0,
+        "avg_speed_kmh":        round(float(np.mean(speeds)),    1) if speeds else 0,
+        "total_distance_m":     round(dist_delta,                0),
+        "possession_seconds":   round(has_ball_count / fps,      1),
+        "team1_possession_pct": round(t1 / total_ctrl * 100,     1),
+        "team2_possession_pct": round(t2 / total_ctrl * 100,     1),
+        "possession_switches":  possession_switches,
+    }
 
     # ── 分段统计（跳过 halftime）──────────────────────────────────
     if segments:
         by_segment = []
         for seg in segments:
             if seg["type"] == "halftime":
-                continue  # 中场不统计
+                continue
             seg_stats = _summary_for_range(
                 tracks, tracked_bboxes, team_control,
                 seg["start_frame"], seg["end_frame"], fps)
@@ -1538,7 +1600,7 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
             _time.sleep(2)
             uploaded = genai.get_file(uploaded.name)
             elapsed = _time.perf_counter() - wait_start
-            if elapsed > 300:  # 5min 上限
+            if elapsed > 600:  # 10min 上限（长视频 Files API 处理常需 3-8min）
                 raise RuntimeError(f"Gemini file processing timeout ({elapsed:.0f}s)")
             sm.update_task(session_id, task_id, progress=25 + min(30, int(elapsed / 2)),
                            stage=f"gemini_processing_{int(elapsed)}s")
@@ -1576,7 +1638,7 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
             generation_config={
                 "temperature":      0.4,
                 "top_p":            0.9,
-                "max_output_tokens": 2048,
+                "max_output_tokens": 4096,
             },
             request_options={"timeout": 600},
         )
@@ -1610,12 +1672,21 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
         _log_error("ai_summary", session_id, exc)
 
 
+# ── 模块级 tracks.pkl 缓存（避免并发任务多次读 500MB）──────────────────────
+_TRACKS_CACHE: dict = {}   # {cache_path: data}
+_TRACKS_CACHE_MAX = 2      # 最多缓存 2 个 session（Colab 单用户足够）
+
+
 def _load_cache(session: dict) -> dict:
     cache_path = session.get("tracks_cache_path")
     if not cache_path or not Path(cache_path).exists():
         raise FileNotFoundError("tracks.pkl not found — global analysis may have failed")
-    with open(cache_path, "rb") as f:
-        return pickle.load(f)
+    if cache_path not in _TRACKS_CACHE:
+        if len(_TRACKS_CACHE) >= _TRACKS_CACHE_MAX:
+            _TRACKS_CACHE.clear()   # 超限时清空（简单 LRU）
+        with open(cache_path, "rb") as f:
+            _TRACKS_CACHE[cache_path] = pickle.load(f)
+    return _TRACKS_CACHE[cache_path]
 
 
 def _find_matched_player(player_frame: dict, target_center: tuple,
