@@ -44,6 +44,7 @@ from .session_manager import SessionManager
 from .analysis_core import (
     Tracker,
     CameraMovementEstimator,
+    SceneChangeDetector,
     stream_video_chunks,
     read_frames_at_indices,
     read_video,
@@ -463,14 +464,25 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                 _f.write("-" * 40 + "\n")
         except Exception:
             pass
+        sm.update_status(session_id, "analyzing", progress=90, stage="scene_segmentation")
+        _t = _time.perf_counter()
+        scene_det = SceneChangeDetector(fps=fps)
+        segments  = scene_det.detect_segments(tracks, total)
+        _bench("scene_segmentation", _t)
+        seg_types = [s["type"] for s in segments]
+        print(f"[INFO] Scene segments: {seg_types} "
+              f"(durations: {[round(s['duration_sec']) for s in segments]}s)")
+
         sm.update_status(session_id, "analyzing", progress=92, stage="computing_summary")
-        player_summary = _compute_player_summary(tracks, tracked_bboxes, team_control, fps=fps)
+        player_summary = _compute_player_summary(
+            tracks, tracked_bboxes, team_control, fps=fps, segments=segments)
 
         cache_payload = {
             "tracks":              tracks,
             "tracked_bboxes":      tracked_bboxes,
             "team_control":        team_control,
             "possession_switches": player_summary.get("possession_switches", 0),
+            "segments":            segments,
             # 颜色序列化（numpy array → list）
             "team_colors": {
                 k: v.tolist() for k, v in team_assigner.team_colors.items()
@@ -488,6 +500,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             tracks_cache_path=str(tracks_cache),
             player_summary=player_summary,
             total_frames=total,
+            segments=segments,
         )
 
     except Exception as exc:
@@ -496,12 +509,13 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         _log_error("Global analysis", session_id, exc)
 
 
-def _compute_player_summary(tracks: dict, tracked_bboxes: dict,
-                            team_control: list, fps: int = 24) -> dict:
-    """从 tracks 中提取被追踪球员的关键数字（存入 session，立即可用）"""
+def _summary_for_range(tracks: dict, tracked_bboxes: dict, team_control: list,
+                        start: int, end: int, fps: int) -> dict:
+    """对 [start, end) 帧区间计算一份 summary（不含全局字段）"""
     speeds, distances, has_ball_count = [], [], 0
 
-    for i in range(len(tracks["players"])):
+    end = min(end, len(tracks["players"]))
+    for i in range(start, end):
         if i not in tracked_bboxes:
             continue
         sx, sy, sw, sh = tracked_bboxes[i]
@@ -512,28 +526,63 @@ def _compute_player_summary(tracks: dict, tracked_bboxes: dict,
             if matched.get("has_ball"):
                 has_ball_count += 1
 
-    arr = np.array(team_control)
-    t1, t2 = int(np.sum(arr == 1)), int(np.sum(arr == 2))
+    sub_ctrl = team_control[start:min(end, len(team_control))]
+    arr = np.array(sub_ctrl) if sub_ctrl else np.array([])
+    t1 = int(np.sum(arr == 1)) if arr.size else 0
+    t2 = int(np.sum(arr == 2)) if arr.size else 0
     total_ctrl = t1 + t2 or 1
 
-    # Count possession switches (team changes between non-zero values)
     possession_switches = 0
     prev_team = 0
-    for t in team_control:
+    for t in sub_ctrl:
         if t != 0 and t != prev_team and prev_team != 0:
             possession_switches += 1
         if t != 0:
             prev_team = t
 
+    # distance 是累计值，用区间首末的差 更准（而非 max）
+    dist_delta = 0.0
+    if distances:
+        dist_delta = float(max(distances) - min(distances))
+
     return {
         "max_speed_kmh":        round(float(max(speeds)),        1) if speeds else 0,
         "avg_speed_kmh":        round(float(np.mean(speeds)),    1) if speeds else 0,
-        "total_distance_m":     round(float(max(distances)),     0) if distances else 0,
+        "total_distance_m":     round(dist_delta,                0),
         "possession_seconds":   round(has_ball_count / fps,      1),
         "team1_possession_pct": round(t1 / total_ctrl * 100,     1),
         "team2_possession_pct": round(t2 / total_ctrl * 100,     1),
         "possession_switches":  possession_switches,
     }
+
+
+def _compute_player_summary(tracks: dict, tracked_bboxes: dict,
+                            team_control: list, fps: int = 24,
+                            segments: list = None) -> dict:
+    """从 tracks 中提取被追踪球员的关键数字（存入 session，立即可用）
+
+    若提供 segments，会额外返回 by_segment 字段（上下半场分别统计）。
+    """
+    total_frames = len(tracks["players"])
+    overall = _summary_for_range(tracks, tracked_bboxes, team_control,
+                                  0, total_frames, fps)
+
+    # ── 分段统计（跳过 halftime）──────────────────────────────────
+    if segments:
+        by_segment = []
+        for seg in segments:
+            if seg["type"] == "halftime":
+                continue  # 中场不统计
+            seg_stats = _summary_for_range(
+                tracks, tracked_bboxes, team_control,
+                seg["start_frame"], seg["end_frame"], fps)
+            seg_stats["segment_type"] = seg["type"]
+            seg_stats["start_sec"]    = seg["start_sec"]
+            seg_stats["end_sec"]      = seg["end_sec"]
+            by_segment.append(seg_stats)
+        overall["by_segment"] = by_segment
+
+    return overall
 
 
 # ═══════════════════════════════════════════════════════════════════════

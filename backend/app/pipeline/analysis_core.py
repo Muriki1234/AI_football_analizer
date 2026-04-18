@@ -196,6 +196,112 @@ def _check_memory_and_gc(threshold_pct: float = 85.0) -> float:
         return -1.0
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# SceneChangeDetector — 基于球员数统计的比赛分段
+# ═══════════════════════════════════════════════════════════════════════
+
+class SceneChangeDetector:
+    """
+    检测比赛中的非比赛段（中场休息、回放、广告等）。
+
+    核心思路：正常比赛画面每帧应有 10+ 球员；中场/回放时球员数会骤降。
+    连续 N 秒（window）球员数 < threshold → 标记为 non-match 段。
+
+    用法：
+        det = SceneChangeDetector(fps=24)
+        segments = det.detect_segments(tracks, total_frames)
+        # → [{"type": "first_half", "start_frame": 0, "end_frame": 67200, ...},
+        #    {"type": "halftime",   "start_frame": 67200, "end_frame": 89000, ...},
+        #    {"type": "second_half","start_frame": 89000, "end_frame": 156000, ...}]
+    """
+
+    def __init__(self, fps: float = 24.0,
+                 min_players_match: int = 5,
+                 min_non_match_seconds: float = 30.0,
+                 smooth_window_seconds: float = 3.0):
+        """
+        Args:
+            fps: 视频帧率
+            min_players_match: 单帧球员数 ≥ 此值视为"比赛中"
+            min_non_match_seconds: 连续多少秒非比赛才判为中场（避免短暂遮挡）
+            smooth_window_seconds: 球员数平滑窗口（避免单帧抖动）
+        """
+        self.fps = max(1.0, float(fps))
+        self.min_players_match = min_players_match
+        self.min_non_match_seconds = min_non_match_seconds
+        self.smooth_window = max(1, int(smooth_window_seconds * self.fps))
+
+    def detect_segments(self, tracks: dict, total_frames: int) -> list:
+        """返回比赛分段列表。保证覆盖 [0, total_frames) 且无重叠。"""
+        if total_frames <= 0:
+            return []
+
+        # ── 1. 每帧球员数 ───────────────────────────────────────────
+        counts = np.zeros(total_frames, dtype=np.int32)
+        players = tracks.get("players", [])
+        for fi in range(min(total_frames, len(players))):
+            pd = players[fi]
+            if pd:
+                counts[fi] = len(pd)
+
+        # ── 2. 滑窗平均平滑（抑制单帧抖动） ─────────────────────────
+        if self.smooth_window > 1:
+            kernel = np.ones(self.smooth_window) / self.smooth_window
+            smoothed = np.convolve(counts, kernel, mode="same")
+        else:
+            smoothed = counts.astype(np.float32)
+
+        # ── 3. 每帧 in-match 布尔序列 ────────────────────────────────
+        in_match = smoothed >= self.min_players_match
+
+        # ── 4. 找连续的 non-match 段（长度 ≥ min_non_match_seconds 才算）
+        min_gap = int(self.min_non_match_seconds * self.fps)
+        non_match_spans = []  # [(start, end)] 左闭右开
+        i = 0
+        while i < total_frames:
+            if not in_match[i]:
+                j = i
+                while j < total_frames and not in_match[j]:
+                    j += 1
+                if (j - i) >= min_gap:
+                    non_match_spans.append((i, j))
+                i = j
+            else:
+                i += 1
+
+        # ── 5. 合成分段列表 ─────────────────────────────────────────
+        segments = []
+        cursor = 0
+        # 找"主中场"：最长的 non-match span（靠近中间位置的优先）
+        # 简单策略：如果存在 ≥1 个 non-match span，把最长的那个当作中场
+        halftime_span = None
+        if non_match_spans:
+            halftime_span = max(non_match_spans, key=lambda s: s[1] - s[0])
+
+        if halftime_span is None:
+            # 无中场 → 整个视频就是一段比赛
+            segments.append(self._mk_seg("match", 0, total_frames))
+        else:
+            hs, he = halftime_span
+            if hs > 0:
+                segments.append(self._mk_seg("first_half", 0, hs))
+            segments.append(self._mk_seg("halftime", hs, he))
+            if he < total_frames:
+                segments.append(self._mk_seg("second_half", he, total_frames))
+
+        return segments
+
+    def _mk_seg(self, seg_type: str, start: int, end: int) -> dict:
+        return {
+            "type":        seg_type,
+            "start_frame": int(start),
+            "end_frame":   int(end),
+            "start_sec":   round(start / self.fps, 2),
+            "end_sec":     round(end   / self.fps, 2),
+            "duration_sec": round((end - start) / self.fps, 2),
+        }
+
+
 def read_frames_at_indices(video_path: str, indices) -> dict:
     """Read specific frames from video by seeking. Returns {frame_idx: frame} dict."""
     indices = sorted(set(int(i) for i in indices if i >= 0))
