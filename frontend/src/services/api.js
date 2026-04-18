@@ -9,37 +9,31 @@ const api = axios.create({
 });
 
 export const uploadVideo = async (file, onProgress) => {
+    // ── Colab 模式：视频只传到 GPU 服务器，本地零磁盘占用 ──────────────────
+    if (colab.isConfigured()) {
+        // 用 crypto.randomUUID 生成 12 位 hex session ID（无需本地 Flask）
+        const video_id = crypto.randomUUID().replace(/-/g, '').substring(0, 12);
+        console.log('📤 Colab 模式：直接上传到 GPU，跳过本地存储...');
+        await colab.sendVideo(video_id, file, (pct) => {
+            if (onProgress) onProgress(pct);
+        });
+        console.log('✅ 视频已到达 Colab，video_id:', video_id);
+        return { video_id };
+    }
+
+    // ── 本地模式：上传到本地 Flask ──────────────────────────────────────────
     const formData = new FormData();
     formData.append('file', file);
 
-    // 1. 上传到本地 Flask，拿到 video_id
     const response = await api.post('/upload', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
         onUploadProgress: (progressEvent) => {
             if (onProgress) {
                 const pct = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-                // 本地上传占进度条前50%
-                onProgress(Math.round(pct * 0.5));
+                onProgress(pct);
             }
         },
     });
-
-    const { video_id } = response.data;
-
-    // 2. 如果配置了 Colab，把视频同步传给 Colab
-    if (colab.isConfigured()) {
-        try {
-            console.log('📤 正在把视频传给 Colab GPU...');
-            await colab.sendVideo(video_id, file, (pct) => {
-                // Colab上传占进度条后50%
-                if (onProgress) onProgress(50 + Math.round(pct * 0.5));
-            });
-            console.log('✅ 视频已到达 Colab');
-        } catch (e) {
-            console.error('⚠️ 视频传给 Colab 失败:', e.message);
-            // 不阻断本地流程
-        }
-    }
 
     return response.data;
 };
