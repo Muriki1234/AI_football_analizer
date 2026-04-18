@@ -16,7 +16,9 @@ class SessionManager:
         self.output_root = output_root
         self._sessions: dict[str, dict] = {}
         self._tasks: dict[str, dict[str, dict]] = {}
-        self._lock = threading.Lock()
+        # RLock allows re-entrant acquisition within the same thread
+        # (simplifies callers that may hold the lock and call other guarded methods)
+        self._lock = threading.RLock()
 
     # ── Session CRUD ─────────────────────────────────────────────────────────
 
@@ -40,7 +42,11 @@ class SessionManager:
             self._tasks[session_id] = {}
 
     def get_session(self, session_id: str) -> Optional[dict]:
-        return self._sessions.get(session_id)
+        # Return a shallow copy under lock — prevents callers from reading
+        # a half-updated session (e.g. status=analysis_done but player_summary not yet written)
+        with self._lock:
+            s = self._sessions.get(session_id)
+            return dict(s) if s is not None else None
 
     def update_status(self, session_id: str, status: str,
                       progress: int = None, stage: str = None,
@@ -86,7 +92,9 @@ class SessionManager:
         return task_id
 
     def get_task(self, session_id: str, task_id: str) -> Optional[dict]:
-        return self._tasks.get(session_id, {}).get(task_id)
+        with self._lock:
+            t = self._tasks.get(session_id, {}).get(task_id)
+            return dict(t) if t is not None else None
 
     def update_task(self, session_id: str, task_id: str, **kwargs):
         with self._lock:

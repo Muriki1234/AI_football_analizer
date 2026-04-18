@@ -254,7 +254,7 @@ def _get_available_features(session: dict) -> list:
 def get_session_status(session_id: str):
     session, err = _session_or_404(session_id)
     if err: return err
-    return jsonify({
+    payload = {
         'session_id':         session_id,
         'status':             session['status'],
         'progress':           session.get('progress', 0),
@@ -262,7 +262,14 @@ def get_session_status(session_id: str):
         'stage_label':        _translate_stage(session.get('stage', '')),
         'error':              session.get('error'),
         'available_features': _get_available_features(session),
-    }), 200
+    }
+    # 当分析完成时把 player_summary 一起带回，消除前端"看到 done 后再发一次 summary 请求"
+    # 的竞态窗口（旧流程有时读到 status=done 但 summary 还未写完）
+    if session['status'] == 'analysis_done':
+        summary = session.get('player_summary')
+        if summary:
+            payload['player_summary'] = summary
+    return jsonify(payload), 200
 
 
 @analysis.route('/api/<session_id>/task/<task_id>', methods=['GET'])

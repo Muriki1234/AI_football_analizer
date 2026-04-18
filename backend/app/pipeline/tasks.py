@@ -179,6 +179,18 @@ def run_samurai_tracking(session_id: str, session: dict,
 
         new_w, new_h = int(orig_w * RESIZE_FACTOR), int(orig_h * RESIZE_FACTOR)
 
+        # 参数合法性检查（防止 FFmpeg 报难以理解的 filter 错误）
+        if SKIP_STEP < 1:
+            raise ValueError(f"SKIP_STEP must be ≥1, got {SKIP_STEP}")
+        if start_index < 0:
+            raise ValueError(f"start_index must be ≥0, got {start_index}")
+        if new_w <= 0 or new_h <= 0:
+            raise ValueError(f"Scaled dims invalid: {new_w}x{new_h} (orig {orig_w}x{orig_h})")
+        if start_index >= total_orig_frames:
+            raise ValueError(
+                f"start_index {start_index} exceeds video length {total_orig_frames}"
+            )
+
         # e.g select='gte(n, 120)*not(mod(n-120, 5))'
         vf = f"select='gte(n\\,{start_index})*not(mod(n-{start_index}\\,{SKIP_STEP}))',scale={new_w}:{new_h}"
         cmd_ext = [
@@ -195,8 +207,16 @@ def run_samurai_tracking(session_id: str, session: dict,
             raise RuntimeError("No frames extracted by FFmpeg")
 
         # Create temporary txt for demo.py, scale bbox
-        bx, by = player_bbox['x'] * RESIZE_FACTOR, player_bbox['y'] * RESIZE_FACTOR
-        bw, bh = player_bbox['w'] * RESIZE_FACTOR, player_bbox['h'] * RESIZE_FACTOR
+        # 边界裁剪：前端 canvas 坐标可能溢出，超出会让 SAMURAI 追黑边或 crash
+        bx = max(0.0, min(player_bbox['x'] * RESIZE_FACTOR, new_w - 2.0))
+        by = max(0.0, min(player_bbox['y'] * RESIZE_FACTOR, new_h - 2.0))
+        bw = max(1.0, min(player_bbox['w'] * RESIZE_FACTOR, new_w - bx))
+        bh = max(1.0, min(player_bbox['h'] * RESIZE_FACTOR, new_h - by))
+        if bw < 8 or bh < 8:
+            raise ValueError(
+                f"Player bbox too small after scaling: {bw:.1f}x{bh:.1f}. "
+                f"Original bbox may be out of frame or degenerate."
+            )
         init_txt = output_dir / "input_bbox.txt"
         with open(init_txt, "w") as f:
             f.write(f"{bx},{by},{bw},{bh}\n")
@@ -577,8 +597,15 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         )
 
     except Exception as exc:
+        # 失败时删除可能半成品的 tracks.pkl，避免下游按需任务读到损坏数据
+        try:
+            if tracks_cache.exists():
+                tracks_cache.unlink()
+        except Exception:
+            pass
         sm.update_status(session_id, "analysis_failed",
-                         error=str(exc), stage="analysis_error")
+                         error=str(exc), stage="analysis_error",
+                         tracks_cache_path=None)
         _log_error("Global analysis", session_id, exc)
 
 
@@ -1791,100 +1818,103 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
         # ── 5. 上传到 Gemini Files API（异步，需轮询）──────────────────────────
         import time as _time
         sm.update_task(session_id, task_id, progress=25, stage="uploading_video")
+        # 上传资源计入 Gemini quota，成败都必须 delete_file（try/finally 在块末尾）
         uploaded = genai.upload_file(path=video_for_ai, mime_type="video/mp4")
         print(f"[AI_SUMMARY] Uploaded as {uploaded.name}, waiting for ACTIVE...")
-
-        wait_start = _time.perf_counter()
-        while uploaded.state.name == "PROCESSING":
-            _time.sleep(2)
-            uploaded = genai.get_file(uploaded.name)
-            elapsed  = _time.perf_counter() - wait_start
-            if elapsed > 600:
-                raise RuntimeError(f"Gemini file processing timeout ({elapsed:.0f}s)")
-            sm.update_task(session_id, task_id,
-                           progress=25 + min(44, int(elapsed / 2)),
-                           stage=f"gemini_processing_{int(elapsed)}s")
-
-        if uploaded.state.name != "ACTIVE":
-            raise RuntimeError(f"Gemini file failed to activate: {uploaded.state.name}")
-        print(f"[AI_SUMMARY] File ACTIVE after {_time.perf_counter() - wait_start:.1f}s")
-
-        # ── 6. 组 prompt + 调用 Gemini（附进度模拟线程，避免进度条冻结）────────
-        sm.update_task(session_id, task_id, progress=70, stage="gemini_reasoning")
-
-        import threading as _threading
-        _stop_sim = _threading.Event()
-        def _sim_progress():
-            t0 = _time.perf_counter()
-            while not _stop_sim.is_set():
-                elapsed = _time.perf_counter() - t0
-                # 70 → 93 linearly over 120 s，之后在 93 等待
-                sim_pct = min(93, int(70 + elapsed / 120 * 23))
+        result_data = None
+        report_path = None
+        try:
+            wait_start = _time.perf_counter()
+            while uploaded.state.name == "PROCESSING":
+                _time.sleep(2)
+                uploaded = genai.get_file(uploaded.name)
+                elapsed  = _time.perf_counter() - wait_start
+                if elapsed > 600:
+                    raise RuntimeError(f"Gemini file processing timeout ({elapsed:.0f}s)")
                 sm.update_task(session_id, task_id,
-                               progress=sim_pct, stage="gemini_reasoning")
-                _time.sleep(4)
-        _sim_thread = _threading.Thread(target=_sim_progress, daemon=True)
-        _sim_thread.start()
+                               progress=25 + min(44, int(elapsed / 2)),
+                               stage=f"gemini_processing_{int(elapsed)}s")
 
-        system_text = (
-            "你是一个专业足球战术分析师。"
-            f"视频为原始比赛画面（约 5fps），视频中绿色高亮框（TRACKED）标注的是正在被追踪的核心球员。"
-            "结合以下统计数据和视频画面，生成一份**中文 Markdown 报告**，"
-            "包含以下章节（严格按顺序、标题用 ## 二级标题）：\n\n"
-            "## 比赛概览\n"
-            "简述双方控球对比、关键跑动数据、比赛节奏。\n\n"
-            "## 被追踪球员分析\n"
-            "重点分析视频中绿色框标注的那名球员：跑位、速度爆发、控球、影响力。\n\n"
-            "## 战术观察\n"
-            "阵型特征、进攻模式、防守组织，基于画面实际观察。\n\n"
-            "## 改进建议\n"
-            "3 条具体可执行的训练/战术建议。\n\n"
-            "要求：语言简练，数据引用具体，不要泛泛而谈。"
-        )
+            if uploaded.state.name != "ACTIVE":
+                raise RuntimeError(f"Gemini file failed to activate: {uploaded.state.name}")
+            print(f"[AI_SUMMARY] File ACTIVE after {_time.perf_counter() - wait_start:.1f}s")
 
-        prompt_parts = [
-            uploaded,
-            f"{system_text}\n\n## 统计数据\n```json\n{stats_json}\n```\n\n请生成报告："
-        ]
+            # ── 6. 组 prompt + 调用 Gemini（附进度模拟线程，避免进度条冻结）────────
+            sm.update_task(session_id, task_id, progress=70, stage="gemini_reasoning")
 
-        model_obj = genai.GenerativeModel(model_name)
-        try:
-            response = model_obj.generate_content(
-                prompt_parts,
-                generation_config={
-                    "temperature":       0.4,
-                    "top_p":             0.9,
-                    "max_output_tokens": 4096,
-                },
-                request_options={"timeout": 600},
+            import threading as _threading
+            _stop_sim = _threading.Event()
+            def _sim_progress():
+                t0 = _time.perf_counter()
+                while not _stop_sim.is_set():
+                    elapsed = _time.perf_counter() - t0
+                    # 70 → 93 linearly over 120 s，之后在 93 等待
+                    sim_pct = min(93, int(70 + elapsed / 120 * 23))
+                    sm.update_task(session_id, task_id,
+                                   progress=sim_pct, stage="gemini_reasoning")
+                    _time.sleep(4)
+            _sim_thread = _threading.Thread(target=_sim_progress, daemon=True)
+            _sim_thread.start()
+
+            system_text = (
+                "你是一个专业足球战术分析师。"
+                f"视频为原始比赛画面（约 5fps），视频中绿色高亮框（TRACKED）标注的是正在被追踪的核心球员。"
+                "结合以下统计数据和视频画面，生成一份**中文 Markdown 报告**，"
+                "包含以下章节（严格按顺序、标题用 ## 二级标题）：\n\n"
+                "## 比赛概览\n"
+                "简述双方控球对比、关键跑动数据、比赛节奏。\n\n"
+                "## 被追踪球员分析\n"
+                "重点分析视频中绿色框标注的那名球员：跑位、速度爆发、控球、影响力。\n\n"
+                "## 战术观察\n"
+                "阵型特征、进攻模式、防守组织，基于画面实际观察。\n\n"
+                "## 改进建议\n"
+                "3 条具体可执行的训练/战术建议。\n\n"
+                "要求：语言简练，数据引用具体，不要泛泛而谈。"
             )
+
+            prompt_parts = [
+                uploaded,
+                f"{system_text}\n\n## 统计数据\n```json\n{stats_json}\n```\n\n请生成报告："
+            ]
+
+            model_obj = genai.GenerativeModel(model_name)
+            try:
+                response = model_obj.generate_content(
+                    prompt_parts,
+                    generation_config={
+                        "temperature":       0.4,
+                        "top_p":             0.9,
+                        "max_output_tokens": 4096,
+                    },
+                    request_options={"timeout": 600},
+                )
+            finally:
+                _stop_sim.set()
+                _sim_thread.join(timeout=2)
+
+            report_md = (response.text or "").strip()
+            if not report_md:
+                raise RuntimeError("Gemini returned empty response")
+
+            # ── 7. 落盘 + 完成任务 ──
+            sm.update_task(session_id, task_id, progress=95, stage="saving_report")
+            report_path = output_dir / "ai_summary.md"
+            with open(report_path, "w", encoding="utf-8") as f:
+                f.write(report_md)
+
+            result_data = {
+                "report_markdown": report_md,
+                "video_source":    video_source,
+                "model":           model_name,
+                "char_count":      len(report_md),
+            }
+            _finish_task(sm, session_id, task_id, report_path, result=result_data)
         finally:
-            _stop_sim.set()
-            _sim_thread.join(timeout=2)
-
-        report_md = (response.text or "").strip()
-        if not report_md:
-            raise RuntimeError("Gemini returned empty response")
-
-        # ── 7. 落盘 + 完成任务 ──
-        sm.update_task(session_id, task_id, progress=95, stage="saving_report")
-        report_path = output_dir / "ai_summary.md"
-        with open(report_path, "w", encoding="utf-8") as f:
-            f.write(report_md)
-
-        # 尝试清理远端文件（不影响结果）
-        try:
-            genai.delete_file(uploaded.name)
-        except Exception:
-            pass
-
-        result_data = {
-            "report_markdown": report_md,
-            "video_source":    video_source,
-            "model":           model_name,
-            "char_count":      len(report_md),
-        }
-        _finish_task(sm, session_id, task_id, report_path, result=result_data)
+            # 无论成败都清理 Gemini 远端文件（计费资源）
+            try:
+                genai.delete_file(uploaded.name)
+            except Exception as _de:
+                print(f"[AI_SUMMARY] Failed to delete uploaded Gemini file: {_de}")
 
     except Exception as exc:
         sm.update_task(session_id, task_id, status="failed", error=str(exc))

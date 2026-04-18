@@ -272,11 +272,18 @@ class SceneChangeDetector:
         # ── 5. 合成分段列表 ─────────────────────────────────────────
         segments = []
         cursor = 0
-        # 找"主中场"：最长的 non-match span（靠近中间位置的优先）
-        # 简单策略：如果存在 ≥1 个 non-match span，把最长的那个当作中场
+        # 找"主中场"：只从视频中段 [25%, 75%] 的候选里挑最长那个。
+        # 这样可以避免把开场/终场的非比赛段（广告、球员入场、赛后采访）误判为中场，
+        # 防止统计把开场 10 分钟+真正比赛 60 分钟切成莫名其妙的"上半场 10min/下半场 60min"。
+        mid_low  = int(total_frames * 0.25)
+        mid_high = int(total_frames * 0.75)
+        halftime_candidates = [
+            s for s in non_match_spans
+            if mid_low <= s[0] <= mid_high or mid_low <= s[1] <= mid_high
+        ]
         halftime_span = None
-        if non_match_spans:
-            halftime_span = max(non_match_spans, key=lambda s: s[1] - s[0])
+        if halftime_candidates:
+            halftime_span = max(halftime_candidates, key=lambda s: s[1] - s[0])
 
         if halftime_span is None:
             # 无中场 → 整个视频就是一段比赛
@@ -602,7 +609,11 @@ class Tracker:
 
     def draw_team_ball_control(self, frame, frame_num, team_ball_control, team_colors):
         overlay = frame.copy()
-        cv2.rectangle(overlay, (1350, 850), (1900, 970), (255,255,255), -1)
+        # 比例坐标，适应任意分辨率（之前硬编码 1080p 的 1350/1900，4K 或 720p 会偏）
+        h, w = frame.shape[:2]
+        x1, y1 = int(w * 0.70), int(h * 0.79)
+        x2, y2 = int(w * 0.99), int(h * 0.90)
+        cv2.rectangle(overlay, (x1, y1), (x2, y2), (255,255,255), -1)
         alpha = 0.4
         cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
         team_ball_control_till_frame = team_ball_control[:frame_num+1]
@@ -615,8 +626,18 @@ class Tracker:
         if team_1_num_frames + team_2_num_frames > 0:
             team_1 = team_1_num_frames / (team_1_num_frames + team_2_num_frames)
             team_2 = team_2_num_frames / (team_1_num_frames + team_2_num_frames)
-            cv2.putText(frame, f"Team 1: {team_1*100:.0f}%", (1400, 900), cv2.FONT_HERSHEY_SIMPLEX, 1, t1_color, 3)
-            cv2.putText(frame, f"Team 2: {team_2*100:.0f}%", (1400, 950), cv2.FONT_HERSHEY_SIMPLEX, 1, t2_color, 3)
+            # 字体 / 线宽按分辨率缩放，避免 4K 时文字显得迷你
+            scale = min(w, h) / 1080.0
+            font_scale = 1.0 * scale
+            thickness  = max(1, int(3 * scale))
+            # 两行文字在 box 内均匀分布
+            tx = x1 + int(50 * scale)
+            ty1 = y1 + int((y2 - y1) * 0.42)
+            ty2 = y1 + int((y2 - y1) * 0.82)
+            cv2.putText(frame, f"Team 1: {team_1*100:.0f}%", (tx, ty1),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, t1_color, thickness)
+            cv2.putText(frame, f"Team 2: {team_2*100:.0f}%", (tx, ty2),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, t2_color, thickness)
         return frame
 
 # ═══════════════════════════════════════════════════════════════════════
