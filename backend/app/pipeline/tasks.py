@@ -1856,15 +1856,35 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
             _sim_thread = _threading.Thread(target=_sim_progress, daemon=True)
             _sim_thread.start()
 
+            # 根据实际视频源调整 prompt，避免对无标注视频谎称"有绿色追踪框"
+            if video_source == "raw_video":
+                _video_desc = (
+                    "视频为原始比赛画面（无标注）。"
+                    "由于渲染标注视频失败，请主要依据下方统计数据进行分析，"
+                    "视频画面仅作辅助参考（无法识别具体追踪球员）。"
+                )
+                _player_section = (
+                    "## 被追踪球员分析\n"
+                    "本节请完全依据下方统计数据（max_speed / distance / possession_seconds 等）分析，"
+                    "不要根据视频画面猜测球员身份。\n\n"
+                )
+            else:
+                _video_desc = (
+                    f"视频为原始比赛画面（约 5fps），"
+                    f"{'绿色高亮框（TRACKED）标注的是正在被追踪的核心球员' if video_source == 'full_res_annotated' else 'SAM2 mask 叠加视频，绿框为被追踪球员'}。"
+                )
+                _player_section = (
+                    "## 被追踪球员分析\n"
+                    "重点分析视频中绿色框标注的那名球员：跑位、速度爆发、控球、影响力。\n\n"
+                )
+
             system_text = (
-                "你是一个专业足球战术分析师。"
-                f"视频为原始比赛画面（约 5fps），视频中绿色高亮框（TRACKED）标注的是正在被追踪的核心球员。"
+                f"你是一个专业足球战术分析师。{_video_desc}"
                 "结合以下统计数据和视频画面，生成一份**中文 Markdown 报告**，"
                 "包含以下章节（严格按顺序、标题用 ## 二级标题）：\n\n"
                 "## 比赛概览\n"
                 "简述双方控球对比、关键跑动数据、比赛节奏。\n\n"
-                "## 被追踪球员分析\n"
-                "重点分析视频中绿色框标注的那名球员：跑位、速度爆发、控球、影响力。\n\n"
+                + _player_section +
                 "## 战术观察\n"
                 "阵型特征、进攻模式、防守组织，基于画面实际观察。\n\n"
                 "## 改进建议\n"
