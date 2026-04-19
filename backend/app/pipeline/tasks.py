@@ -161,147 +161,149 @@ def run_samurai_tracking(session_id: str, session: dict,
         start_index = int(player_bbox.get("frame", 0))
         frames_dir = output_dir / "samurai_frames"
         frames_dir.mkdir(parents=True, exist_ok=True)
-        
-        sm.update_status(session_id, "tracking", progress=15, stage="extracting_frames")
-        if cv2 is None:
-            raise ImportError("cv2 is required for frame extraction")
-            
-        # ── 高清变极速抽取：缩放0.5 & 第10帧抽1帧 ──
-        RESIZE_FACTOR = 0.5
-        SKIP_STEP = 10
-        
-        with _video_capture(video_path) as cap:
-            orig_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            orig_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            total_orig_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        if total_orig_frames <= 0:
-            total_orig_frames = 1500
 
-        new_w, new_h = int(orig_w * RESIZE_FACTOR), int(orig_h * RESIZE_FACTOR)
+        try:
+            sm.update_status(session_id, "tracking", progress=15, stage="extracting_frames")
+            if cv2 is None:
+                raise ImportError("cv2 is required for frame extraction")
 
-        # 参数合法性检查（防止 FFmpeg 报难以理解的 filter 错误）
-        if SKIP_STEP < 1:
-            raise ValueError(f"SKIP_STEP must be ≥1, got {SKIP_STEP}")
-        if start_index < 0:
-            raise ValueError(f"start_index must be ≥0, got {start_index}")
-        if new_w <= 0 or new_h <= 0:
-            raise ValueError(f"Scaled dims invalid: {new_w}x{new_h} (orig {orig_w}x{orig_h})")
-        if start_index >= total_orig_frames:
-            raise ValueError(
-                f"start_index {start_index} exceeds video length {total_orig_frames}"
+            # ── 高清变极速抽取：缩放0.5 & 第10帧抽1帧 ──
+            RESIZE_FACTOR = 0.5
+            SKIP_STEP = 10
+
+            with _video_capture(video_path) as cap:
+                orig_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                orig_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                total_orig_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            if total_orig_frames <= 0:
+                total_orig_frames = 1500
+
+            new_w, new_h = int(orig_w * RESIZE_FACTOR), int(orig_h * RESIZE_FACTOR)
+
+            # 参数合法性检查（防止 FFmpeg 报难以理解的 filter 错误）
+            if SKIP_STEP < 1:
+                raise ValueError(f"SKIP_STEP must be ≥1, got {SKIP_STEP}")
+            if start_index < 0:
+                raise ValueError(f"start_index must be ≥0, got {start_index}")
+            if new_w <= 0 or new_h <= 0:
+                raise ValueError(f"Scaled dims invalid: {new_w}x{new_h} (orig {orig_w}x{orig_h})")
+            if start_index >= total_orig_frames:
+                raise ValueError(
+                    f"start_index {start_index} exceeds video length {total_orig_frames}"
+                )
+
+            # e.g select='gte(n, 120)*not(mod(n-120, 5))'
+            vf = f"select='gte(n\\,{start_index})*not(mod(n-{start_index}\\,{SKIP_STEP}))',scale={new_w}:{new_h}"
+            cmd_ext = [
+                "ffmpeg", "-i", video_path, "-y",
+                "-vf", vf, "-vsync", "0", "-q:v", "2",
+                str(frames_dir / "%05d.jpg")
+            ]
+            res = subprocess.run(cmd_ext, capture_output=True, text=True)
+            if res.returncode != 0:
+                raise RuntimeError(f"FFmpeg extract failed: {res.stderr}")
+
+            sam_total_frames = len(list(frames_dir.glob("*.jpg")))
+            if sam_total_frames == 0:
+                raise RuntimeError("No frames extracted by FFmpeg")
+
+            # Create temporary txt for demo.py, scale bbox
+            # 边界裁剪：前端 canvas 坐标可能溢出，超出会让 SAMURAI 追黑边或 crash
+            bx = max(0.0, min(player_bbox['x'] * RESIZE_FACTOR, new_w - 2.0))
+            by = max(0.0, min(player_bbox['y'] * RESIZE_FACTOR, new_h - 2.0))
+            bw = max(1.0, min(player_bbox['w'] * RESIZE_FACTOR, new_w - bx))
+            bh = max(1.0, min(player_bbox['h'] * RESIZE_FACTOR, new_h - by))
+            if bw < 8 or bh < 8:
+                raise ValueError(
+                    f"Player bbox too small after scaling: {bw:.1f}x{bh:.1f}. "
+                    f"Original bbox may be out of frame or degenerate."
+                )
+            init_txt = output_dir / "input_bbox.txt"
+            with open(init_txt, "w") as f:
+                f.write(f"{bx},{by},{bw},{bh}\n")
+
+            temp_video = output_dir / "samurai_temp.mp4"
+
+            cmd = [
+                "python", SAMURAI_SCRIPT,
+                "--video_path",  str(frames_dir),
+                "--txt_path",    str(init_txt),
+                "--video_output_path", str(temp_video),
+                "--model_path",  os.environ.get("SAM2_MODEL_PATH", "sam2/checkpoints/sam2.1_hiera_base_plus.pt"),
+            ]
+            env = os.environ.copy()
+            samurai_root = str(Path(SAMURAI_SCRIPT).parent.parent)
+            env["PYTHONPATH"] = f"{samurai_root}:{samurai_root}/sam2:" + env.get("PYTHONPATH", "")
+            env["HYDRA_FULL_ERROR"] = "1"
+
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=None, env=env, cwd=samurai_root
             )
 
-        # e.g select='gte(n, 120)*not(mod(n-120, 5))'
-        vf = f"select='gte(n\\,{start_index})*not(mod(n-{start_index}\\,{SKIP_STEP}))',scale={new_w}:{new_h}"
-        cmd_ext = [
-            "ffmpeg", "-i", video_path, "-y",
-            "-vf", vf, "-vsync", "0", "-q:v", "2",
-            str(frames_dir / "%05d.jpg")
-        ]
-        res = subprocess.run(cmd_ext, capture_output=True, text=True)
-        if res.returncode != 0:
-            raise RuntimeError(f"FFmpeg extract failed: {res.stderr}")
+            if result.returncode != 0:
+                full_error_log = result.stderr if len(result.stderr) < 3000 else result.stderr[-3000:]
+                raise RuntimeError(f"SAMURAI exited {result.returncode}:\n{full_error_log}")
 
-        sam_total_frames = len(list(frames_dir.glob("*.jpg")))
-        if sam_total_frames == 0:
-            raise RuntimeError("No frames extracted by FFmpeg")
+            res_txt = output_dir / "samurai_temp_bboxes.txt"
+            if not res_txt.exists():
+                raise FileNotFoundError(f"SAMURAI did not produce output bboxes at {res_txt}")
 
-        # Create temporary txt for demo.py, scale bbox
-        # 边界裁剪：前端 canvas 坐标可能溢出，超出会让 SAMURAI 追黑边或 crash
-        bx = max(0.0, min(player_bbox['x'] * RESIZE_FACTOR, new_w - 2.0))
-        by = max(0.0, min(player_bbox['y'] * RESIZE_FACTOR, new_h - 2.0))
-        bw = max(1.0, min(player_bbox['w'] * RESIZE_FACTOR, new_w - bx))
-        bh = max(1.0, min(player_bbox['h'] * RESIZE_FACTOR, new_h - by))
-        if bw < 8 or bh < 8:
-            raise ValueError(
-                f"Player bbox too small after scaling: {bw:.1f}x{bh:.1f}. "
-                f"Original bbox may be out of frame or degenerate."
-            )
-        init_txt = output_dir / "input_bbox.txt"
-        with open(init_txt, "w") as f:
-            f.write(f"{bx},{by},{bw},{bh}\n")
-            
-        temp_video = output_dir / "samurai_temp.mp4"
-        
-        cmd = [
-            "python", SAMURAI_SCRIPT,
-            "--video_path",  str(frames_dir),
-            "--txt_path",    str(init_txt),
-            "--video_output_path", str(temp_video),
-            "--model_path",  os.environ.get("SAM2_MODEL_PATH", "sam2/checkpoints/sam2.1_hiera_base_plus.pt"),
-        ]
-        env = os.environ.copy()
-        samurai_root = str(Path(SAMURAI_SCRIPT).parent.parent)
-        env["PYTHONPATH"] = f"{samurai_root}:{samurai_root}/sam2:" + env.get("PYTHONPATH", "")
-        env["HYDRA_FULL_ERROR"] = "1"
-        
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=None, env=env, cwd=samurai_root
-        )
+            # 解析并插值
+            scale_back = 1.0 / RESIZE_FACTOR
+            sparse_bboxes = {}
+            with open(res_txt, "r") as f:
+                for line in f:
+                    parts = line.strip().split(',')
+                    if len(parts) >= 6:
+                        fid = int(parts[0])
+                        original_fid = start_index + (fid * SKIP_STEP)
+                        x, y, w, h = float(parts[2]), float(parts[3]), float(parts[4]), float(parts[5])
+                        if w > 0 and h > 0:
+                            sparse_bboxes[original_fid] = [x * scale_back, y * scale_back, w * scale_back, h * scale_back]
 
-        if result.returncode != 0:
-            full_error_log = result.stderr if len(result.stderr) < 3000 else result.stderr[-3000:]
-            raise RuntimeError(f"SAMURAI exited {result.returncode}:\n{full_error_log}")
+            if not sparse_bboxes:
+                total_lines = sum(1 for _ in open(res_txt))
+                raise RuntimeError(
+                    f"SAMURAI output unparseable — {res_txt} has {total_lines} lines "
+                    f"but no valid bbox rows (expected ≥6 comma-separated fields per line). "
+                    f"Check SAMURAI script output format."
+                )
 
-        res_txt = output_dir / "samurai_temp_bboxes.txt"
-        if not res_txt.exists():
-            raise FileNotFoundError(f"SAMURAI did not produce output bboxes at {res_txt}")
+            end_index = max(sparse_bboxes.keys()) if sparse_bboxes else start_index
+            df = pd.DataFrame(index=range(start_index, end_index + 1), columns=['x', 'y', 'w', 'h'])
+            for f_idx, box in sparse_bboxes.items():
+                if f_idx <= end_index:
+                    df.loc[f_idx] = box
 
-        # 解析并插值
-        scale_back = 1.0 / RESIZE_FACTOR
-        sparse_bboxes = {}
-        with open(res_txt, "r") as f:
-            for line in f:
-                parts = line.strip().split(',')
-                if len(parts) >= 6:
-                    fid = int(parts[0])
-                    original_fid = start_index + (fid * SKIP_STEP)
-                    x, y, w, h = float(parts[2]), float(parts[3]), float(parts[4]), float(parts[5])
-                    if w > 0 and h > 0:
-                        sparse_bboxes[original_fid] = [x * scale_back, y * scale_back, w * scale_back, h * scale_back]
-
-        if not sparse_bboxes:
-            total_lines = sum(1 for _ in open(res_txt))
-            raise RuntimeError(
-                f"SAMURAI output unparseable — {res_txt} has {total_lines} lines "
-                f"but no valid bbox rows (expected ≥6 comma-separated fields per line). "
-                f"Check SAMURAI script output format."
+            # 只在短缺口内线性插值；长缺口（>MAX_INTERP_GAP_FRAMES）保留 NaN，
+            # 下游 `if i not in bboxes_dict: continue` 自动跳过，避免"幻觉轨迹"
+            df = df.astype(float).interpolate(
+                method='linear',
+                limit=MAX_INTERP_GAP_FRAMES,
+                limit_direction='both',
             )
 
-        end_index = max(sparse_bboxes.keys()) if sparse_bboxes else start_index
-        df = pd.DataFrame(index=range(start_index, end_index + 1), columns=['x', 'y', 'w', 'h'])
-        for f_idx, box in sparse_bboxes.items():
-            if f_idx <= end_index:
-                df.loc[f_idx] = box
-        
-        # 只在短缺口内线性插值；长缺口（>MAX_INTERP_GAP_FRAMES）保留 NaN，
-        # 下游 `if i not in bboxes_dict: continue` 自动跳过，避免"幻觉轨迹"
-        df = df.astype(float).interpolate(
-            method='linear',
-            limit=MAX_INTERP_GAP_FRAMES,
-            limit_direction='both',
-        )
+            bboxes_dict = {}
+            for f_idx, row in df.iterrows():
+                if pd.isna(row['x']) or pd.isna(row['y']):
+                    continue
+                bboxes_dict[f_idx] = (row['x'], row['y'], row['w'], row['h'])
 
-        bboxes_dict = {}
-        for f_idx, row in df.iterrows():
-            if pd.isna(row['x']) or pd.isna(row['y']):
-                continue
-            bboxes_dict[f_idx] = (row['x'], row['y'], row['w'], row['h'])
+            # 原子写：tmp → fsync → rename，避免 partial pickle 被下游读到
+            _atomic_pickle_dump({"bboxes": bboxes_dict}, cache_path)
 
-        # 原子写：tmp → fsync → rename，避免 partial pickle 被下游读到
-        _atomic_pickle_dump({"bboxes": bboxes_dict}, cache_path)
-
-        # 清理中间帧目录（12,960 jpg ≈ 650MB，不清会占满 Colab /content）
-        import shutil
-        shutil.rmtree(frames_dir, ignore_errors=True)
-        print(f"[INFO] Cleaned up samurai_frames dir: {frames_dir}")
-
-        sm.update_status(
-            session_id, "tracking_done",
-            progress=100, stage="samurai_done",
-            samurai_cache_path=str(cache_path),
-            samurai_tracked_frames=len(bboxes_dict),
-        )
+            sm.update_status(
+                session_id, "tracking_done",
+                progress=100, stage="samurai_done",
+                samurai_cache_path=str(cache_path),
+                samurai_tracked_frames=len(bboxes_dict),
+            )
+        finally:
+            # 始终清理中间帧目录（12,960 jpg ≈ 650MB），无论成功失败，
+            # 否则 Colab /content 会因重试累积至磁盘满
+            import shutil
+            shutil.rmtree(frames_dir, ignore_errors=True)
+            print(f"[INFO] Cleaned up samurai_frames dir: {frames_dir}")
 
     except Exception as exc:
         sm.update_status(session_id, "tracking_failed",
@@ -1032,8 +1034,11 @@ def run_minimap_replay(session_id: str, session: dict, task_id: str, sm: Session
             str(output_path)
         ]
         # with 语法：确保异常时也 wait()+kill 子进程（避免 zombie ffmpeg）
-        with sp.Popen(ffmpeg_cmd, stdin=sp.PIPE,
-                      stdout=sp.DEVNULL, stderr=sp.DEVNULL) as proc:
+        # stderr 保留到临时文件，编码失败时可回读诊断（DEVNULL 会吞掉 libx264 报错）
+        ff_log = sm.session_output_dir(session_id) / "minimap_ffmpeg.log"
+        with open(ff_log, "wb") as _errf, \
+             sp.Popen(ffmpeg_cmd, stdin=sp.PIPE,
+                      stdout=sp.DEVNULL, stderr=_errf) as proc:
             try:
                 # 写第一帧
                 proc.stdin.write(first_frame.tobytes())
@@ -1062,6 +1067,21 @@ def run_minimap_replay(session_id: str, session: dict, task_id: str, sm: Session
                 if proc.stdin:
                     try: proc.stdin.close()
                     except Exception: pass
+
+        # 校验编码结果：returncode 非零或文件 <1KB 说明 libx264 静默失败
+        # (常见原因：pitch_bg 奇数尺寸被 yuv420p 拒绝，或 Colab 磁盘满)
+        if proc.returncode != 0 or (not output_path.exists()) or output_path.stat().st_size < 1024:
+            tail = ""
+            try:
+                with open(ff_log, "rb") as _rf:
+                    tail = _rf.read()[-2000:].decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"FFmpeg minimap encode failed (rc={proc.returncode}, "
+                f"size={output_path.stat().st_size if output_path.exists() else 0}B). "
+                f"stderr tail:\n{tail}"
+            )
 
         print(f"[MEM] Minimap replay done — streamed {total_frames} frames")
         _finish_task(sm, session_id, task_id, output_path)
@@ -1146,8 +1166,10 @@ def run_full_replay(session_id: str, session: dict, task_id: str, sm: SessionMan
                 "-vcodec", "libx264", "-pix_fmt", "yuv420p",
                 str(output_path)
             ]
-            with sp.Popen(ffmpeg_cmd, stdin=sp.PIPE,
-                          stdout=sp.DEVNULL, stderr=sp.DEVNULL) as proc:
+            ff_log = sm.session_output_dir(session_id) / "full_replay_ffmpeg.log"
+            with open(ff_log, "wb") as _errf, \
+                 sp.Popen(ffmpeg_cmd, stdin=sp.PIPE,
+                          stdout=sp.DEVNULL, stderr=_errf) as proc:
                 try:
                     sm.update_task(session_id, task_id, progress=15)
 
@@ -1171,6 +1193,20 @@ def run_full_replay(session_id: str, session: dict, task_id: str, sm: SessionMan
                     if proc.stdin:
                         try: proc.stdin.close()
                         except Exception: pass
+
+        # 校验编码结果：静默失败 (奇数尺寸 / 磁盘满 / 编解码器缺失) 一定要暴露给前端
+        if proc.returncode != 0 or (not output_path.exists()) or output_path.stat().st_size < 1024:
+            tail = ""
+            try:
+                with open(ff_log, "rb") as _rf:
+                    tail = _rf.read()[-2000:].decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"FFmpeg full_replay encode failed (rc={proc.returncode}, "
+                f"size={output_path.stat().st_size if output_path.exists() else 0}B). "
+                f"stderr tail:\n{tail}"
+            )
 
         print(f"[MEM] Full replay done — streamed {total_frames} frames, no bulk load")
         _finish_task(sm, session_id, task_id, output_path)
@@ -1645,14 +1681,20 @@ def _render_gemini_video(video_path: str, bboxes_dict: dict,
             "-vcodec", "libx264", "-pix_fmt", "yuv420p", "-crf", "22",
             str(output_path),
         ]
-        # with 语法确保 encode_proc 异常退出也能 wait() 回收
-        with _sp.Popen(encode_cmd, stdin=_sp.PIPE,
-                       stdout=_sp.DEVNULL, stderr=_sp.DEVNULL) as encode_proc:
-            try:
-                # 先尝试 CUDA，失败重试 CPU
-                frame_size = w * h * 3
-                frames_written = 0
-                for use_cuda in (True, False):
+
+        frame_size = w * h * 3
+        frames_written = 0
+
+        # CUDA/CPU 重试必须把 encoder 也重建——否则 CUDA 半途失败时，
+        # 已写入 encoder stdin 的 N 帧会和 CPU 重试的帧 0..M 拼成错位视频
+        for use_cuda in (True, False):
+            if output_path.exists():
+                try: output_path.unlink()
+                except Exception: pass
+
+            with _sp.Popen(encode_cmd, stdin=_sp.PIPE,
+                           stdout=_sp.DEVNULL, stderr=_sp.DEVNULL) as encode_proc:
+                try:
                     with _sp.Popen(_make_decode_cmd(use_cuda),
                                    stdout=_sp.PIPE, stderr=_sp.DEVNULL) as decode_proc:
                         try:
@@ -1692,18 +1734,18 @@ def _render_gemini_video(video_path: str, bboxes_dict: dict,
                                 if progress_cb and frames_written % 300 == 0:
                                     progress_cb(frames_written, total_out)
                         finally:
-                            # with 块自动 wait()，这里显式关 stdout 便于立即回收
                             if decode_proc.stdout:
                                 try: decode_proc.stdout.close()
                                 except Exception: pass
-                    if ok and frames_written > 0:
-                        break   # 成功，不需要重试 CPU
-                    if use_cuda:
-                        print("[AI_SUMMARY] CUDA decode failed, retrying with CPU...")
-            finally:
-                if encode_proc.stdin:
-                    try: encode_proc.stdin.close()
-                    except Exception: pass
+                finally:
+                    if encode_proc.stdin:
+                        try: encode_proc.stdin.close()
+                        except Exception: pass
+
+            if ok and frames_written > 0:
+                break   # 成功，不需要重试 CPU
+            if use_cuda:
+                print("[AI_SUMMARY] CUDA decode failed, retrying with CPU (rebuilding encoder)...")
 
         success = output_path.exists() and output_path.stat().st_size > 0
         print(f"[AI_SUMMARY] gemini_video: {frames_written} frames written, "
