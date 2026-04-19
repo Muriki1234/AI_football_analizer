@@ -109,15 +109,24 @@ def analyze_frame(sid):
     model = YOLO(os.environ.get('YOLO_MODEL_PATH', '/content/pitchlogic/soccana_best.pt'))
     results = model.predict(frame, conf=0.25, iou=0.45, imgsz=1280, verbose=False)[0]
     players = []
+    annotated = frame.copy()
     for box in results.boxes:
         cls = int(box.cls[0])
         if results.names[cls].lower() in ('player', 'goalkeeper'):
             x1, y1, x2, y2 = box.xyxy[0].tolist()
             players.append({'id': len(players) + 1, 'name': results.names[cls].capitalize(),
                             'bbox': [x1, y1, x2, y2], 'avatar': '👤'})
+            # 在帧上画框方便前端显示
+            cv2.rectangle(annotated, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
+    # 编码为 base64 data URL 直接返回（避免额外的文件服务路由）
+    import base64
+    _, buf = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
+    frame_b64 = base64.b64encode(buf).decode('utf-8')
+    annotated_frame_url = f'data:image/jpeg;base64,{frame_b64}'
     print(f'✅ [analyze_frame] sid={sid} detected {len(players)} players')
     return jsonify({'players_data': players,
-                    'image_dimensions': {'width': frame.shape[1], 'height': frame.shape[0]}})
+                    'image_dimensions': {'width': frame.shape[1], 'height': frame.shape[0]},
+                    'annotated_frame_url': annotated_frame_url})
 
 # ── Trim ──────────────────────────────────────────────────────────────────────
 
