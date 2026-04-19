@@ -83,8 +83,9 @@ export const analyzePlayer = async (videoId, playerId, coordinates = null) => {
 // ── Analysis Pipeline（全部走 Colab）────────────────────────────────────
 
 export const registerSession = async (sessionId, videoPath) => {
-    // 强制在本地注册 Session，把 videoId 转化为 sessionId
-    // Colab 那边不需要 register_session，因为 sendVideo 已经包含了所需上下文
+    // Colab 模式下 sendVideo 已经创建 session，register 是 no-op；
+    // 直接打本地 Flask 会 400（本地无视频文件）
+    if (colab.isConfigured()) return colab.registerSession(sessionId, videoPath);
     const response = await api.post(`/${sessionId}/register`, { video_path: videoPath });
     return response.data;
 };
