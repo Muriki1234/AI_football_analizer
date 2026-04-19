@@ -240,6 +240,30 @@ def generate_full_replay(sid):
     _fire(tasks.run_full_replay, sid, s, tid, sm)
     return jsonify({'task_id': tid, 'status': 'queued'})
 
+@app.route('/api/<sid>/generate/sprint_analysis', methods=['POST'])
+def generate_sprint_analysis(sid):
+    s, err = _require_analysis_done(sid)
+    if err: return err
+    tid = sm.create_task(sid, 'sprint_analysis')
+    _fire(tasks.run_sprint_analysis, sid, s, tid, sm)
+    return jsonify({'task_id': tid, 'status': 'queued'})
+
+@app.route('/api/<sid>/generate/defensive_line', methods=['POST'])
+def generate_defensive_line(sid):
+    s, err = _require_analysis_done(sid)
+    if err: return err
+    tid = sm.create_task(sid, 'defensive_line')
+    _fire(tasks.run_defensive_line, sid, s, tid, sm)
+    return jsonify({'task_id': tid, 'status': 'queued'})
+
+@app.route('/api/<sid>/generate/ai_summary', methods=['POST'])
+def generate_ai_summary(sid):
+    s, err = _require_analysis_done(sid)
+    if err: return err
+    tid = sm.create_task(sid, 'ai_summary')
+    _fire(tasks.run_ai_summary, sid, s, tid, sm)
+    return jsonify({'task_id': tid, 'status': 'queued'})
+
 # ── Status & Files ────────────────────────────────────────────────────────────
 
 @app.route('/api/<sid>/status')

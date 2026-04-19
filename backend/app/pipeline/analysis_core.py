@@ -1454,7 +1454,10 @@ def render_minimap_frame(frame_idx: int, tracks: dict,
             d = measure_distance(center, (cx, cy))
             if d < min_d:
                 min_d = d
-                tp = info.get("position_minimap")
+                # position_transformed 已在 0-105m × 0-68m 区间，直接给 _mm_p2px。
+                # position_minimap 是遗留 config-scale（~0-10500），仅供 heatmap/sprint 的
+                # draw_points_on_pitch 使用；新 OpenCV 渲染器必须用 position_transformed。
+                tp = info.get("position_transformed")
                 if tp and len(tp) == 2 and not any(np.isnan(p) for p in tp):
                     tracked_pos  = tp
                     tracked_team = info.get("team")
@@ -1477,7 +1480,7 @@ def render_minimap_frame(frame_idx: int, tracks: dict,
         for pid, info in tracks["players"][frame_idx].items():
             if not info:
                 continue
-            pos = info.get("position_minimap")
+            pos = info.get("position_transformed")  # meters, matches _mm_p2px
             if not pos or len(pos) != 2 or any(np.isnan(p) for p in pos):
                 continue
             px = _mm_p2px(pos, w, h)
@@ -1494,7 +1497,7 @@ def render_minimap_frame(frame_idx: int, tracks: dict,
         cv2.circle(frame, tpx, 10, inner,          -1)   # 队伍色内芯
 
     # ── 足球 ─────────────────────────────────────────────────────────
-    ball_pos = tracks["ball"][frame_idx].get(1, {}).get("position_minimap") \
+    ball_pos = tracks["ball"][frame_idx].get(1, {}).get("position_transformed") \
                if frame_idx < len(tracks["ball"]) else None
     if ball_pos and len(ball_pos) == 2 and not any(np.isnan(p) for p in ball_pos):
         bpx = _mm_p2px(ball_pos, w, h)

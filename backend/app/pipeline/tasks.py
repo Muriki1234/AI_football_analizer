@@ -1013,9 +1013,11 @@ def run_minimap_replay(session_id: str, session: dict, task_id: str, sm: Session
         mh, mw  = pitch_bg.shape[:2]
 
         # 第一帧
+        # 轨迹坐标用 position_transformed（米制，匹配 _mm_p2px）。
+        # position_minimap 是遗留 config-scale（~0-10500），画到 840px 画布外。
         ball_trail: list = []
         ball_info_0 = tracks["ball"][0].get(1, {}) if len(tracks["ball"]) > 0 else {}
-        ball_mp_0 = ball_info_0.get("position_minimap") if ball_info_0 else None
+        ball_mp_0 = ball_info_0.get("position_transformed") if ball_info_0 else None
         if ball_mp_0:
             ball_trail.append((ball_mp_0[0], ball_mp_0[1]))
         first_frame = render_minimap_frame(0, tracks, tracked_bboxes, team_control,
@@ -1046,7 +1048,7 @@ def run_minimap_replay(session_id: str, session: dict, task_id: str, sm: Session
                 # 流式渲染后续帧
                 for i in range(1, total_frames):
                     ball_info = tracks["ball"][i].get(1, {}) if i < len(tracks["ball"]) else {}
-                    ball_mp = ball_info.get("position_minimap") if ball_info else None
+                    ball_mp = ball_info.get("position_transformed") if ball_info else None
                     if ball_mp:
                         ball_trail.append((ball_mp[0], ball_mp[1]))
                         if len(ball_trail) > 30:
