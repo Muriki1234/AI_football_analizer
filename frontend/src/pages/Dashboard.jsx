@@ -136,40 +136,11 @@ export default function Dashboard() {
                 (t) => setFeatures(prev => ({ ...prev, [featureKey]: { ...prev[featureKey], status: 'generating', progress: t.progress } }))
             );
 
-            const feat = FEATURES.find(f => f.key === featureKey);
-            if (feat?.type === 'video' && task.url) {
-                // 视频先缓冲到本地 blob，再播放——避免从 tunnel 实时流式拉取卡顿
-                // （Cloudflare Tunnel 带宽不稳定，<video src=remote> 会一卡一卡）
-                setFeatures(prev => ({ ...prev, [featureKey]: { ...prev[featureKey], status: 'buffering', progress: 0 } }));
-                const response = await fetch(task.url);
-                if (!response.ok) throw new Error(`Buffer fetch failed: ${response.status}`);
-                const contentLength = +response.headers.get('Content-Length') || 0;
-                const reader = response.body.getReader();
-                const chunks = [];
-                let received = 0;
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    chunks.push(value);
-                    received += value.length;
-                    if (contentLength) {
-                        setFeatures(prev => ({
-                            ...prev,
-                            [featureKey]: { ...prev[featureKey], status: 'buffering', progress: Math.round(received / contentLength * 100) }
-                        }));
-                    }
-                }
-                const blobUrl = URL.createObjectURL(new Blob(chunks, { type: 'video/mp4' }));
-                setFeatures(prev => ({
-                    ...prev,
-                    [featureKey]: { status: 'done', taskId: task_id, url: blobUrl, result: task.result }
-                }));
-            } else {
-                setFeatures(prev => ({
-                    ...prev,
-                    [featureKey]: { status: 'done', taskId: task_id, url: task.url, result: task.result }
-                }));
-            }
+            // minimap_replay 已有 +faststart，直接用 URL 播即可（小文件 Range 够用）
+            setFeatures(prev => ({
+                ...prev,
+                [featureKey]: { status: 'done', taskId: task_id, url: task.url, result: task.result }
+            }));
         } catch (e) {
             setFeatures(prev => ({
                 ...prev, [featureKey]: { ...prev[featureKey], status: 'error', error: e.message }
@@ -300,12 +271,6 @@ export default function Dashboard() {
                                     <div className="feature-card__loading">
                                         <div className="feature-card__spinner" />
                                         <span>Generating... {fState.progress || 0}%</span>
-                                    </div>
-                                )}
-                                {fState.status === 'buffering' && (
-                                    <div className="feature-card__loading">
-                                        <div className="feature-card__spinner" />
-                                        <span>Buffering video... {fState.progress || 0}%</span>
                                     </div>
                                 )}
                                 {fState.status === 'done' && feat.type === 'image' && fState.url && (
