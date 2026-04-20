@@ -17,22 +17,6 @@
     font-size: 0.9rem;
 }
 
-.vop__loading > span { display: flex; align-items: center; gap: 8px; }
-
-.vop__buffer-bar {
-    width: 240px;
-    height: 4px;
-    background: #333;
-    border-radius: 2px;
-    overflow: hidden;
-}
-
-.vop__buffer-fill {
-    height: 100%;
-    background: #00e59b;
-    border-radius: 2px;
-    transition: width 0.2s ease;
-}
 
 .vop__error { color: #e74c3c; }
 

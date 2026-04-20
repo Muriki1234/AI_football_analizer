@@ -205,54 +205,21 @@ export default function VideoOverlayPlayer({ sessionId }) {
     const canvasRef  = useRef(null);
     const overlayRef = useRef(null);
     const rafRef     = useRef(null);
-    const blobUrlRef = useRef(null);  // 持有 blob URL，组件卸载时释放
     // 累计控球帧数（对齐 notebook 的 cumulative team_ball_control）
     const possRef    = useRef({ t1: 0, t2: 0, lastFrame: -1 });
 
-    const [loadState, setLoadState]       = useState('loading');
-    const [loadLabel, setLoadLabel]       = useState('Loading overlay data...');
-    const [bufferPct, setBufferPct]       = useState(0);
-    const [errMsg, setErrMsg]             = useState('');
+    const [loadState, setLoadState] = useState('loading');
+    const [errMsg, setErrMsg]       = useState('');
 
-    // 释放 blob URL，避免内存泄漏
-    useEffect(() => {
-        return () => { if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current); };
-    }, []);
-
-    // 1. 加载 overlay JSON，2. 再 buffer 原始视频到 blob
+    // 加载 overlay JSON；视频直接用 URL（上传时已 faststart remux，moov 在文件头，
+    // 浏览器 Range 请求边下边播，无需整体 buffer）
     useEffect(() => {
         if (!sessionId) return;
         setLoadState('loading');
-        setLoadLabel('Loading overlay data...');
         const base = colab.getUrl();
-
         fetch(`${base}/api/${sessionId}/overlay_data`)
             .then(r => r.ok ? r.json() : r.json().then(e => { throw new Error(e.error || r.status) }))
-            .then(async data => {
-                overlayRef.current = data;
-
-                // buffer 原始视频到本地 blob，避免从 tunnel 实时流式拉取卡顿
-                setLoadState('buffering');
-                setLoadLabel('Buffering video...');
-                setBufferPct(0);
-
-                const vr = await fetch(`${base}/api/${sessionId}/raw_video`);
-                if (!vr.ok) throw new Error(`Video fetch failed: ${vr.status}`);
-                const total  = +vr.headers.get('Content-Length') || 0;
-                const reader = vr.body.getReader();
-                const chunks = [];
-                let received = 0;
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    chunks.push(value);
-                    received += value.length;
-                    if (total) setBufferPct(Math.round(received / total * 100));
-                }
-                const blob = new Blob(chunks, { type: 'video/mp4' });
-                blobUrlRef.current = URL.createObjectURL(blob);
-                setLoadState('ready');
-            })
+            .then(data => { overlayRef.current = data; setLoadState('ready'); })
             .catch(e => { setErrMsg(e.message); setLoadState('error'); });
     }, [sessionId]);
 
@@ -367,18 +334,10 @@ export default function VideoOverlayPlayer({ sessionId }) {
 
     return (
         <div className="vop">
-            {(loadState === 'loading' || loadState === 'buffering') && (
+            {loadState === 'loading' && (
                 <div className="vop__loading">
                     <div className="vop__spinner" />
-                    <span>
-                        {loadLabel}
-                        {loadState === 'buffering' && bufferPct > 0 && ` ${bufferPct}%`}
-                    </span>
-                    {loadState === 'buffering' && (
-                        <div className="vop__buffer-bar">
-                            <div className="vop__buffer-fill" style={{ width: `${bufferPct}%` }} />
-                        </div>
-                    )}
+                    <span>Loading overlay data...</span>
                 </div>
             )}
             {loadState === 'error' && (
@@ -388,7 +347,7 @@ export default function VideoOverlayPlayer({ sessionId }) {
                 <div className="vop__wrapper">
                     <video
                         ref={videoRef}
-                        src={blobUrlRef.current}
+                        src={`${colab.getUrl()}/api/${sessionId}/raw_video`}
                         controls
                         className="vop__video"
                         onSeeked={() => {

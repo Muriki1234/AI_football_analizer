@@ -173,6 +173,30 @@ def upload_complete(sid):
         # 合并完清理分块目录（失败也清，因为前端会重新上传）
         shutil.rmtree(d, ignore_errors=True)
 
+    # ── faststart remux: 把 moov atom 搬到文件头 ──────────────────────────
+    # 原始录屏文件 moov 通常在末尾，浏览器 <video> 要下完整个文件才能开始播。
+    # -c copy 只重排索引，不重新编码，几秒完成，让前端 Range 请求边下边播。
+    fast_dest = UPLOAD_ROOT / f'{sid}_fast_{filename}'
+    try:
+        r = sp.run(
+            ['ffmpeg', '-y', '-i', str(dest),
+             '-c', 'copy', '-movflags', '+faststart', str(fast_dest)],
+            stdout=sp.DEVNULL, stderr=sp.PIPE, timeout=300
+        )
+        if r.returncode == 0 and fast_dest.exists() and fast_dest.stat().st_size > 1024:
+            dest.unlink(missing_ok=True)
+            fast_dest.rename(dest)
+            print(f'✅ [upload_complete] faststart remux done -> {dest}')
+        else:
+            # remux 失败时保留原始合并文件，不阻断流程
+            if fast_dest.exists(): fast_dest.unlink(missing_ok=True)
+            print(f'⚠️ [upload_complete] faststart failed (rc={r.returncode}), using raw merge')
+    except Exception as fe:
+        if fast_dest.exists():
+            try: fast_dest.unlink()
+            except Exception: pass
+        print(f'⚠️ [upload_complete] faststart exception: {fe}')
+
     video_path = str(dest)
     if not sm.get_session(sid):
         sm.create_session(sid, video_path)
