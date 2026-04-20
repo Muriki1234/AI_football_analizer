@@ -85,7 +85,7 @@ def bgr_to_hex(bgr) -> str:
 
 
 def clamp_pitch_position(x: float, y: float,
-                          x_max: float = 105.0, y_max: float = 68.0):
+                          x_max: float = 120.0, y_max: float = 70.0):
     """Clamp a transformed pitch coordinate to valid field bounds.
     Aligned with _PITCH_LEN/WID used by _mm_p2px and make_pitch_background (FIFA: 105×68 m)."""
     return (max(0.0, min(float(x), x_max)),
@@ -1347,8 +1347,11 @@ class SmartBallPossessionDetector:
 _MM_W      = 840   # 输出宽度（像素）
 _MM_H      = 560   # 输出高度（像素）
 _MM_MARGIN = 40    # 球场边距（像素）
-_PITCH_LEN = 105.0 # 球场长度（米）
-_PITCH_WID = 68.0  # 球场宽度（米）
+# SOCCANA_PITCH_COORDS 坐标系：x 0-12000, y 0-7000 (÷100 → 120×70)
+# 必须与 clamp_pitch_position 和 make_pitch_background 保持一致，
+# 否则球员位置和场地线条坐标系不同，小地图出现~14%偏移。
+_PITCH_LEN = 120.0
+_PITCH_WID = 70.0
 
 
 def _mm_p2px(pos, fps_w=_MM_W, fps_h=_MM_H, margin=_MM_MARGIN):
@@ -1370,50 +1373,51 @@ def _hex_to_bgr(hex_str: str) -> tuple:
 def make_pitch_background(width=_MM_W, height=_MM_H, margin=_MM_MARGIN) -> np.ndarray:
     """
     纯 OpenCV 绘制标准足球场底图（只需生成一次，后续每帧 copy）。
-    坐标系：(0,0)=左上角球门线，(105,68)=右下角球门线。
+    坐标系与 SOCCANA_PITCH_COORDS ÷100 对齐：(0,0)=左上，(120,70)=右下。
+    线条坐标从 SOCCANA_PITCH_COORDS/100 导出，确保与 position_transformed 一致。
     """
     bg = np.full((height, width, 3), (34, 120, 34), dtype=np.uint8)  # 绿草地
 
-    def p(x, y):  # 米 → 像素（简写）
+    def p(x, y):  # SOCCANA 坐标(÷100) → 像素
         return _mm_p2px((x, y), width, height, margin)
 
-    W = (255, 255, 255)  # 白色线条
-    LT = 2               # 线宽
+    W = (255, 255, 255)
+    LT = 2
 
-    # ── 外框 ──
-    cv2.rectangle(bg, p(0, 0), p(105, 68), W, LT)
+    # ── 外框 (SOCCANA: 0,0 → 12000,7000 → ÷100 = 120×70) ──
+    cv2.rectangle(bg, p(0, 0), p(120, 70), W, LT)
 
-    # ── 中线 ──
-    cv2.line(bg, p(52.5, 0), p(52.5, 68), W, LT)
+    # ── 中线 (center_line_top/bottom: x=6000 → 60) ──
+    cv2.line(bg, p(60, 0), p(60, 70), W, LT)
 
-    # ── 中圆 ──
-    cx, cy = p(52.5, 34)
+    # ── 中圆 (center_circle_left=5085 → 50.85, center=60, r=9.15) ──
+    cx, cy = p(60, 35)
     r_px = int(9.15 / _PITCH_LEN * (width - 2 * margin))
     cv2.circle(bg, (cx, cy), r_px, W, LT)
     cv2.circle(bg, (cx, cy), 4, W, -1)
 
-    # ── 禁区（左、右）──
-    cv2.rectangle(bg, p(0, 13.84),  p(16.5, 54.16), W, LT)
-    cv2.rectangle(bg, p(88.5, 13.84), p(105, 54.16), W, LT)
+    # ── 禁区 (big_rect: x=2015→20.15, y=1450/5550→14.5/55.5) ──
+    cv2.rectangle(bg, p(0, 14.5),   p(20.15, 55.5), W, LT)
+    cv2.rectangle(bg, p(99.85, 14.5), p(120, 55.5), W, LT)
 
-    # ── 小禁区 ──
-    cv2.rectangle(bg, p(0, 24.84),  p(5.5, 43.16), W, LT)
-    cv2.rectangle(bg, p(99.5, 24.84), p(105, 43.16), W, LT)
+    # ── 小禁区 (small_rect: x=550→5.5, y=2584/4416→25.84/44.16) ──
+    cv2.rectangle(bg, p(0, 25.84),    p(5.5, 44.16), W, LT)
+    cv2.rectangle(bg, p(114.5, 25.84), p(120, 44.16), W, LT)
 
-    # ── 点球点 ──
-    cv2.circle(bg, p(11, 34), 4, W, -1)
-    cv2.circle(bg, p(94, 34), 4, W, -1)
+    # ── 点球点 (11m from goal; right = 120-11=109) ──
+    cv2.circle(bg, p(11, 35), 4, W, -1)
+    cv2.circle(bg, p(109, 35), 4, W, -1)
 
-    # ── 点球弧（只画禁区外的部分）──
-    cv2.ellipse(bg, p(11, 34), (r_px, r_px), 0, -53, 53, W, LT)
-    cv2.ellipse(bg, p(94, 34), (r_px, r_px), 0, 127, 233, W, LT)
+    # ── 点球弧（禁区外部分）──
+    cv2.ellipse(bg, p(11, 35),  (r_px, r_px), 0, -53, 53,   W, LT)
+    cv2.ellipse(bg, p(109, 35), (r_px, r_px), 0, 127, 233,  W, LT)
 
-    # ── 角球弧 ──
+    # ── 角球弧 (radius 1m) ──
     cr = int(1.0 / _PITCH_LEN * (width - 2 * margin))
     cv2.ellipse(bg, p(0,   0),  (cr, cr), 0,   0,  90, W, LT)
-    cv2.ellipse(bg, p(105, 0),  (cr, cr), 0,  90, 180, W, LT)
-    cv2.ellipse(bg, p(0,  68),  (cr, cr), 0, 270, 360, W, LT)
-    cv2.ellipse(bg, p(105, 68), (cr, cr), 0, 180, 270, W, LT)
+    cv2.ellipse(bg, p(120, 0),  (cr, cr), 0,  90, 180, W, LT)
+    cv2.ellipse(bg, p(0,  70),  (cr, cr), 0, 270, 360, W, LT)
+    cv2.ellipse(bg, p(120, 70), (cr, cr), 0, 180, 270, W, LT)
 
     return bg
 
