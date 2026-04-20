@@ -1033,6 +1033,9 @@ def run_minimap_replay(session_id: str, session: dict, task_id: str, sm: Session
             "-s", f"{mw}x{mh}", "-pix_fmt", "bgr24",
             "-r", str(fps), "-i", "pipe:",
             "-vcodec", "libx264", "-pix_fmt", "yuv420p",
+            # +faststart: moov atom 搬到文件头 → 浏览器 <video> 秒开，
+            # 不用等整个文件下载完才能寻址。对 tunnel 场景尤其重要。
+            "-movflags", "+faststart",
             str(output_path)
         ]
         # with 语法：确保异常时也 wait()+kill 子进程（避免 zombie ffmpeg）
@@ -1166,6 +1169,7 @@ def run_full_replay(session_id: str, session: dict, task_id: str, sm: SessionMan
                 "-s", f"{w}x{h}", "-pix_fmt", "bgr24",
                 "-r", str(fps), "-i", "pipe:",
                 "-vcodec", "libx264", "-pix_fmt", "yuv420p",
+                "-movflags", "+faststart",   # moov -> 文件头，浏览器秒开
                 str(output_path)
             ]
             ff_log = sm.session_output_dir(session_id) / "full_replay_ffmpeg.log"
@@ -1681,6 +1685,7 @@ def _render_gemini_video(video_path: str, bboxes_dict: dict,
             "-s", f"{w}x{h}", "-pix_fmt", "bgr24",
             "-r", str(out_fps), "-i", "pipe:0",
             "-vcodec", "libx264", "-pix_fmt", "yuv420p", "-crf", "22",
+            "-movflags", "+faststart",   # moov -> 文件头，Gemini 分析和浏览器预览都更快
             str(output_path),
         ]
 

@@ -85,29 +85,79 @@ async function ping() {
 // ═══════════════════════════════════════════════════════════════════════
 
 /**
- * 将视频文件发送到 Colab（直接上传 multipart）
+ * 分块上传视频到 Colab。
  *
- * @param {string}   sessionId   来自本地 Flask upload 的 video_id
+ * 为什么分块？单个 multipart POST 走 trycloudflare 必超时（免费 tunnel 对长请求
+ * 不友好）。切成 5MB 块后每块十几秒内完成，tunnel 根本没机会超时，
+ * 也天然支持断点续传（upload_status 返回已收到的 index）。
+ *
+ * @param {string}   sessionId   来自 crypto.randomUUID 的 video_id
  * @param {File}     file        原始视频 File 对象
  * @param {Function} onProgress  (percent: number) => void
  */
-async function sendVideo(sessionId, file, onProgress) {
-  const form = new FormData()
-  form.append('file', file)
+const CHUNK_SIZE = 5 * 1024 * 1024  // 5MB
+const CHUNK_TIMEOUT = 60_000         // 单块 60s 超时（5MB 走最慢的家用带宽也够）
+const MAX_RETRY = 3
 
-  const { data } = await http.post(
-    `/api/${sessionId}/receive_video`,
-    form,
-    {
-      headers: { 'Content-Type': 'multipart/form-data' },
-      timeout: 10 * 60 * 1000,  // 10 分钟（大视频）
-      onUploadProgress: e => {
-        if (onProgress && e.total) {
-          onProgress(Math.round((e.loaded / e.total) * 100))
-        }
-      },
+async function sendVideo(sessionId, file, onProgress) {
+  const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
+
+  // 断点续传：先问后端已经收到哪些块
+  let alreadyReceived = new Set()
+  try {
+    const { data: st } = await http.get(`/api/${sessionId}/upload_status`, { timeout: 10_000 })
+    alreadyReceived = new Set(st.received || [])
+    if (alreadyReceived.size > 0) {
+      console.log(`📦 断点续传：跳过 ${alreadyReceived.size}/${totalChunks} 块`)
     }
-  )
+  } catch (_) {
+    // 新 session，后端返回 404 也正常，继续全量上传
+  }
+
+  let uploaded = alreadyReceived.size
+  if (onProgress) onProgress(Math.round((uploaded / totalChunks) * 100))
+
+  for (let i = 0; i < totalChunks; i++) {
+    if (alreadyReceived.has(i)) continue
+
+    const start = i * CHUNK_SIZE
+    const end   = Math.min(start + CHUNK_SIZE, file.size)
+    const blob  = file.slice(start, end)
+
+    const form = new FormData()
+    form.append('chunk_index', String(i))
+    form.append('file', blob, `chunk_${i}`)
+
+    // 单块带重试：网络抖一下不会整个视频重来
+    let lastErr
+    for (let attempt = 1; attempt <= MAX_RETRY; attempt++) {
+      try {
+        await http.post(`/api/${sessionId}/upload_chunk`, form, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+          timeout: CHUNK_TIMEOUT,
+        })
+        lastErr = null
+        break
+      } catch (err) {
+        lastErr = err
+        console.warn(`⚠️ chunk ${i} attempt ${attempt}/${MAX_RETRY} failed:`, err.message)
+        if (attempt < MAX_RETRY) {
+          await new Promise(r => setTimeout(r, 1000 * attempt))  // 1s/2s/3s 指数退避
+        }
+      }
+    }
+    if (lastErr) throw new Error(`Chunk ${i} failed after ${MAX_RETRY} attempts: ${lastErr.message}`)
+
+    uploaded += 1
+    if (onProgress) onProgress(Math.round((uploaded / totalChunks) * 100))
+  }
+
+  // 通知后端合并 + 创建 session
+  const { data } = await http.post(`/api/${sessionId}/upload_complete`, {
+    total_chunks: totalChunks,
+    filename:     file.name,
+  }, { timeout: 5 * 60 * 1000 })  // 大视频合并磁盘 IO 可能几十秒
+
   return data
 }
 

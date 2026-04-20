@@ -1,4 +1,4 @@
-import os, sys, threading, uuid, subprocess as sp
+import os, sys, threading, uuid, shutil, subprocess as sp
 from pathlib import Path
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
@@ -87,6 +87,102 @@ def receive_video(sid):
         sm.update_status(sid, 'uploaded', stage='video_received')
     print(f'✅ [receive_video] sid={sid} path={video_path}')
     return jsonify({'status': 'received', 'session_id': sid})
+
+# ── 分块上传：绕开 Cloudflare Tunnel 的单请求超时 ──────────────────────────
+# 前端把视频切成 5-10MB 的块顺序 POST，每块是独立 HTTP 请求（几秒完成），
+# 所有块上传完后 POST /upload_complete 触发合并。
+#
+# 安全性要点：
+#   - chunk 写入使用临时文件名 + os.replace 原子落盘，避免半写文件
+#   - 合并前校验 chunk 数量完整
+#   - 每个 sid 有独立 chunks 目录，不会互相污染
+
+def _chunks_dir(sid: str) -> Path:
+    return UPLOAD_ROOT / f'{sid}_chunks'
+
+@app.route('/api/<sid>/upload_chunk', methods=['POST'])
+def upload_chunk(sid):
+    """接收一个视频分块。字段：chunk_index (int)，file (bytes)"""
+    if 'file' not in request.files:
+        return jsonify({'error': 'Missing file field'}), 400
+    try:
+        idx = int(request.form.get('chunk_index', '-1'))
+    except ValueError:
+        return jsonify({'error': 'chunk_index must be int'}), 400
+    if idx < 0:
+        return jsonify({'error': 'chunk_index required'}), 400
+
+    d = _chunks_dir(sid)
+    d.mkdir(parents=True, exist_ok=True)
+    final_path = d / f'{idx:05d}'
+    tmp_path   = d / f'{idx:05d}.tmp'
+    request.files['file'].save(str(tmp_path))
+    os.replace(tmp_path, final_path)  # atomic
+    return jsonify({'received': idx, 'size': final_path.stat().st_size})
+
+@app.route('/api/<sid>/upload_status', methods=['GET'])
+def upload_status(sid):
+    """断点续传探针：返回已收到的 chunk index 列表"""
+    d = _chunks_dir(sid)
+    if not d.exists():
+        return jsonify({'received': []})
+    received = sorted(int(p.name) for p in d.iterdir()
+                      if p.name.isdigit() and len(p.name) == 5)
+    return jsonify({'received': received})
+
+@app.route('/api/<sid>/upload_complete', methods=['POST'])
+def upload_complete(sid):
+    """所有块上传完后调用：校验 + 合并 + 创建 session。
+
+    body: { total_chunks: int, filename: str }
+    """
+    data = request.get_json(silent=True) or {}
+    try:
+        total = int(data.get('total_chunks', 0))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'total_chunks must be int'}), 400
+    if total <= 0:
+        return jsonify({'error': 'total_chunks required'}), 400
+
+    filename = data.get('filename') or f'{sid}.mp4'
+    # 防目录穿越：只留 basename
+    filename = os.path.basename(filename)
+
+    d = _chunks_dir(sid)
+    if not d.exists():
+        return jsonify({'error': 'No chunks directory for this session'}), 404
+
+    missing = [i for i in range(total) if not (d / f'{i:05d}').exists()]
+    if missing:
+        return jsonify({'error': 'Missing chunks', 'missing': missing}), 400
+
+    dest = UPLOAD_ROOT / f'{sid}_{filename}'
+    tmp  = UPLOAD_ROOT / f'{sid}_{filename}.merging'
+    try:
+        with open(tmp, 'wb') as out:
+            for i in range(total):
+                with open(d / f'{i:05d}', 'rb') as cf:
+                    shutil.copyfileobj(cf, out, length=1024 * 1024)
+        os.replace(tmp, dest)  # atomic
+    except Exception as e:
+        if tmp.exists():
+            try: tmp.unlink()
+            except Exception: pass
+        return jsonify({'error': f'Merge failed: {e}'}), 500
+    finally:
+        # 合并完清理分块目录（失败也清，因为前端会重新上传）
+        shutil.rmtree(d, ignore_errors=True)
+
+    video_path = str(dest)
+    if not sm.get_session(sid):
+        sm.create_session(sid, video_path)
+        sm.session_output_dir(sid).mkdir(parents=True, exist_ok=True)
+    else:
+        sm.update_status(sid, 'uploaded', stage='video_received')
+    print(f'✅ [upload_complete] sid={sid} merged {total} chunks -> {video_path} '
+          f'({dest.stat().st_size / 1e6:.1f} MB)')
+    return jsonify({'status': 'received', 'session_id': sid,
+                    'size': dest.stat().st_size})
 
 @app.route('/api/<sid>/analyze_frame', methods=['POST'])
 def analyze_frame(sid):

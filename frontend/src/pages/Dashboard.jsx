@@ -56,23 +56,18 @@ export default function Dashboard() {
     // Track if we've already kicked off analysis to avoid double start
     const analysisStarted = useRef(false);
 
-    // Custom download handler to work with cross-origin Colab URLs and local Blobs
-    const handleDownload = async (url, filename) => {
-        try {
-            const response = await fetch(url);
-            const blob = await response.blob();
-            const blobUrl = URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.href = blobUrl;
-            link.download = filename;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            URL.revokeObjectURL(blobUrl);
-        } catch (e) {
-            console.error("Download failed cross-origin, standard link fallback:", e);
-            window.open(url, '_blank');
-        }
+    // 原生浏览器下载：让浏览器自己走 HTTP Range + 带进度条 + 不吃 JS 内存
+    // （之前用 fetch().blob() 会把整个 mp4 塞进 JS heap，大文件过 tunnel 必超时）
+    // 跨域时 download 属性会被忽略变成同 tab 导航，用 target=_blank 避开
+    const handleDownload = (url, filename) => {
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
     };
 
 
