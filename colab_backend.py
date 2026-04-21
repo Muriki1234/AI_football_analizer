@@ -173,29 +173,56 @@ def upload_complete(sid):
         # 合并完清理分块目录（失败也清，因为前端会重新上传）
         shutil.rmtree(d, ignore_errors=True)
 
-    # ── faststart remux: 把 moov atom 搬到文件头 ──────────────────────────
-    # 原始录屏文件 moov 通常在末尾，浏览器 <video> 要下完整个文件才能开始播。
-    # -c copy 只重排索引，不重新编码，几秒完成，让前端 Range 请求边下边播。
+    # ── Web 转码：压缩码率 + faststart，让前端流式播放更流畅 ──────────────
+    # 原始上传视频码率可能很高（10-30Mbps），通过 Cloudflare Tunnel 传输会卡顿。
+    # 转码到 H.264 约 3-5Mbps（CRF 26），同时把 moov atom 移到文件头。
+    # 优先尝试 NVENC GPU 编码（Colab T4，≈15s），失败回退 libx264 CPU（≈60s）。
     fast_dest = UPLOAD_ROOT / f'{sid}_fast_{filename}'
+
+    def _try_transcode(codec_args, label):
+        cmd = ['ffmpeg', '-y', '-i', str(dest)] + codec_args + [
+            '-c:a', 'aac', '-b:a', '128k',
+            '-movflags', '+faststart', str(fast_dest)
+        ]
+        r = sp.run(cmd, stdout=sp.DEVNULL, stderr=sp.PIPE, timeout=360)
+        return r.returncode == 0 and fast_dest.exists() and fast_dest.stat().st_size > 1024, label
+
     try:
-        r = sp.run(
-            ['ffmpeg', '-y', '-i', str(dest),
-             '-c', 'copy', '-movflags', '+faststart', str(fast_dest)],
-            stdout=sp.DEVNULL, stderr=sp.PIPE, timeout=300
+        ok, method = _try_transcode(
+            ['-c:v', 'h264_nvenc', '-preset', 'fast', '-cq', '26',
+             '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2'],   # NVENC 需要偶数尺寸
+            'nvenc'
         )
-        if r.returncode == 0 and fast_dest.exists() and fast_dest.stat().st_size > 1024:
+        if not ok:
+            if fast_dest.exists(): fast_dest.unlink(missing_ok=True)
+            ok, method = _try_transcode(
+                ['-c:v', 'libx264', '-preset', 'fast', '-crf', '26'],
+                'libx264'
+            )
+        if ok:
             dest.unlink(missing_ok=True)
             fast_dest.rename(dest)
-            print(f'✅ [upload_complete] faststart remux done -> {dest}')
+            print(f'✅ [upload_complete] transcode+faststart ({method}) -> {dest}')
         else:
-            # remux 失败时保留原始合并文件，不阻断流程
+            # 两种编码都失败：回退 -c copy 至少保证 faststart
             if fast_dest.exists(): fast_dest.unlink(missing_ok=True)
-            print(f'⚠️ [upload_complete] faststart failed (rc={r.returncode}), using raw merge')
+            r2 = sp.run(
+                ['ffmpeg', '-y', '-i', str(dest),
+                 '-c', 'copy', '-movflags', '+faststart', str(fast_dest)],
+                stdout=sp.DEVNULL, stderr=sp.PIPE, timeout=300
+            )
+            if r2.returncode == 0 and fast_dest.exists() and fast_dest.stat().st_size > 1024:
+                dest.unlink(missing_ok=True)
+                fast_dest.rename(dest)
+                print(f'⚠️ [upload_complete] fallback to copy+faststart -> {dest}')
+            else:
+                if fast_dest.exists(): fast_dest.unlink(missing_ok=True)
+                print('⚠️ [upload_complete] all transcode attempts failed, using raw merge')
     except Exception as fe:
         if fast_dest.exists():
             try: fast_dest.unlink()
             except Exception: pass
-        print(f'⚠️ [upload_complete] faststart exception: {fe}')
+        print(f'⚠️ [upload_complete] transcode exception: {fe}')
 
     video_path = str(dest)
     if not sm.get_session(sid):
