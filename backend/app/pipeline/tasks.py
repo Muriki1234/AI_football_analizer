@@ -1767,15 +1767,15 @@ def _render_gemini_video(video_path: str, bboxes_dict: dict,
 
 def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionManager):
     """
-    多模态 AI 战术分析：把全分辨率标注视频 + 统计 JSON 送给 Gemini 生成报告。
+    多模态 AI 战术分析：把全分辨率标注视频 + 统计 JSON 送给 Qwen-VL 生成报告。
 
     工作流：
       1. 加载 tracks.pkl（统计数据 + 分段 + 颜色）
       2. 拼装统计 JSON（控球率 / 速度 / 分段 / 球员 summary）
-      3. 渲染 gemini_video.mp4：原始分辨率 + stride=5 ≈ 5fps + 追踪框（CUDA 加速）
+      3. 渲染 ai_video.mp4：原始分辨率 + stride=5 ≈ 5fps + 追踪框（CUDA 加速）
          fallback → samurai_temp.mp4（低质但已存在）
-      4. 上传视频到 Gemini Files API → 等待 ACTIVE
-      5. 调用 Gemini（多模态输入）生成 markdown 报告（附进度模拟线程）
+      4. 视频 base64 编码（>80MB 自动抽帧代替）
+      5. 调用 Qwen-VL（DashScope OpenAI-compat API）生成 markdown 报告
       6. 写入 task.result + 落盘 ai_summary.md
     """
     try:
@@ -1784,19 +1784,22 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
                        stage="loading_data")
 
         # ── 1. 依赖检查 & 配置 ──
-        api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+        api_key = os.environ.get("DASHSCOPE_API_KEY", "").strip()
         if not api_key:
-            raise RuntimeError("GEMINI_API_KEY not set in environment")
-        model_name = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+            raise RuntimeError("DASHSCOPE_API_KEY not set in environment")
+        model_name = os.environ.get("DASHSCOPE_MODEL", "qwen3-vl-flash")
 
         try:
-            import google.generativeai as genai
+            from openai import OpenAI as _OpenAI
         except ImportError as ie:
             raise RuntimeError(
-                "google-generativeai not installed. "
-                "Run: pip install google-generativeai>=0.8.0") from ie
+                "openai not installed. "
+                "Run: pip install openai>=1.0.0") from ie
 
-        genai.configure(api_key=api_key)
+        _qwen_client = _OpenAI(
+            api_key=api_key,
+            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        )
 
         # ── 2. 加载统计数据 ──
         data           = _load_cache(session)
@@ -1813,7 +1816,7 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
         neu = int(np.sum(team_control == 0)) if team_control.size else 0
         total_ctrl = t1 + t2 + neu or 1
 
-        # ── 3. 组织给 Gemini 的 JSON ──
+        # ── 3. 组织给 Qwen 的 JSON ──
         stats_payload = {
             "video": {
                 "total_frames":   total_frames,
@@ -1838,12 +1841,12 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
         tracked_bboxes   = data.get("tracked_bboxes", {})
         gemini_vid_path  = output_dir / "gemini_video.mp4"
 
-        sm.update_task(session_id, task_id, progress=10, stage="rendering_gemini_video")
+        sm.update_task(session_id, task_id, progress=10, stage="rendering_ai_video")
 
         def _render_progress(done, total_est):
             pct = int(10 + min(14, done / max(total_est, 1) * 14))
             sm.update_task(session_id, task_id, progress=pct,
-                           stage="rendering_gemini_video")
+                           stage="rendering_ai_video")
 
         rendered = _render_gemini_video(
             session["video_path"], tracked_bboxes, gemini_vid_path,
@@ -1864,126 +1867,144 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
                 video_source = "raw_video"
         print(f"[AI_SUMMARY] Video source: {video_source} → {video_for_ai}")
 
-        # ── 5. 上传到 Gemini Files API（异步，需轮询）──────────────────────────
-        import time as _time
-        sm.update_task(session_id, task_id, progress=25, stage="uploading_video")
-        # 上传资源计入 Gemini quota，成败都必须 delete_file（try/finally 在块末尾）
-        uploaded = genai.upload_file(path=video_for_ai, mime_type="video/mp4")
-        print(f"[AI_SUMMARY] Uploaded as {uploaded.name}, waiting for ACTIVE...")
+        # ── 5. 读取视频并编码为 base64 ─────────────────────────────────────────
+        import time as _time, base64 as _b64
+        sm.update_task(session_id, task_id, progress=28, stage="encoding_video")
+
+        vid_size = Path(video_for_ai).stat().st_size
+        _MAX_VID_BYTES = 80 * 1024 * 1024   # 超过 80 MB 则抽帧代替整视频
+
+        if vid_size <= _MAX_VID_BYTES:
+            # 直接 base64 编码整段视频
+            with open(video_for_ai, "rb") as _vf:
+                _b64_video = _b64.b64encode(_vf.read()).decode()
+            _video_content = {
+                "type": "video_url",
+                "video_url": {"url": f"data:video/mp4;base64,{_b64_video}"},
+            }
+            print(f"[AI_SUMMARY] Video encoded as base64 ({vid_size // 1024}KB)")
+        else:
+            # 超大视频：用 ffmpeg 抽帧（最多 60 帧），以图像列表代替视频
+            import subprocess as _sp, tempfile as _tf, shutil as _sh
+            print(f"[AI_SUMMARY] Video too large ({vid_size // 1024 // 1024}MB), "
+                  "extracting frames instead")
+            _frame_dir = Path(_tf.mkdtemp())
+            try:
+                _sp.run([
+                    "ffmpeg", "-i", video_for_ai,
+                    "-vf", "fps=1,scale=640:-2",
+                    "-q:v", "5", "-frames:v", "60",
+                    str(_frame_dir / "f%04d.jpg"),
+                ], check=True, capture_output=True)
+                _frame_files = sorted(_frame_dir.glob("f*.jpg"))[:60]
+                _img_parts = []
+                for _fp in _frame_files:
+                    _img_b64 = _b64.b64encode(_fp.read_bytes()).decode()
+                    _img_parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{_img_b64}"},
+                    })
+                _video_content = _img_parts
+                print(f"[AI_SUMMARY] Extracted {len(_frame_files)} frames")
+            finally:
+                _sh.rmtree(_frame_dir, ignore_errors=True)
+
+        # ── 6. 组 prompt + 调用 Qwen（附进度模拟线程，避免进度条冻结）────────────
+        sm.update_task(session_id, task_id, progress=40, stage="qwen_reasoning")
+
+        import threading as _threading
+        _stop_sim = _threading.Event()
+        def _sim_progress():
+            t0 = _time.perf_counter()
+            while not _stop_sim.is_set():
+                elapsed = _time.perf_counter() - t0
+                # 40 → 93 linearly over 120 s，之后停在 93
+                sim_pct = min(93, int(40 + elapsed / 120 * 53))
+                sm.update_task(session_id, task_id,
+                               progress=sim_pct, stage="qwen_reasoning")
+                _time.sleep(4)
+        _sim_thread = _threading.Thread(target=_sim_progress, daemon=True)
+        _sim_thread.start()
+
+        # 根据实际视频源调整 prompt
+        if video_source == "raw_video":
+            _video_desc = (
+                "视频为原始比赛画面（无标注）。"
+                "由于渲染标注视频失败，请主要依据下方统计数据进行分析，"
+                "视频画面仅作辅助参考（无法识别具体追踪球员）。"
+            )
+            _player_section = (
+                "## 被追踪球员分析\n"
+                "本节请完全依据下方统计数据（max_speed / distance / possession_seconds 等）分析，"
+                "不要根据视频画面猜测球员身份。\n\n"
+            )
+        else:
+            _video_desc = (
+                "视频为带标注的比赛画面（约 5fps），"
+                + ("绿色高亮框（TRACKED）标注的是正在被追踪的核心球员。"
+                   if video_source == "full_res_annotated"
+                   else "SAM2 mask 叠加视频，绿框为被追踪球员。")
+            )
+            _player_section = (
+                "## 被追踪球员分析\n"
+                "重点分析视频中绿色框标注的那名球员：跑位、速度爆发、控球、影响力。\n\n"
+            )
+
+        system_text = (
+            f"你是一个专业足球战术分析师。{_video_desc}"
+            "结合以下统计数据和视频画面，生成一份**中文 Markdown 报告**，"
+            "包含以下章节（严格按顺序、标题用 ## 二级标题）：\n\n"
+            "## 比赛概览\n"
+            "简述双方控球对比、关键跑动数据、比赛节奏。\n\n"
+            + _player_section +
+            "## 战术观察\n"
+            "阵型特征、进攻模式、防守组织，基于画面实际观察。\n\n"
+            "## 改进建议\n"
+            "3 条具体可执行的训练/战术建议。\n\n"
+            "要求：语言简练，数据引用具体，不要泛泛而谈。"
+        )
+        _prompt_text = (
+            f"{system_text}\n\n## 统计数据\n```json\n{stats_json}\n```\n\n请生成报告："
+        )
+
+        # 构建消息内容（单视频 或 多帧图像）
+        if isinstance(_video_content, list):
+            _user_content = _video_content + [{"type": "text", "text": _prompt_text}]
+        else:
+            _user_content = [_video_content, {"type": "text", "text": _prompt_text}]
+
         result_data = None
         report_path = None
         try:
-            wait_start = _time.perf_counter()
-            while uploaded.state.name == "PROCESSING":
-                _time.sleep(2)
-                uploaded = genai.get_file(uploaded.name)
-                elapsed  = _time.perf_counter() - wait_start
-                if elapsed > 600:
-                    raise RuntimeError(f"Gemini file processing timeout ({elapsed:.0f}s)")
-                sm.update_task(session_id, task_id,
-                               progress=25 + min(44, int(elapsed / 2)),
-                               stage=f"gemini_processing_{int(elapsed)}s")
-
-            if uploaded.state.name != "ACTIVE":
-                raise RuntimeError(f"Gemini file failed to activate: {uploaded.state.name}")
-            print(f"[AI_SUMMARY] File ACTIVE after {_time.perf_counter() - wait_start:.1f}s")
-
-            # ── 6. 组 prompt + 调用 Gemini（附进度模拟线程，避免进度条冻结）────────
-            sm.update_task(session_id, task_id, progress=70, stage="gemini_reasoning")
-
-            import threading as _threading
-            _stop_sim = _threading.Event()
-            def _sim_progress():
-                t0 = _time.perf_counter()
-                while not _stop_sim.is_set():
-                    elapsed = _time.perf_counter() - t0
-                    # 70 → 93 linearly over 120 s，之后在 93 等待
-                    sim_pct = min(93, int(70 + elapsed / 120 * 23))
-                    sm.update_task(session_id, task_id,
-                                   progress=sim_pct, stage="gemini_reasoning")
-                    _time.sleep(4)
-            _sim_thread = _threading.Thread(target=_sim_progress, daemon=True)
-            _sim_thread.start()
-
-            # 根据实际视频源调整 prompt，避免对无标注视频谎称"有绿色追踪框"
-            if video_source == "raw_video":
-                _video_desc = (
-                    "视频为原始比赛画面（无标注）。"
-                    "由于渲染标注视频失败，请主要依据下方统计数据进行分析，"
-                    "视频画面仅作辅助参考（无法识别具体追踪球员）。"
-                )
-                _player_section = (
-                    "## 被追踪球员分析\n"
-                    "本节请完全依据下方统计数据（max_speed / distance / possession_seconds 等）分析，"
-                    "不要根据视频画面猜测球员身份。\n\n"
-                )
-            else:
-                _video_desc = (
-                    f"视频为原始比赛画面（约 5fps），"
-                    f"{'绿色高亮框（TRACKED）标注的是正在被追踪的核心球员' if video_source == 'full_res_annotated' else 'SAM2 mask 叠加视频，绿框为被追踪球员'}。"
-                )
-                _player_section = (
-                    "## 被追踪球员分析\n"
-                    "重点分析视频中绿色框标注的那名球员：跑位、速度爆发、控球、影响力。\n\n"
-                )
-
-            system_text = (
-                f"你是一个专业足球战术分析师。{_video_desc}"
-                "结合以下统计数据和视频画面，生成一份**中文 Markdown 报告**，"
-                "包含以下章节（严格按顺序、标题用 ## 二级标题）：\n\n"
-                "## 比赛概览\n"
-                "简述双方控球对比、关键跑动数据、比赛节奏。\n\n"
-                + _player_section +
-                "## 战术观察\n"
-                "阵型特征、进攻模式、防守组织，基于画面实际观察。\n\n"
-                "## 改进建议\n"
-                "3 条具体可执行的训练/战术建议。\n\n"
-                "要求：语言简练，数据引用具体，不要泛泛而谈。"
+            _resp = _qwen_client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "user", "content": _user_content}],
+                temperature=0.4,
+                top_p=0.9,
+                max_tokens=4096,
             )
-
-            prompt_parts = [
-                uploaded,
-                f"{system_text}\n\n## 统计数据\n```json\n{stats_json}\n```\n\n请生成报告："
-            ]
-
-            model_obj = genai.GenerativeModel(model_name)
-            try:
-                response = model_obj.generate_content(
-                    prompt_parts,
-                    generation_config={
-                        "temperature":       0.4,
-                        "top_p":             0.9,
-                        "max_output_tokens": 4096,
-                    },
-                    request_options={"timeout": 600},
-                )
-            finally:
-                _stop_sim.set()
-                _sim_thread.join(timeout=2)
-
-            report_md = (response.text or "").strip()
-            if not report_md:
-                raise RuntimeError("Gemini returned empty response")
-
-            # ── 7. 落盘 + 完成任务 ──
-            sm.update_task(session_id, task_id, progress=95, stage="saving_report")
-            report_path = output_dir / "ai_summary.md"
-            with open(report_path, "w", encoding="utf-8") as f:
-                f.write(report_md)
-
-            result_data = {
-                "report_markdown": report_md,
-                "video_source":    video_source,
-                "model":           model_name,
-                "char_count":      len(report_md),
-            }
-            _finish_task(sm, session_id, task_id, report_path, result=result_data)
         finally:
-            # 无论成败都清理 Gemini 远端文件（计费资源）
-            try:
-                genai.delete_file(uploaded.name)
-            except Exception as _de:
-                print(f"[AI_SUMMARY] Failed to delete uploaded Gemini file: {_de}")
+            _stop_sim.set()
+            _sim_thread.join(timeout=2)
+
+        report_md = (_resp.choices[0].message.content or "").strip()
+        if not report_md:
+            raise RuntimeError("Qwen returned empty response")
+        print(f"[AI_SUMMARY] Qwen response: {len(report_md)} chars")
+
+        # ── 7. 落盘 + 完成任务 ──
+        sm.update_task(session_id, task_id, progress=95, stage="saving_report")
+        report_path = output_dir / "ai_summary.md"
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write(report_md)
+
+        result_data = {
+            "report_markdown": report_md,
+            "video_source":    video_source,
+            "model":           model_name,
+            "char_count":      len(report_md),
+        }
+        _finish_task(sm, session_id, task_id, report_path, result=result_data)
 
     except Exception as exc:
         sm.update_task(session_id, task_id, status="failed", error=str(exc))
