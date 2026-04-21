@@ -224,6 +224,29 @@ def upload_complete(sid):
             except Exception: pass
         print(f'⚠️ [upload_complete] transcode exception: {fe}')
 
+    # ── HLS 切片：把转码好的 mp4 切成 2 秒小片段，供前端流式播放 ──────────
+    # 每个 .ts 片段约 0.5-1MB，浏览器每次只下一片，完全消除 Range 请求卡顿。
+    hls_dir = UPLOAD_ROOT / f'{sid}_hls'
+    hls_dir.mkdir(parents=True, exist_ok=True)
+    hls_m3u8 = hls_dir / 'index.m3u8'
+    try:
+        rh = sp.run([
+            'ffmpeg', '-y', '-i', str(dest),
+            '-c', 'copy',                      # 已转码，直接切片不重编码
+            '-hls_time', '2',                  # 每片 2 秒
+            '-hls_playlist_type', 'vod',       # 完整 VOD 播放列表
+            '-hls_segment_filename', str(hls_dir / 'seg%05d.ts'),
+            str(hls_m3u8),
+        ], stdout=sp.DEVNULL, stderr=sp.PIPE, timeout=300)
+        if rh.returncode == 0 and hls_m3u8.exists():
+            print(f'✅ [upload_complete] HLS segments generated -> {hls_dir}')
+        else:
+            print(f'⚠️ [upload_complete] HLS segmentation failed (rc={rh.returncode})')
+            shutil.rmtree(hls_dir, ignore_errors=True)
+    except Exception as he:
+        print(f'⚠️ [upload_complete] HLS exception: {he}')
+        shutil.rmtree(hls_dir, ignore_errors=True)
+
     video_path = str(dest)
     if not sm.get_session(sid):
         sm.create_session(sid, video_path)
@@ -438,6 +461,27 @@ def summary(sid):
     if err: return err
     s = session.get('player_summary')
     return (jsonify(s), 200) if s else (jsonify({'error': 'Not available'}), 404)
+
+@app.route('/api/<sid>/hls/<path:filename>')
+def serve_hls(sid, filename):
+    """提供 HLS 播放列表和 ts 片段（供 hls.js 使用）"""
+    session, err = _s404(sid)
+    if err: return err
+    hls_dir = UPLOAD_ROOT / f'{sid}_hls'
+    file_path = hls_dir / filename
+    if not file_path.exists():
+        return jsonify({'error': 'HLS file not found'}), 404
+    if filename.endswith('.m3u8'):
+        return send_file(str(file_path), mimetype='application/vnd.apple.mpegurl')
+    return send_file(str(file_path), mimetype='video/mp2t', conditional=True)
+
+@app.route('/api/<sid>/hls_ready')
+def hls_ready(sid):
+    """检查 HLS 切片是否已生成"""
+    session, err = _s404(sid)
+    if err: return err
+    hls_m3u8 = UPLOAD_ROOT / f'{sid}_hls' / 'index.m3u8'
+    return jsonify({'ready': hls_m3u8.exists()})
 
 @app.route('/api/<sid>/file/<tid>')
 def serve_file(sid, tid):

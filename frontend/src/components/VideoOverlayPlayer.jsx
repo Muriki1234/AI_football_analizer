@@ -3,6 +3,7 @@
  * 完全对齐 football_project.ipynb 的视觉效果
  */
 import { useEffect, useRef, useState, useCallback } from 'react';
+import Hls from 'hls.js';
 import colab from '../services/colabService';
 import './VideoOverlayPlayer.css';
 
@@ -211,17 +212,50 @@ export default function VideoOverlayPlayer({ sessionId }) {
     const [loadState, setLoadState] = useState('loading');
     const [errMsg, setErrMsg]       = useState('');
 
-    // 加载 overlay JSON；视频直接用 URL（上传时已 faststart remux，moov 在文件头，
-    // 浏览器 Range 请求边下边播，无需整体 buffer）
+    // 加载 overlay JSON + 设置 HLS 视频源（或回退 mp4 直播）
     useEffect(() => {
         if (!sessionId) return;
         setLoadState('loading');
         const base = colab.getUrl();
-        fetch(`${base}/api/${sessionId}/overlay_data`)
-            .then(r => r.ok ? r.json() : r.json().then(e => { throw new Error(e.error || r.status) }))
-            .then(data => { overlayRef.current = data; setLoadState('ready'); })
-            .catch(e => { setErrMsg(e.message); setLoadState('error'); });
+
+        // 并行：加载 overlay JSON + 检查 HLS 是否就绪
+        Promise.all([
+            fetch(`${base}/api/${sessionId}/overlay_data`)
+                .then(r => r.ok ? r.json() : r.json().then(e => { throw new Error(e.error || r.status) })),
+            fetch(`${base}/api/${sessionId}/hls_ready`)
+                .then(r => r.ok ? r.json() : { ready: false })
+                .catch(() => ({ ready: false })),
+        ]).then(([data, hlsStatus]) => {
+            overlayRef.current = data;
+            setLoadState('ready');
+            // 等 video 元素挂载后再附加 HLS
+            // (通过 hlsReadyRef 传给 video useEffect)
+            hlsReadyRef.current = hlsStatus.ready;
+        }).catch(e => { setErrMsg(e.message); setLoadState('error'); });
     }, [sessionId]);
+
+    const hlsReadyRef = useRef(false);
+    const hlsRef      = useRef(null);
+
+    // 附加 HLS 或直接 src（在 ready 后执行）
+    useEffect(() => {
+        if (loadState !== 'ready') return;
+        const video = videoRef.current;
+        if (!video) return;
+        const base = colab.getUrl();
+
+        if (hlsReadyRef.current && Hls.isSupported()) {
+            // HLS 模式：每片 2s，无需大 Range 请求
+            const hls = new Hls({ maxBufferLength: 10, maxMaxBufferLength: 20 });
+            hlsRef.current = hls;
+            hls.loadSource(`${base}/api/${sessionId}/hls/index.m3u8`);
+            hls.attachMedia(video);
+        } else {
+            // 回退：直接 mp4（faststart+已转码，Range 请求）
+            video.src = `${base}/api/${sessionId}/raw_video`;
+        }
+        return () => { hlsRef.current?.destroy(); hlsRef.current = null; };
+    }, [loadState, sessionId]);
 
     const renderFrame = useCallback(() => {
         const video  = videoRef.current;
@@ -347,7 +381,6 @@ export default function VideoOverlayPlayer({ sessionId }) {
                 <div className="vop__wrapper">
                     <video
                         ref={videoRef}
-                        src={`${colab.getUrl()}/api/${sessionId}/raw_video`}
                         controls
                         className="vop__video"
                         onSeeked={() => {

@@ -148,9 +148,6 @@ export const pollTaskStatus = (sessionId, taskId, onProgress, interval = 1000) =
     if (colab.isConfigured()) {
         return colab.pollTask(sessionId, taskId, (progress) => {
             if (onProgress) onProgress({ status: 'running', progress });
-        }).then(t => {
-            if (onProgress) onProgress(t);
-            return t;
         });
     }
     return new Promise((resolve, reject) => {
