@@ -1774,7 +1774,7 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
       2. 拼装统计 JSON（控球率 / 速度 / 分段 / 球员 summary）
       3. 渲染 ai_video.mp4：原始分辨率 + stride=5 ≈ 5fps + 追踪框（CUDA 加速）
          fallback → samurai_temp.mp4（低质但已存在）
-      4. ffmpeg 抽帧（1fps，最多 60 帧）→ image_url × N（Qwen-VL 标准方式）
+      4. 视频 base64 编码 → video_url + fps=2（API 自动抽帧）
       5. 调用 Qwen-VL（DashScope 国际版 OpenAI-compat API）生成 markdown 报告
       6. 写入 task.result + 落盘 ai_summary.md
     """
@@ -1867,34 +1867,22 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
                 video_source = "raw_video"
         print(f"[AI_SUMMARY] Video source: {video_source} → {video_for_ai}")
 
-        # ── 5. 抽帧发图片（Qwen-VL 标准方式：image_url × N）────────────────────
-        # Qwen-VL API 接受多张 image_url，按顺序理解为视频帧序列。
-        # 用 ffmpeg 从标注视频抽 1fps、最多 60 帧，每帧 base64 → image_url。
-        import time as _time, base64 as _b64, subprocess as _sp
-        import tempfile as _tf, shutil as _sh
-        sm.update_task(session_id, task_id, progress=28, stage="extracting_frames")
+        # ── 5. 读取视频 → base64，用 video_url + fps 参数传给 Qwen-VL ──────────
+        # OpenAI-compat 方式：type=video_url，url=data:video/mp4;base64,...
+        # fps=2 让模型每 0.5s 抽一帧，足够足球战术分析。
+        import time as _time, base64 as _b64
+        sm.update_task(session_id, task_id, progress=28, stage="encoding_video")
 
-        _frame_dir = Path(_tf.mkdtemp())
-        try:
-            _sp.run([
-                "ffmpeg", "-y", "-i", video_for_ai,
-                "-vf", "fps=1,scale=640:-2",
-                "-q:v", "4", "-frames:v", "60",
-                str(_frame_dir / "f%04d.jpg"),
-            ], check=True, capture_output=True)
-            _frame_files = sorted(_frame_dir.glob("f*.jpg"))[:60]
-            if not _frame_files:
-                raise RuntimeError("ffmpeg produced no frames from AI video")
-            _img_parts = []
-            for _fp in _frame_files:
-                _img_b64 = _b64.b64encode(_fp.read_bytes()).decode()
-                _img_parts.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{_img_b64}"},
-                })
-            print(f"[AI_SUMMARY] Extracted {len(_frame_files)} frames for Qwen-VL")
-        finally:
-            _sh.rmtree(_frame_dir, ignore_errors=True)
+        with open(video_for_ai, "rb") as _vf:
+            _b64_video = _b64.b64encode(_vf.read()).decode()
+        vid_mb = Path(video_for_ai).stat().st_size / 1024 / 1024
+        print(f"[AI_SUMMARY] Video encoded as base64 ({vid_mb:.1f} MB) for Qwen-VL")
+
+        _video_part = {
+            "type": "video_url",
+            "video_url": {"url": f"data:video/mp4;base64,{_b64_video}"},
+            "fps": 2,
+        }
 
         # ── 6. 组 prompt + 调用 Qwen（附进度模拟线程，避免进度条冻结）────────────
         sm.update_task(session_id, task_id, progress=40, stage="qwen_reasoning")
@@ -1954,8 +1942,8 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
             f"{system_text}\n\n## 统计数据\n```json\n{stats_json}\n```\n\n请生成报告："
         )
 
-        # 构建消息内容：所有帧（image_url × N）+ 文字 prompt
-        _user_content = _img_parts + [{"type": "text", "text": _prompt_text}]
+        # 构建消息内容：video_url + 文字 prompt
+        _user_content = [_video_part, {"type": "text", "text": _prompt_text}]
 
         result_data = None
         report_path = None
