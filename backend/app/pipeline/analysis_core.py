@@ -55,9 +55,9 @@ except ImportError:
     HAS_SPORTS = False
 
 # ── 配置 ────────────────────────────────────────────────────────────────────
-YOLO_DETECTION_STRIDE = 2    # 每2帧检测一次
+YOLO_DETECTION_STRIDE = 3    # 每3帧检测一次（原2）
 YOLO_BATCH_SIZE       = 60   # 单批处理帧数（60 = 更好GPU利用率）
-KEYPOINT_STRIDE       = 20   # 每20帧检测一次关键点（提升小地图精度，原为60）
+KEYPOINT_STRIDE       = 30   # 每30帧检测一次关键点（原20）
 MINIMAP_SMOOTH_WINDOW = 25
 SPEED_SMOOTH_WINDOW   = 7
 PLAYER_CONF           = 0.59  # 球员/球检测置信度（同时适用于球）
@@ -491,7 +491,7 @@ class Tracker:
             batch_idx    = det_indices[i:i+YOLO_BATCH_SIZE]
             batch_frames = [frames[idx] for idx in batch_idx]
             results      = self.model.predict(batch_frames, conf=PLAYER_CONF, iou=0.45,
-                                              verbose=False, half=True, imgsz=1280)
+                                              verbose=False, half=True, imgsz=960)
             for res, fidx in zip(results, batch_idx):
                 det_dict[fidx] = res
 
@@ -548,7 +548,7 @@ class Tracker:
                 batch_l = det_local[i:i+YOLO_BATCH_SIZE]
                 results = self.model.predict([chunk[j] for j in batch_l],
                                              conf=PLAYER_CONF, iou=0.45,
-                                             verbose=False, half=True, imgsz=1280)
+                                             verbose=False, half=True, imgsz=960)
                 for res, local_idx in zip(results, batch_l):
                     det_dict[local_idx] = res
 
@@ -657,8 +657,8 @@ class CameraMovementEstimator:
                              minDistance=3, blockSize=7, mask=mask)
 
     def get_camera_movement(self, frames: list) -> list:
-        """Estimate camera movement with stride=3 for speed, then interpolate."""
-        STRIDE = 3
+        """Estimate camera movement with stride=6 for speed, then interpolate."""
+        STRIDE = 6
         total = len(frames)
         sampled_movement = {0: [0.0, 0.0]}
 

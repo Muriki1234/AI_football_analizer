@@ -1787,7 +1787,7 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
         api_key = os.environ.get("GEMINI_API_KEY", "").strip()
         if not api_key:
             raise RuntimeError("GEMINI_API_KEY not set in environment")
-        model_name = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
+        model_name = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
 
         try:
             import google.generativeai as genai
