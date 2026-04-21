@@ -57,7 +57,7 @@ except ImportError:
 # ── 配置 ────────────────────────────────────────────────────────────────────
 YOLO_DETECTION_STRIDE = 3    # 每3帧检测一次（原2）
 YOLO_BATCH_SIZE       = 60   # 单批处理帧数（60 = 更好GPU利用率）
-KEYPOINT_STRIDE       = 30   # 每30帧检测一次关键点（原20）
+KEYPOINT_STRIDE       = 20   # 每20帧检测一次关键点
 MINIMAP_SMOOTH_WINDOW = 25
 SPEED_SMOOTH_WINDOW   = 7
 PLAYER_CONF           = 0.59  # 球员/球检测置信度（同时适用于球）
@@ -491,7 +491,7 @@ class Tracker:
             batch_idx    = det_indices[i:i+YOLO_BATCH_SIZE]
             batch_frames = [frames[idx] for idx in batch_idx]
             results      = self.model.predict(batch_frames, conf=PLAYER_CONF, iou=0.45,
-                                              verbose=False, half=True, imgsz=960)
+                                              verbose=False, half=True, imgsz=1280)
             for res, fidx in zip(results, batch_idx):
                 det_dict[fidx] = res
 
@@ -548,7 +548,7 @@ class Tracker:
                 batch_l = det_local[i:i+YOLO_BATCH_SIZE]
                 results = self.model.predict([chunk[j] for j in batch_l],
                                              conf=PLAYER_CONF, iou=0.45,
-                                             verbose=False, half=True, imgsz=960)
+                                             verbose=False, half=True, imgsz=1280)
                 for res, local_idx in zip(results, batch_l):
                     det_dict[local_idx] = res
 
@@ -657,8 +657,8 @@ class CameraMovementEstimator:
                              minDistance=3, blockSize=7, mask=mask)
 
     def get_camera_movement(self, frames: list) -> list:
-        """Estimate camera movement with stride=6 for speed, then interpolate."""
-        STRIDE = 6
+        """Estimate camera movement with stride=3 for speed, then interpolate."""
+        STRIDE = 3
         total = len(frames)
         sampled_movement = {0: [0.0, 0.0]}
 
@@ -1404,13 +1404,17 @@ def make_pitch_background(width=_MM_W, height=_MM_H, margin=_MM_MARGIN) -> np.nd
     cv2.rectangle(bg, p(0, 25.84),    p(5.5, 44.16), W, LT)
     cv2.rectangle(bg, p(114.5, 25.84), p(120, 44.16), W, LT)
 
-    # ── 点球点 (11m from goal; right = 120-11=109) ──
-    cv2.circle(bg, p(11, 35), 4, W, -1)
-    cv2.circle(bg, p(109, 35), 4, W, -1)
+    # ── 点球点 ──
+    # FIFA 11m，按 SOCCANA 120m 坐标系等比缩放：11/105*120 = 12.57m
+    # 右侧对称：120 - 12.57 = 107.43m
+    cv2.circle(bg, p(12.57, 35), 4, W, -1)
+    cv2.circle(bg, p(107.43, 35), 4, W, -1)
 
-    # ── 点球弧（禁区外部分）──
-    cv2.ellipse(bg, p(11, 35),  (r_px, r_px), 0, -53, 53,   W, LT)
-    cv2.ellipse(bg, p(109, 35), (r_px, r_px), 0, 127, 233,  W, LT)
+    # ── 点球弧（只画禁区外的部分）──
+    # 禁区线在 x=20.15，点球点在 x=12.57，距离=7.58m，弧半径=9.15m
+    # 弧露出禁区外的半角 = arccos(7.58/9.15) ≈ 34°
+    cv2.ellipse(bg, p(12.57, 35),  (r_px, r_px), 0, -34, 34,   W, LT)
+    cv2.ellipse(bg, p(107.43, 35), (r_px, r_px), 0, 146, 214,  W, LT)
 
     # ── 角球弧 (radius 1m) ──
     cr = int(1.0 / _PITCH_LEN * (width - 2 * margin))
