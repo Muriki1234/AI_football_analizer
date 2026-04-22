@@ -650,9 +650,17 @@ class CameraMovementEstimator:
         self.lk_params = dict(winSize=(15,15), maxLevel=2,
             criteria=(cv2.TERM_CRITERIA_EPS|cv2.TERM_CRITERIA_COUNT, 10, 0.03))
         gray  = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        h, w  = gray.shape
         mask  = np.zeros_like(gray)
-        mask[:, 0:20]     = 1
-        mask[:, 900:1050] = 1
+        # Left edge: first 20 px (original behaviour).
+        mask[:, 0:min(20, w)] = 1
+        # Centre band: ~8% of width around the middle. Previous code hard-coded
+        # columns 900:1050 which assumed 1920-wide frames and was wrong for
+        # 720p or 4K. Ratio-based keeps the KLT features on the centre circle
+        # regardless of resolution.
+        c_lo = int(w * 0.47)
+        c_hi = int(w * 0.55)
+        mask[:, c_lo:c_hi] = 1
         self.features = dict(maxCorners=100, qualityLevel=0.3,
                              minDistance=3, blockSize=7, mask=mask)
 
@@ -1038,10 +1046,13 @@ class ViewTransformer:
 # ═══════════════════════════════════════════════════════════════════════
 
 class AccurateSpeedEstimator:
-    def __init__(self):
-        self.fps          = 24
-        self.frame_window = 5
-        self.max_speed    = 38.0
+    def __init__(self, fps: float = 24.0, frame_window: int = 5, max_speed: float = 38.0):
+        # Caller should pass the real video fps. Falling back to 24 only if the
+        # metadata probe failed, but that yields systemic speed error on 25/30/60 fps
+        # footage, so the call site should always specify.
+        self.fps          = float(fps) if fps and fps > 0 else 24.0
+        self.frame_window = frame_window
+        self.max_speed    = max_speed
         self._history     = {}
 
     def add_speed_and_distance_to_tracks(self, tracks: dict):

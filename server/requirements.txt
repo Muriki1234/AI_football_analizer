@@ -1,0 +1,36 @@
+# ── Web framework ────────────────────────────────────────────────────────────
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+python-multipart==0.0.20
+sse-starlette==2.2.1
+pydantic==2.10.4
+pydantic-settings==2.7.1
+
+# ── Storage / scheduling ─────────────────────────────────────────────────────
+apscheduler==3.11.0
+
+# ── Model weights pull ───────────────────────────────────────────────────────
+huggingface_hub==0.27.0
+
+# ── CV / ML stack (pinned to what the Colab pipeline proved against) ─────────
+# NOTE: torch is intentionally NOT pinned here — the Dockerfile installs the
+# CUDA-matched wheel for the target GPU (CPU builds fall back to torch-cpu).
+ultralytics==8.3.55
+opencv-python-headless==4.10.0.84
+supervision==0.25.1
+scikit-learn==1.6.0
+scipy==1.14.1
+pandas==2.2.3
+numpy==1.26.4
+Pillow==11.0.0
+matplotlib==3.10.0
+seaborn==0.13.2
+
+# roboflow's `sports` package is only on git (no PyPI release)
+sports @ git+https://github.com/roboflow/sports.git@main
+
+# ── AI summary (DashScope intl, OpenAI-compatible) ───────────────────────────
+openai==1.58.1
+
+# ── Dev tools ────────────────────────────────────────────────────────────────
+httpx==0.28.1

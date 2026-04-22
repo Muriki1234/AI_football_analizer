@@ -71,7 +71,11 @@ try:
 except ImportError:
     HAS_SPORTS = False
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+# server/pipeline/tasks.py → parents[2] is the repo root.
+# Env vars YOLO_MODEL_PATH / KEYPOINT_MODEL_PATH are set by
+# server.models.weights.ensure_weights() at startup, so REPO_ROOT is only hit
+# when running the pipeline outside the FastAPI server (ad-hoc scripts, tests).
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _resolve_model_path(env_var: str, preferred_name: str) -> str:
@@ -79,6 +83,11 @@ def _resolve_model_path(env_var: str, preferred_name: str) -> str:
     if configured:
         return configured
 
+    # Prefer the workspace weights dir used by the server; fall back to repo root
+    # for legacy local-dev layouts.
+    workspace_weights = Path("/workspace/weights") / preferred_name
+    if workspace_weights.exists():
+        return str(workspace_weights)
     return str(REPO_ROOT / preferred_name)
 
 
@@ -452,7 +461,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         # ── 5. 速度 & 距离 ───────────────────────────────────────────
         sm.update_status(session_id, "analyzing", progress=70, stage="speed_calculation")
         _t = _time.perf_counter()
-        speed_est = AccurateSpeedEstimator()
+        speed_est = AccurateSpeedEstimator(fps=fps)
         speed_est.add_speed_and_distance_to_tracks(tracks)
         _bench("speed_calculation", _t)
         _check_memory_and_gc()
