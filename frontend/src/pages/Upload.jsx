@@ -1,48 +1,60 @@
 import { useState, useCallback } from 'react';
-import { uploadVideo } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useDropzone } from 'react-dropzone';
 import { motion, AnimatePresence } from 'framer-motion';
-import { HiCloudArrowUp, HiPlay, HiArrowRight, HiXMark, HiArrowLeft } from 'react-icons/hi2';
+import toast from 'react-hot-toast';
+import {
+    HiCloudArrowUp,
+    HiPlay,
+    HiArrowRight,
+    HiXMark,
+} from 'react-icons/hi2';
+import { uploadVideo } from '../services/api';
 import { useProgress } from '../components/ProgressBar';
 import StepNav from '../components/StepNav';
-import colab from '../services/colabService';
 import './Upload.css';
 
 export default function Upload() {
     const [file, setFile] = useState(null);
     const [preview, setPreview] = useState(null);
+    const [uploadPct, setUploadPct] = useState(0);
     const [uploadSuccess, setUploadSuccess] = useState(false);
     const [uploadedVideoId, setUploadedVideoId] = useState(null);
     const navigate = useNavigate();
     const { start, done } = useProgress();
 
     const onDrop = useCallback(async (acceptedFiles) => {
-        if (acceptedFiles.length > 0) {
-            const f = acceptedFiles[0];
-            setFile(f);
-            setPreview(URL.createObjectURL(f));
+        if (!acceptedFiles.length) return;
+        const f = acceptedFiles[0];
+        setFile(f);
+        setPreview(URL.createObjectURL(f));
+        setUploadPct(0);
+        setUploadSuccess(false);
 
-            try {
-                start();
-                const data = await uploadVideo(f, (progress) => {
-                    // Local upload progress handled if needed
-                });
-
-                // Add a small delay for UX so user sees the "done" state
-                setTimeout(() => {
-                    done();
-                    setUploadSuccess(true);
-                    setUploadedVideoId(data.video_id);
-                }, 800);
-            } catch (error) {
-                console.error("Upload failed", error);
-                alert("Upload failed. Please try again.");
-                done();
-                setFile(null);
-            }
+        const toastId = toast.loading('Uploading video…');
+        try {
+            start();
+            const data = await uploadVideo(f, (pct) => {
+                setUploadPct(pct);
+                toast.loading(`Uploading video… ${pct}%`, { id: toastId });
+            });
+            done();
+            setUploadSuccess(true);
+            setUploadedVideoId(data.session_id || data.video_id);
+            toast.success('Upload complete', { id: toastId });
+        } catch (err) {
+            console.error('Upload failed', err);
+            done();
+            setFile(null);
+            setPreview(null);
+            toast.error(
+                err?.response?.data?.detail ||
+                    err?.message ||
+                    'Upload failed. Check the server connection and try again.',
+                { id: toastId }
+            );
         }
-    }, [start, done, navigate]);
+    }, [start, done]);
 
     const { getRootProps, getInputProps, isDragActive } = useDropzone({
         onDrop,
@@ -54,15 +66,20 @@ export default function Upload() {
         setFile(null);
         if (preview) URL.revokeObjectURL(preview);
         setPreview(null);
+        setUploadSuccess(false);
+        setUploadPct(0);
+    };
+
+    const goToTrim = () => {
+        if (!uploadSuccess || !uploadedVideoId) return;
+        navigate('/trim', {
+            state: { videoId: uploadedVideoId, sessionId: uploadedVideoId },
+        });
     };
 
     return (
         <div className="page-container upload-page">
             <div className="bg-grid" />
-
-
-
-
             <StepNav />
 
             <motion.div
@@ -71,7 +88,7 @@ export default function Upload() {
                 animate={{ opacity: 1, y: 0 }}
             >
                 <h1>Upload Match Footage</h1>
-                <p>Drag &amp; drop your video file or click to browse</p>
+                <p>Drag &amp; drop your video or click to browse</p>
             </motion.div>
 
             <AnimatePresence mode="wait">
@@ -93,10 +110,10 @@ export default function Upload() {
                             <HiCloudArrowUp className="upload-zone__icon" />
                         </motion.div>
                         <p className="upload-zone__text">
-                            {isDragActive ? 'Drop your video here...' : 'Drag video file here'}
+                            {isDragActive ? 'Drop your video here…' : 'Drag video file here'}
                         </p>
                         <span className="upload-zone__hint">
-                            Supports MP4, MOV, AVI, MKV — Max 2GB
+                            Supports MP4, MOV, AVI, MKV — chunked upload, up to 2 GB
                         </span>
                     </motion.div>
                 ) : (
@@ -109,7 +126,12 @@ export default function Upload() {
                     >
                         <div className="upload-preview__video-wrap">
                             <video src={preview} controls className="upload-preview__video" />
-                            <button className="upload-preview__clear" onClick={clearFile}>
+                            <button
+                                className="upload-preview__clear"
+                                onClick={clearFile}
+                                disabled={!uploadSuccess && uploadPct > 0 && uploadPct < 100}
+                                title="Remove"
+                            >
                                 <HiXMark />
                             </button>
                         </div>
@@ -121,21 +143,16 @@ export default function Upload() {
                                     <p className="upload-preview__filename">{file.name}</p>
                                     <p className="upload-preview__filesize">
                                         {(file.size / (1024 * 1024)).toFixed(1)} MB
+                                        {!uploadSuccess && uploadPct > 0 && ` · ${uploadPct}%`}
                                     </p>
                                 </div>
                             </div>
                             <button
                                 className={`btn ${uploadSuccess ? 'btn-success' : 'btn-primary'}`}
-                                onClick={() => {
-                                    if (uploadSuccess && uploadedVideoId) {
-                                        navigate('/configure', {
-                                            state: { videoId: uploadedVideoId }
-                                        });
-                                    }
-                                }}
+                                onClick={goToTrim}
                                 disabled={!uploadSuccess}
                             >
-                                {uploadSuccess ? 'Select Player' : 'Uploading...'}
+                                {uploadSuccess ? 'Continue' : `Uploading… ${uploadPct}%`}
                                 <HiArrowRight />
                             </button>
                         </div>

@@ -1,58 +1,59 @@
 import { useState, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { trimVideo, analyzeFrame } from '../services/api';
 import { motion } from 'framer-motion';
-import { HiScissors, HiArrowRight, HiArrowLeft } from 'react-icons/hi2';
+import toast from 'react-hot-toast';
+import { HiScissors, HiArrowRight, HiArrowLeft, HiForward } from 'react-icons/hi2';
+import { trimVideo, artifactUrl } from '../services/api';
 import RangeSlider from '../components/RangeSlider';
 import StepNav from '../components/StepNav';
 import './Trimmer.css';
 
 function formatTime(seconds) {
+    if (!isFinite(seconds) || seconds < 0) return '00:00';
     const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
+    const s = Math.floor(seconds % 60);
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
 export default function Trimmer() {
     const [range, setRange] = useState([0, 0]);
     const [duration, setDuration] = useState(0);
-    const [isAnalyzing, setIsAnalyzing] = useState(false);
+    const [isTrimming, setIsTrimming] = useState(false);
     const [isVideoLoading, setIsVideoLoading] = useState(true);
     const videoRef = useRef(null);
     const navigate = useNavigate();
     const location = useLocation();
-    const videoId = location.state?.videoId;
+    const videoId = location.state?.videoId || location.state?.sessionId;
 
-    const clipDuration = range[1] - range[0];
+    const clipDuration = Math.max(0, range[1] - range[0]);
+
+    const goToDashboard = () => {
+        navigate('/dashboard', { state: { sessionId: videoId, videoId } });
+    };
 
     const handleConfirm = async () => {
-        if (videoId) {
-            try {
-                setIsAnalyzing(true);
-                // 1. Save trim settings
-                await trimVideo(videoId, range[0], range[1]);
-
-                // 2. Extract the first frame of the trimmed selection (offset 0 in the trimmed file)
-                const analysisResult = await analyzeFrame(videoId, 0);
-
-                // 3. Navigate to config with the pre-loaded data
-                navigate('/configure', {
-                    state: {
-                        videoId,
-                        detectedPlayers: analysisResult.players_data,
-                        frameUrl: analysisResult.annotated_frame_url,
-                        imgDims: analysisResult.image_dimensions,
-                        videoPath: location.state?.videoPath
-                    }
-                });
-            } catch (e) {
-                console.error(e);
-                alert('Failed to process video selection');
-                setIsAnalyzing(false);
-            }
-        } else {
-            // Fallback for dev/demo if no video uploaded
-            navigate('/configure');
+        if (!videoId) {
+            navigate('/dashboard');
+            return;
+        }
+        // If user didn't move the handles, skip the trim and jump straight to analysis.
+        if (duration > 0 && range[0] <= 0.1 && Math.abs(range[1] - duration) < 0.1) {
+            goToDashboard();
+            return;
+        }
+        setIsTrimming(true);
+        const toastId = toast.loading('Trimming clip…');
+        try {
+            await trimVideo(videoId, range[0], range[1]);
+            toast.success('Clip ready', { id: toastId });
+            goToDashboard();
+        } catch (e) {
+            console.error(e);
+            toast.error(
+                e?.response?.data?.detail || e?.message || 'Trim failed',
+                { id: toastId }
+            );
+            setIsTrimming(false);
         }
     };
 
@@ -65,7 +66,7 @@ export default function Trimmer() {
                 initial={{ opacity: 0, x: -10 }}
                 animate={{ opacity: 1, x: 0 }}
             >
-                <button className="btn btn-ghost" onClick={() => navigate('/upload')} disabled={isAnalyzing}>
+                <button className="btn btn-ghost" onClick={() => navigate('/upload')} disabled={isTrimming}>
                     <HiArrowLeft /> Back
                 </button>
             </motion.div>
@@ -79,7 +80,7 @@ export default function Trimmer() {
             >
                 <HiScissors className="trimmer-page__icon" />
                 <h1>Trim Video Clip</h1>
-                <p>Select the time range you want to analyze</p>
+                <p>Select a time range, or skip to analyze the whole video.</p>
             </motion.div>
 
             <motion.div
@@ -88,12 +89,11 @@ export default function Trimmer() {
                 animate={{ opacity: 1, scale: 1 }}
                 transition={{ delay: 0.2 }}
             >
-                {/* Video Player */}
                 <div className="trimmer__video-area">
                     {videoId ? (
                         <video
                             ref={videoRef}
-                            src={`/api/videos/${videoId}`}
+                            src={artifactUrl(videoId, 'video.mp4')}
                             className="trimmer__video-player"
                             controls
                             onLoadedMetadata={(e) => {
@@ -111,23 +111,21 @@ export default function Trimmer() {
                         </div>
                     )}
 
-                    {/* Visual timeline bar */}
                     <div className="trimmer__timeline">
                         {Array.from({ length: 20 }).map((_, i) => (
                             <div key={i} className="trimmer__timeline-bar" style={{
                                 height: `${20 + Math.random() * 30}px`,
-                                opacity: duration > 0 && (i / 20 >= range[0] / duration && i / 20 <= range[1] / duration) ? 1 : 0.25
+                                opacity: duration > 0 && (i / 20 >= range[0] / duration && i / 20 <= range[1] / duration) ? 1 : 0.25,
                             }} />
                         ))}
                     </div>
                 </div>
 
-                {/* Range slider */}
                 <div className="trimmer__slider-area">
                     {isVideoLoading && videoId && (
                         <div className="trimmer__loading">
                             <div className="trimmer__loading-spinner" />
-                            <span>Loading video...</span>
+                            <span>Loading video…</span>
                         </div>
                     )}
                     {duration > 0 && (
@@ -148,21 +146,30 @@ export default function Trimmer() {
                     )}
                 </div>
 
-                {/* Info + CTA */}
                 <div className="trimmer__footer">
                     <div className="trimmer__clip-info">
                         <span className="trimmer__clip-badge">
                             Clip Duration: <strong>{formatTime(clipDuration)}</strong>
                         </span>
                     </div>
-                    <button
-                        className={`btn btn-primary ${isAnalyzing ? 'btn--loading' : ''}`}
-                        onClick={handleConfirm}
-                        disabled={isAnalyzing}
-                    >
-                        {isAnalyzing ? 'Extracting Frame...' : 'Confirm Selection'}
-                        {!isAnalyzing && <HiArrowRight />}
-                    </button>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                        <button
+                            className="btn btn-ghost"
+                            onClick={goToDashboard}
+                            disabled={isTrimming}
+                            title="Skip trimming and analyze the whole video"
+                        >
+                            <HiForward /> Use whole video
+                        </button>
+                        <button
+                            className={`btn btn-primary ${isTrimming ? 'btn--loading' : ''}`}
+                            onClick={handleConfirm}
+                            disabled={isTrimming || duration === 0}
+                        >
+                            {isTrimming ? 'Trimming…' : 'Confirm & Analyze'}
+                            {!isTrimming && <HiArrowRight />}
+                        </button>
+                    </div>
                 </div>
             </motion.div>
         </div>

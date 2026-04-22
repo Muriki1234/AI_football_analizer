@@ -1,175 +1,230 @@
-import axios from 'axios';
-import colab from './colabService';
+/**
+ * API client for the v2 FastAPI server. No more Colab branching — the server
+ * is always the same URL (configured via VITE_API_BASE_URL).
+ *
+ * Highlights:
+ *   - uploadVideo: chunked upload (5 MB) with retries for flaky tunnels.
+ *   - subscribeSession: SSE stream so the dashboard doesn't poll.
+ *   - All requests carry X-API-Key when configured (see services/config.js).
+ */
 
-const api = axios.create({
-    baseURL: '/api',
-    headers: {
-        'Content-Type': 'application/json',
-    },
+import axios from 'axios';
+import { API_BASE_URL, API_KEY, absUrl, authHeaders } from './config';
+
+const CHUNK_SIZE = 5 * 1024 * 1024; // 5 MB
+const MAX_CHUNK_RETRIES = 3;
+
+export const api = axios.create({
+    baseURL: API_BASE_URL || '',
+    headers: { 'Content-Type': 'application/json' },
 });
 
-export const uploadVideo = async (file, onProgress) => {
-    // ── Colab 模式：视频只传到 GPU 服务器，本地零磁盘占用 ──────────────────
-    if (colab.isConfigured()) {
-        // 用 crypto.randomUUID 生成 12 位 hex session ID（无需本地 Flask）
-        const video_id = crypto.randomUUID().replace(/-/g, '').substring(0, 12);
-        console.log('📤 Colab 模式：直接上传到 GPU，跳过本地存储...');
-        await colab.sendVideo(video_id, file, (pct) => {
-            if (onProgress) onProgress(pct);
-        });
-        console.log('✅ 视频已到达 Colab，video_id:', video_id);
-        return { video_id };
-    }
+api.interceptors.request.use((cfg) => {
+    if (API_KEY) cfg.headers['X-API-Key'] = API_KEY;
+    return cfg;
+});
 
-    // ── 本地模式：上传到本地 Flask ──────────────────────────────────────────
-    const formData = new FormData();
-    formData.append('file', file);
+const unwrap = (res) => res.data;
 
-    const response = await api.post('/upload', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-        onUploadProgress: (progressEvent) => {
-            if (onProgress) {
-                const pct = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-                onProgress(pct);
-            }
-        },
-    });
+// ── Sessions (upload + trim) ─────────────────────────────────────────────────
 
-    return response.data;
+const createSessionShell = async () => {
+    const res = await api.post('/api/sessions');
+    return res.data.session_id;
 };
 
-export const trimVideo = async (videoId, start, end) => {
-    // Colab 上裁剪（视频已在Colab）
-    if (colab.isConfigured()) {
+const putChunk = async (sessionId, index, chunk) => {
+    let attempt = 0;
+    while (true) {
         try {
-            await colab.trimVideo(videoId, start, end);
-        } catch (e) {
-            console.error('Colab trim failed:', e.message);
+            await axios.put(
+                absUrl(`/api/sessions/${sessionId}/chunks/${index}`),
+                chunk,
+                {
+                    headers: {
+                        'Content-Type': 'application/octet-stream',
+                        ...authHeaders(),
+                    },
+                    timeout: 120_000,
+                }
+            );
+            return;
+        } catch (err) {
+            attempt += 1;
+            if (attempt >= MAX_CHUNK_RETRIES) throw err;
+            await new Promise((r) => setTimeout(r, 500 * attempt));
+        }
+    }
+};
+
+/**
+ * Upload a file in 5MB chunks. Returns { session_id, video_path }.
+ * onProgress is called with integer percent 0..100.
+ */
+export const uploadVideo = async (file, onProgress) => {
+    const sessionId = await createSessionShell();
+
+    const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+    for (let i = 0; i < totalChunks; i++) {
+        const start = i * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, file.size);
+        // eslint-disable-next-line no-await-in-loop
+        await putChunk(sessionId, i, file.slice(start, end));
+        if (onProgress) {
+            onProgress(Math.round(((i + 1) / totalChunks) * 95));
         }
     }
 
-    // 本地也记录裁剪区间（维持本地状态一致）
-    const response = await api.post('/trim', {
-        video_id: videoId,
-        start,
-        end
+    const complete = await api.post(`/api/sessions/${sessionId}/complete`, {
+        total_chunks: totalChunks,
+        filename: file.name,
     });
-    return response.data;
+    if (onProgress) onProgress(100);
+
+    return {
+        video_id: sessionId,
+        session_id: sessionId,
+        ...complete.data,
+    };
 };
 
-export const analyzeFrame = async (videoId, timeInSeconds) => {
-    // Colab 配置时走 GPU（Soccana YOLO 模型），结果保存在 Colab；否则走本地（Roboflow / Mock）
-    if (colab.isConfigured()) return colab.analyzeFrame(videoId, timeInSeconds);
-    const response = await api.post('/analyze_frame', {
-        video_id: videoId,
-        time_in_seconds: timeInSeconds
+export const trimVideo = async (sessionId, start, end) => {
+    const res = await api.post(`/api/sessions/${sessionId}/trim`, { start, end });
+    return res.data;
+};
+
+export const getSession = (sessionId) =>
+    api.get(`/api/sessions/${sessionId}`).then(unwrap);
+
+// ── Analysis ─────────────────────────────────────────────────────────────────
+
+export const startAnalysis = (sessionId) =>
+    api.post(`/api/sessions/${sessionId}/analyze`).then(unwrap);
+
+export const startTracking = (sessionId, bbox, frame = 0) =>
+    api
+        .post(`/api/sessions/${sessionId}/track`, {
+            bbox: [bbox.x1, bbox.y1, bbox.x2, bbox.y2],
+            frame,
+        })
+        .then(unwrap);
+
+export const queueFeature = (sessionId, feature) =>
+    api.post(`/api/sessions/${sessionId}/features/${feature}`).then(unwrap);
+
+export const listTasks = (sessionId) =>
+    api.get(`/api/sessions/${sessionId}/tasks`).then(unwrap);
+
+export const getTask = (sessionId, taskId) =>
+    api.get(`/api/sessions/${sessionId}/tasks/${taskId}`).then(unwrap);
+
+export const getSummary = (sessionId) =>
+    api.get(`/api/sessions/${sessionId}/summary`).then(unwrap);
+
+/**
+ * Build a signed-ish URL to a session artifact (hits /files/{path}).
+ * `X-API-Key` isn't trivially attachable to <img src>/<video src>, so when
+ * auth is on the server admin should either allow-list the frontend origin
+ * in CORS or move file serving behind a pre-signed mechanism.
+ */
+export const artifactUrl = (sessionId, relPath) =>
+    absUrl(`/api/sessions/${sessionId}/files/${encodeURIComponent(relPath).replace(/%2F/g, '/')}`);
+
+// ── Legacy shims (keep existing pages compiling) ─────────────────────────────
+// The old UI calls these; keep them around so we don't break imports while
+// the individual pages get rewritten. They quietly map to the v2 API where
+// possible, and return a clearly-flagged "not implemented" marker otherwise.
+
+export const registerSession = async () => ({ ok: true });
+
+export const analyzeFrame = async () => ({
+    players_data: [],
+    annotated_frame_url: null,
+    image_dimensions: null,
+    not_implemented: true,
+});
+
+export const startGlobalAnalysis = startAnalysis;
+
+export const generateFeature = queueFeature;
+
+// ── SSE (Server-Sent Events) subscription ────────────────────────────────────
+
+/**
+ * Subscribe to session events. Returns an unsubscribe() function.
+ * Pass handlers for each event kind:
+ *   onSession({status, progress, stage, ...})
+ *   onTask({task_id, task_type, status, progress, url, result})
+ *   onError(err)  — fired on network / protocol errors
+ */
+export const subscribeSession = (sessionId, handlers = {}) => {
+    const url = absUrl(`/api/sessions/${sessionId}/events`);
+    // EventSource does not support custom headers; when API_KEY is set,
+    // clients should configure the server with a CORS-friendly auth cookie
+    // or a pre-signed query param. For dev / behind a reverse proxy that
+    // injects the header, this works out of the box.
+    const source = new EventSource(url, { withCredentials: false });
+
+    const parse = (raw) => {
+        try {
+            return typeof raw === 'string' ? JSON.parse(raw) : raw;
+        } catch {
+            return null;
+        }
+    };
+
+    source.addEventListener('session', (e) => {
+        const data = parse(e.data);
+        if (data && handlers.onSession) handlers.onSession(data);
     });
-    return response.data;
+    source.addEventListener('task', (e) => {
+        const data = parse(e.data);
+        if (data && handlers.onTask) handlers.onTask(data);
+    });
+    source.addEventListener('heartbeat', () => {
+        if (handlers.onHeartbeat) handlers.onHeartbeat();
+    });
+    source.onerror = (err) => {
+        if (handlers.onError) handlers.onError(err);
+    };
+
+    return () => source.close();
 };
 
-export const getPlayers = async (videoId) => {
-    const response = await api.get(`/players/${videoId}`);
-    return response.data;
-};
+// ── Backwards-compat polling fallback (SSE is strongly preferred) ────────────
 
-export const analyzePlayer = async (videoId, playerId, coordinates = null) => {
-    const payload = { video_id: videoId, player_id: playerId };
-    if (coordinates) payload.coordinates = coordinates;
-    const response = await api.post('/analyze', payload);
-    return response.data;
-};
-
-
-// ── Analysis Pipeline（全部走 Colab）────────────────────────────────────
-
-export const registerSession = async (sessionId, videoPath) => {
-    // Colab 模式下 sendVideo 已经创建 session，register 是 no-op；
-    // 直接打本地 Flask 会 400（本地无视频文件）
-    if (colab.isConfigured()) return colab.registerSession(sessionId, videoPath);
-    const response = await api.post(`/${sessionId}/register`, { video_path: videoPath });
-    return response.data;
-};
-
-export const startTracking = async (sessionId, bbox, frame = 0) => {
-    const [x1, y1, x2, y2] = bbox;
-    if (colab.isConfigured()) return colab.startTracking(sessionId, { x1, y1, x2, y2, frame });
-    const response = await api.post(`/${sessionId}/track`, { x1, y1, x2, y2, frame });
-    return response.data;
-};
-
-export const startGlobalAnalysis = async (sessionId) => {
-    if (colab.isConfigured()) return colab.startAnalysis(sessionId);
-    const response = await api.post(`/${sessionId}/analyze`);
-    return response.data;
-};
-
-export const pollSessionStatus = (sessionId, targetStatus, onProgress, interval = 1500) => {
-    if (colab.isConfigured()) {
-        return colab.pollStatus(sessionId, [targetStatus], onProgress);
-    }
-    return new Promise((resolve, reject) => {
-        const poll = async () => {
+export const pollSessionStatus = (sessionId, targetStatus, onProgress, interval = 1500) =>
+    new Promise((resolve, reject) => {
+        const tick = async () => {
             try {
-                const { data } = await api.get(`/${sessionId}/status`);
+                const data = await getSession(sessionId);
                 if (onProgress) onProgress(data);
                 if (data.status === targetStatus) return resolve(data);
-                if (data.status && data.status.includes('failed')) return reject(new Error(data.error || 'Pipeline failed'));
-                setTimeout(poll, interval);
+                if (data.status && data.status.endsWith('_failed'))
+                    return reject(new Error(data.error || 'Pipeline failed'));
+                setTimeout(tick, interval);
             } catch (e) {
                 reject(e);
             }
         };
-        poll();
+        tick();
     });
-};
 
-export const generateFeature = async (sessionId, feature) => {
-    if (colab.isConfigured()) {
-        const methods = {
-            heatmap:          () => colab.generateHeatmap(sessionId),
-            speed_chart:      () => colab.generateSpeedChart(sessionId),
-            possession:       () => colab.generatePossession(sessionId),
-            minimap_replay:   () => colab.generateMinimapReplay(sessionId),
-            full_replay:      () => colab.generateFullReplay(sessionId),
-            sprint_analysis:  () => colab.generateSprintAnalysis(sessionId),
-            defensive_line:   () => colab.generateDefensiveLine(sessionId),
-            ai_summary:       () => colab.generateAiSummary(sessionId),
-        };
-        const fn = methods[feature];
-        if (!fn) throw new Error(`Unknown feature: ${feature}`);
-        const taskId = await fn();
-        return { task_id: taskId, status: 'queued' };
-    }
-    const response = await api.post(`/${sessionId}/generate/${feature}`);
-    return response.data;
-};
-
-export const pollTaskStatus = (sessionId, taskId, onProgress, interval = 1000) => {
-    if (colab.isConfigured()) {
-        return colab.pollTask(sessionId, taskId, (progress) => {
-            if (onProgress) onProgress({ status: 'running', progress });
-        });
-    }
-    return new Promise((resolve, reject) => {
-        const poll = async () => {
+export const pollTaskStatus = (sessionId, taskId, onProgress, interval = 1000) =>
+    new Promise((resolve, reject) => {
+        const tick = async () => {
             try {
-                const { data } = await api.get(`/${sessionId}/task/${taskId}`);
+                const data = await getTask(sessionId, taskId);
                 if (onProgress) onProgress(data);
                 if (data.status === 'done') return resolve(data);
-                if (data.status === 'failed') return reject(new Error(data.error || 'Task failed'));
-                setTimeout(poll, interval);
+                if (data.status === 'failed')
+                    return reject(new Error(data.error || 'Task failed'));
+                setTimeout(tick, interval);
             } catch (e) {
                 reject(e);
             }
         };
-        poll();
+        tick();
     });
-};
-
-export const getSummary = async (sessionId) => {
-    if (colab.isConfigured()) return colab.getSummary(sessionId);
-    const response = await api.get(`/${sessionId}/summary`);
-    return response.data;
-};
 
 export default api;

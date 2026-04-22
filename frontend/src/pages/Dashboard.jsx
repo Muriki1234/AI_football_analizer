@@ -1,64 +1,160 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
+import toast from 'react-hot-toast';
 import {
     HiHome, HiArrowPath, HiChartBar, HiBolt,
     HiUserGroup, HiMapPin, HiCheckCircle, HiExclamationCircle,
-    HiArrowTrendingUp, HiPlayCircle
+    HiArrowTrendingUp, HiPlayCircle, HiSparkles,
 } from 'react-icons/hi2';
 import {
-    pollSessionStatus, startGlobalAnalysis,
-    generateFeature, pollTaskStatus, getSummary
+    startAnalysis,
+    queueFeature,
+    getSummary,
+    artifactUrl,
+    subscribeSession,
 } from '../services/api';
-import colab from '../services/colabService';
 import StepNav from '../components/StepNav';
-import VideoOverlayPlayer from '../components/VideoOverlayPlayer';
-import AIInsights from '../components/AIInsights';
 import './Dashboard.css';
 
-// Feature cards config (full_replay 已移除，改用 Canvas 实时播放)
 const FEATURES = [
-    { key: 'heatmap', label: 'Heatmap', icon: HiMapPin, color: '#e74c3c', type: 'image' },
-    { key: 'speed_chart', label: 'Speed & Distance', icon: HiBolt, color: '#f39c12', type: 'image' },
-    { key: 'possession', label: 'Possession', icon: HiChartBar, color: '#3498db', type: 'image' },
-    { key: 'minimap_replay', label: 'Minimap Replay', icon: HiArrowTrendingUp, color: '#00e59b', type: 'video' },
-    { key: 'sprint_analysis', label: 'Sprint Bursts', icon: HiBolt, color: '#9b59b6', type: 'image' },
-    { key: 'defensive_line', label: 'Defensive Line', icon: HiUserGroup, color: '#00bcd4', type: 'image' },
+    { key: 'heatmap',         label: 'Heatmap',          icon: HiMapPin,         color: '#e74c3c', type: 'image' },
+    { key: 'speed_chart',     label: 'Speed & Distance', icon: HiBolt,           color: '#f39c12', type: 'image' },
+    { key: 'possession',      label: 'Possession',       icon: HiChartBar,       color: '#3498db', type: 'image' },
+    { key: 'minimap_replay',  label: 'Minimap Replay',   icon: HiArrowTrendingUp,color: '#00e59b', type: 'video' },
+    { key: 'full_replay',     label: 'Annotated Replay', icon: HiPlayCircle,     color: '#6d28d9', type: 'video' },
+    { key: 'sprint_analysis', label: 'Sprint Bursts',    icon: HiBolt,           color: '#9b59b6', type: 'image' },
+    { key: 'defensive_line',  label: 'Defensive Line',   icon: HiUserGroup,      color: '#00bcd4', type: 'image' },
+    { key: 'ai_summary',      label: 'AI Summary',       icon: HiSparkles,       color: '#ec4899', type: 'text' },
 ];
 
 const PHASE_LABELS = {
-    tracking: '⚙️ SAMURAI tracking player...',
-    tracking_done: '✅ Tracking complete — starting analysis...',
-    analyzing: '🤖 Running YOLO analysis...',
-    analysis_done: '✅ Analysis complete!',
-    tracking_failed: '❌ Tracking failed',
-    analysis_failed: '❌ Analysis failed',
+    uploaded:        'Ready to analyze.',
+    uploading:       'Waiting for upload to finish…',
+    queued:          'Queued for analysis…',
+    analyzing:       'Running analysis…',
+    analysis_done:   'Analysis complete.',
+    tracking:        'Running SAMURAI tracking…',
+    tracking_done:   'Tracking complete — starting analysis…',
+    analysis_failed: 'Analysis failed.',
+    tracking_failed: 'Tracking failed.',
 };
+
+const initialFeatures = Object.fromEntries(
+    FEATURES.map((f) => [f.key, { status: 'locked', taskId: null, url: null, result: null, progress: 0 }])
+);
 
 export default function Dashboard() {
     const location = useLocation();
     const navigate = useNavigate();
 
-    const sessionId = location.state?.sessionId;
-    const playerName = location.state?.playerName || 'Player';
+    const sessionId = location.state?.sessionId || location.state?.videoId;
 
-    // Pipeline state
-    const [phase, setPhase] = useState('tracking');
-    const [progress, setProgress] = useState(0);
-    const [stageLabel, setStageLabel] = useState('Initializing...');
-    const [error, setError] = useState(null);
+    const [session, setSession] = useState(null);
     const [summary, setSummary] = useState(null);
-    const [overlayReady, setOverlayReady] = useState(false); // Canvas 播放器是否可用
-    const [features, setFeatures] = useState(
-        Object.fromEntries(FEATURES.map(f => [f.key, { status: 'locked', taskId: null, url: null, result: null }]))
-    );
+    const [features, setFeatures] = useState(initialFeatures);
+    const [error, setError] = useState(null);
 
-    // Track if we've already kicked off analysis to avoid double start
-    const analysisStarted = useRef(false);
+    const analysisKicked = useRef(false);
+    const summaryFetched = useRef(false);
 
-    // 原生浏览器下载：让浏览器自己走 HTTP Range + 带进度条 + 不吃 JS 内存
-    // （之前用 fetch().blob() 会把整个 mp4 塞进 JS heap，大文件过 tunnel 必超时）
-    // 跨域时 download 属性会被忽略变成同 tab 导航，用 target=_blank 避开
+    const phase = session?.status || 'uploaded';
+    const progress = session?.progress ?? 0;
+    const stage = session?.stage || '';
+
+    const isAnalyzing = ['queued', 'analyzing', 'tracking', 'tracking_done'].includes(phase);
+    const isDone = phase === 'analysis_done';
+    const isFailed = phase === 'analysis_failed' || phase === 'tracking_failed';
+
+    const phaseLabel = PHASE_LABELS[phase] || stage || phase;
+
+    // ── Kick off analysis on mount ──────────────────────────────────────────
+    useEffect(() => {
+        if (!sessionId) return;
+        if (analysisKicked.current) return;
+        analysisKicked.current = true;
+
+        (async () => {
+            try {
+                await startAnalysis(sessionId);
+            } catch (e) {
+                const msg = e?.response?.data?.detail || e?.message || 'Failed to start analysis';
+                setError(msg);
+                toast.error(msg);
+            }
+        })();
+    }, [sessionId]);
+
+    // ── SSE stream for live session + task updates ──────────────────────────
+    useEffect(() => {
+        if (!sessionId) return;
+
+        const unsub = subscribeSession(sessionId, {
+            onSession: (s) => setSession((prev) => ({ ...prev, ...s })),
+            onTask: (t) => {
+                setFeatures((prev) => {
+                    const key = t.task_type;
+                    if (!(key in prev)) return prev;
+                    const next = { ...prev };
+                    next[key] = {
+                        ...next[key],
+                        taskId: t.task_id,
+                        status:
+                            t.status === 'done' ? 'done' :
+                            t.status === 'failed' ? 'error' :
+                            t.status === 'running' ? 'generating' : 'generating',
+                        progress: t.progress || 0,
+                        url: t.url ? artifactUrl(sessionId, (t.url || '').replace(/^\//, '')) : next[key].url,
+                        result: t.result ?? next[key].result,
+                        error: t.error ?? next[key].error,
+                    };
+                    return next;
+                });
+            },
+            onError: () => {
+                // EventSource auto-reconnects; we just log and let it recover.
+                console.warn('[SSE] disconnected, reconnecting…');
+            },
+        });
+        return unsub;
+    }, [sessionId]);
+
+    // Unlock feature buttons once analysis_done fires.
+    useEffect(() => {
+        if (!isDone) return;
+        setFeatures((prev) => {
+            const next = { ...prev };
+            for (const k of Object.keys(next)) {
+                if (next[k].status === 'locked') next[k] = { ...next[k], status: 'idle' };
+            }
+            return next;
+        });
+        if (!summaryFetched.current) {
+            summaryFetched.current = true;
+            getSummary(sessionId)
+                .then((s) => setSummary(s?.session || s))
+                .catch(() => {});
+        }
+    }, [isDone, sessionId]);
+
+    const handleGenerate = async (key) => {
+        setFeatures((prev) => ({
+            ...prev,
+            [key]: { ...prev[key], status: 'generating', progress: 0, error: null },
+        }));
+        try {
+            await queueFeature(sessionId, key);
+            // Live updates arrive via SSE; no polling needed.
+        } catch (e) {
+            const msg = e?.response?.data?.detail || e?.message || 'Request failed';
+            setFeatures((prev) => ({
+                ...prev,
+                [key]: { ...prev[key], status: 'error', error: msg },
+            }));
+            toast.error(`${key}: ${msg}`);
+        }
+    };
+
     const handleDownload = (url, filename) => {
         const link = document.createElement('a');
         link.href = url;
@@ -70,98 +166,43 @@ export default function Dashboard() {
         document.body.removeChild(link);
     };
 
+    const summaryCards = useMemo(() => {
+        if (!summary) return [];
+        return [
+            summary.max_speed_kmh       != null && { label: 'Max Speed',   value: `${summary.max_speed_kmh} km/h`, icon: '⚡' },
+            summary.avg_speed_kmh       != null && { label: 'Avg Speed',   value: `${summary.avg_speed_kmh} km/h`, icon: '🏃' },
+            summary.total_distance_m    != null && { label: 'Distance',    value: `${summary.total_distance_m} m`, icon: '📏' },
+            summary.possession_seconds  != null && { label: 'Possession',  value: `${summary.possession_seconds}s`, icon: '⚽' },
+            summary.team1_possession_pct!= null && { label: 'Team 1 %',    value: `${summary.team1_possession_pct}%`, icon: '🔵' },
+            summary.team2_possession_pct!= null && { label: 'Team 2 %',    value: `${summary.team2_possession_pct}%`, icon: '🔴' },
+        ].filter(Boolean);
+    }, [summary]);
 
-    
-    // (Canvas overlay 替代 full_replay — 不再需要自动下载)
-
-    useEffect(() => {
-        if (!sessionId) return;
-
-        (async () => {
-            try {
-                // Step 1: Wait for tracking_done
-                const trackResult = await pollSessionStatus(
-                    sessionId, 'tracking_done',
-                    (data) => {
-                        setPhase(data.status);
-                        setProgress(data.progress || 0);
-                        setStageLabel(data.stage_label || PHASE_LABELS[data.status] || '');
-                    }
-                );
-
-                // Step 2: Auto-trigger global analysis
-                if (!analysisStarted.current) {
-                    analysisStarted.current = true;
-                    setPhase('tracking_done');
-                    await startGlobalAnalysis(sessionId);
-                }
-
-                // Step 3: Wait for analysis_done
-                const analysisResult = await pollSessionStatus(
-                    sessionId, 'analysis_done',
-                    (data) => {
-                        setPhase(data.status);
-                        setProgress(data.progress || 0);
-                        setStageLabel(data.stage_label || PHASE_LABELS[data.status] || '');
-
-                        // Unlock feature buttons once available
-                        if (data.available_features?.includes('heatmap')) {
-                            setFeatures(prev => Object.fromEntries(
-                                Object.entries(prev).map(([k, v]) => [k, { ...v, status: 'idle' }])
-                            ));
-                        }
-                    }
-                );
-
-                // Step 4: Fetch summary
-                const s = await getSummary(sessionId);
-                setSummary(s);
-
-                // Step 5: 标记 Canvas 播放器可用（直接播，无需等待生成）
-                setOverlayReady(true);
-
-            } catch (e) {
-                setError(e.message || 'Pipeline failed');
-                setPhase('error');
-            }
-        })();
-    }, [sessionId]);
-
-    const handleGenerateFeature = async (featureKey) => {
-        setFeatures(prev => ({ ...prev, [featureKey]: { ...prev[featureKey], status: 'generating' } }));
-        try {
-            const { task_id } = await generateFeature(sessionId, featureKey);
-            const task = await pollTaskStatus(
-                sessionId, task_id,
-                (t) => setFeatures(prev => ({ ...prev, [featureKey]: { ...prev[featureKey], status: 'generating', progress: t.progress } }))
-            );
-
-            // minimap_replay 已有 +faststart，直接用 URL 播即可（小文件 Range 够用）
-            setFeatures(prev => ({
-                ...prev,
-                [featureKey]: { status: 'done', taskId: task_id, url: task.url, result: task.result }
-            }));
-        } catch (e) {
-            setFeatures(prev => ({
-                ...prev, [featureKey]: { ...prev[featureKey], status: 'error', error: e.message }
-            }));
-        }
-    };
-
-    const isPipelineDone = phase === 'analysis_done';
-    const isFailed = phase === 'tracking_failed' || phase === 'analysis_failed' || phase === 'error';
+    if (!sessionId) {
+        return (
+            <div className="dashboard">
+                <div className="bg-grid" />
+                <StepNav />
+                <motion.div className="dashboard__error-banner" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                    <HiExclamationCircle /> No session. Upload a video first.
+                </motion.div>
+                <button className="btn btn-primary" onClick={() => navigate('/upload')}>
+                    Go to Upload
+                </button>
+            </div>
+        );
+    }
 
     return (
         <div className="dashboard">
             <div className="bg-grid" />
             <StepNav />
 
-            {/* Header */}
             <motion.div className="dashboard__header" initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }}>
                 <div className="dashboard__header-left">
                     <div>
                         <h1 className="dashboard__title">Analysis Dashboard</h1>
-                        <p className="dashboard__subtitle">Deep tracking — {playerName}</p>
+                        <p className="dashboard__subtitle">Session {sessionId}</p>
                     </div>
                 </div>
                 <div className="dashboard__header-actions">
@@ -171,9 +212,8 @@ export default function Dashboard() {
                 </div>
             </motion.div>
 
-            {/* Pipeline Progress */}
             <AnimatePresence>
-                {!isPipelineDone && !isFailed && (
+                {(isAnalyzing || !session) && !isFailed && (
                     <motion.div
                         className="dashboard__pipeline-status"
                         initial={{ opacity: 0, y: 10 }}
@@ -181,7 +221,7 @@ export default function Dashboard() {
                         exit={{ opacity: 0, y: -10 }}
                     >
                         <div className="pipeline-status__label">
-                            <span>{PHASE_LABELS[phase] || stageLabel}</span>
+                            <span>{phaseLabel}</span>
                             <span className="pipeline-status__pct">{progress}%</span>
                         </div>
                         <div className="pipeline-status__bar-track">
@@ -191,30 +231,28 @@ export default function Dashboard() {
                                 transition={{ ease: 'easeOut', duration: 0.5 }}
                             />
                         </div>
-                        <p className="pipeline-status__stage">{stageLabel}</p>
+                        {stage && <p className="pipeline-status__stage">{stage}</p>}
                     </motion.div>
                 )}
 
-                {isFailed && (
+                {(isFailed || error) && (
                     <motion.div className="dashboard__error-banner" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-                        <HiExclamationCircle /> {error || 'Pipeline encountered an error. Check backend logs.'}
+                        <HiExclamationCircle /> {error || session?.error || 'Pipeline failed. Check server logs.'}
                     </motion.div>
                 )}
             </AnimatePresence>
 
-            {/* Summary Cards — show once analysis_done */}
             <AnimatePresence>
-                {summary && (
+                {summaryCards.length > 0 && (
                     <motion.div className="dashboard__summary-grid" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-                        {[
-                            { label: 'Max Speed', value: `${summary.max_speed_kmh} km/h`, icon: '⚡' },
-                            { label: 'Avg Speed', value: `${summary.avg_speed_kmh} km/h`, icon: '🏃' },
-                            { label: 'Distance', value: `${summary.total_distance_m} m`, icon: '📏' },
-                            { label: 'Possession', value: `${summary.possession_seconds}s`, icon: '⚽' },
-                            { label: 'Team 1 %', value: `${summary.team1_possession_pct}%`, icon: '🔵' },
-                            { label: 'Team 2 %', value: `${summary.team2_possession_pct}%`, icon: '🔴' },
-                        ].map((s, i) => (
-                            <motion.div key={s.label} className="summary-card" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}>
+                        {summaryCards.map((s, i) => (
+                            <motion.div
+                                key={s.label}
+                                className="summary-card"
+                                initial={{ opacity: 0, y: 10 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ delay: i * 0.05 }}
+                            >
                                 <span className="summary-card__icon">{s.icon}</span>
                                 <div>
                                     <p className="summary-card__value">{s.value}</p>
@@ -226,84 +264,89 @@ export default function Dashboard() {
                 )}
             </AnimatePresence>
 
-            {/* Canvas 实时标注播放器（分析完即可播，无需等待生成） */}
-            <AnimatePresence>
-                {overlayReady && (
-                    <motion.div
-                        className="dashboard__live-player"
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                    >
-                        <div className="live-player__header">
-                            <HiPlayCircle style={{ color: '#9b59b6' }} />
-                            <span>Live Annotated Replay</span>
-                            <span className="live-player__badge">Instant</span>
-                        </div>
-                        <VideoOverlayPlayer sessionId={sessionId} />
-                    </motion.div>
-                )}
-            </AnimatePresence>
-
-            {/* On-demand Feature Buttons + Results */}
             <div className="dashboard__features">
-                {FEATURES.map(feat => {
-                    const fState = features[feat.key];
+                {FEATURES.map((feat) => {
+                    const state = features[feat.key];
                     const Icon = feat.icon;
                     return (
-                        <motion.div key={feat.key} className="feature-card" initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }}>
+                        <motion.div
+                            key={feat.key}
+                            className="feature-card"
+                            initial={{ opacity: 0, scale: 0.96 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                        >
                             <div className="feature-card__header" style={{ borderColor: feat.color }}>
                                 <Icon style={{ color: feat.color }} />
                                 <span>{feat.label}</span>
-                                {fState.status === 'done' && <HiCheckCircle className="feature-card__done-icon" />}
+                                {state.status === 'done' && <HiCheckCircle className="feature-card__done-icon" />}
                             </div>
-
-                            {/* Result area */}
                             <div className="feature-card__body">
-                                {fState.status === 'locked' && (
-                                    <p className="feature-card__hint">Waiting for analysis to complete...</p>
+                                {state.status === 'locked' && (
+                                    <p className="feature-card__hint">Waiting for analysis to finish…</p>
                                 )}
-                                {fState.status === 'idle' && (
-                                    <button className="btn btn-primary feature-card__btn" onClick={() => handleGenerateFeature(feat.key)}>
+                                {state.status === 'idle' && (
+                                    <button
+                                        className="btn btn-primary feature-card__btn"
+                                        onClick={() => handleGenerate(feat.key)}
+                                    >
                                         Generate {feat.label}
                                     </button>
                                 )}
-                                {fState.status === 'generating' && (
+                                {state.status === 'generating' && (
                                     <div className="feature-card__loading">
                                         <div className="feature-card__spinner" />
-                                        <span>Generating... {fState.progress || 0}%</span>
+                                        <span>Generating… {state.progress || 0}%</span>
                                     </div>
                                 )}
-                                {fState.status === 'done' && feat.type === 'image' && fState.url && (
-                                    <img src={fState.url} alt={feat.label} className="feature-card__result-img" />
+                                {state.status === 'done' && feat.type === 'image' && state.url && (
+                                    <img src={state.url} alt={feat.label} className="feature-card__result-img" />
                                 )}
-                                {fState.status === 'done' && feat.type === 'video' && fState.url && (
-                                    <video src={fState.url} controls autoPlay muted loop className="feature-card__result-img" />
+                                {state.status === 'done' && feat.type === 'video' && state.url && (
+                                    <video
+                                        src={state.url}
+                                        controls
+                                        autoPlay
+                                        muted
+                                        loop
+                                        className="feature-card__result-img"
+                                    />
                                 )}
-                                {fState.status === 'error' && feat.key === 'full_replay' && (
-                                    <div>
-                                        <p className="feature-card__error">❌ {fState.error}</p>
-                                        <button
-                                            className="btn btn-secondary feature-card__btn"
-                                            style={{ marginTop: '0.5rem' }}
-                                            onClick={() => {
-                                                const base = colab.isConfigured() ? colab.getUrl() : '';
-                                                handleDownload(
-                                                    `${base}/api/${sessionId}/download_raw`,
-                                                    `original_${sessionId}.mp4`
-                                                );
-                                            }}
-                                        >
-                                            ↓ 下载原始视频
-                                        </button>
+                                {state.status === 'done' && feat.type === 'text' && state.result && (
+                                    <div
+                                        style={{
+                                            padding: '1rem',
+                                            background: '#0b1220',
+                                            borderRadius: 8,
+                                            border: '1px solid #1e293b',
+                                            color: '#cbd5e1',
+                                            whiteSpace: 'pre-wrap',
+                                            fontSize: 14,
+                                            lineHeight: 1.6,
+                                            maxHeight: 320,
+                                            overflow: 'auto',
+                                        }}
+                                    >
+                                        {typeof state.result === 'string'
+                                            ? state.result
+                                            : state.result.summary || JSON.stringify(state.result, null, 2)}
                                     </div>
                                 )}
-                                {fState.status === 'error' && feat.key !== 'full_replay' && (
-                                    <p className="feature-card__error">❌ {fState.error}</p>
+                                {state.status === 'error' && (
+                                    <p className="feature-card__error">❌ {state.error}</p>
                                 )}
                             </div>
 
-                            {fState.status === 'done' && (
-                                <button onClick={() => handleDownload(fState.url, `${feat.key}_${sessionId}.${feat.type === 'video' ? 'mp4' : 'png'}`)} className="btn btn-ghost feature-card__download" style={{width: '100%', borderTop: '1px solid #333', marginTop: '1rem', paddingTop: '1rem'}}>
+                            {state.status === 'done' && state.url && feat.type !== 'text' && (
+                                <button
+                                    onClick={() =>
+                                        handleDownload(
+                                            state.url,
+                                            `${feat.key}_${sessionId}.${feat.type === 'video' ? 'mp4' : 'png'}`
+                                        )
+                                    }
+                                    className="btn btn-ghost feature-card__download"
+                                    style={{ width: '100%', borderTop: '1px solid #333', marginTop: '1rem', paddingTop: '1rem' }}
+                                >
                                     ↓ Download
                                 </button>
                             )}
@@ -312,25 +355,9 @@ export default function Dashboard() {
                 })}
             </div>
 
-            {/* AI Insights — Gemini 多模态战术分析，仅 analysis 完成后展示 */}
-            {isPipelineDone && (
-                <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.3 }}
-                    style={{ marginTop: '2rem' }}
-                >
-                    <AIInsights sessionId={sessionId} />
-                </motion.div>
-            )}
-
-            {/* Footer */}
             <motion.div className="dashboard__actions-footer" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }}>
                 <button className="btn btn-secondary" onClick={() => navigate('/')}>
                     <HiHome /> Back to Home
-                </button>
-                <button className="btn btn-secondary" onClick={() => navigate('/configure')}>
-                    <HiUserGroup /> Analyze New Player
                 </button>
                 <button className="btn btn-primary" onClick={() => navigate('/upload')}>
                     <HiArrowPath /> New Video
