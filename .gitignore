@@ -2,39 +2,74 @@
 __pycache__/
 *.py[cod]
 *$py.class
-backend/.env
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Venvs
+.venv/
+venv/
+server/.venv/
 backend/.venv/
+backend/venv/
+
+# Env files
+.env
+.env.*
+!.env.example
+server/.env
+backend/.env
+
+# Runtime / outputs (server)
+server/outputs/
+server/uploads/
+server/frames/
+server/samurai/
+server/weights/
+server/sessions.db
+server/sessions.db-journal
+
+# Legacy backend (kept ignored for dev machines that still have these dirs)
 backend/frames/
 backend/outputs/
 backend/uploads/
 backend/samurai_env/
-backend/samurai/runs/
-backend/samurai/weights/
-backend/samurai/checkpoints/
+backend/samurai/
+backend/weights/
+backend/walkthrough.md.resolved
 
 # Node
 node_modules/
 frontend/node_modules/
 frontend/dist/
+frontend/.vite/
+
+# Model weights (never commit; server pulls from HF Hub at startup)
+*.pt
+*.pth
+*.onnx
+*.bin
+*.safetensors
+
+# Notebooks (archived to legacy/colab branch only)
+*.ipynb
+.ipynb_checkpoints/
 
 # Logs
 *.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Project specific
+# Editor
+.idea/
+.vscode/
+
+# Misc
 uploads/
-backend/walkthrough.md.resolved
+326ecfa9-3e8b-4407-8c41-c1ce8584b9cb
 frontend/test_trim.js
 frontend/test_upload.cjs
 frontend/test_upload.js
-
-# Ignore user colab notebook
-326ecfa9-3e8b-4407-8c41-c1ce8584b9cb
-backend/venv/
-
