@@ -23,8 +23,8 @@ const FEATURES = [
     { key: 'possession',      label: 'Possession',       icon: HiChartBar,       color: '#3498db', type: 'image' },
     { key: 'minimap_replay',  label: 'Minimap Replay',   icon: HiArrowTrendingUp,color: '#00e59b', type: 'video' },
     { key: 'full_replay',     label: 'Annotated Replay', icon: HiPlayCircle,     color: '#6d28d9', type: 'video' },
-    { key: 'sprint_analysis', label: 'Sprint Bursts',    icon: HiBolt,           color: '#9b59b6', type: 'image' },
-    { key: 'defensive_line',  label: 'Defensive Line',   icon: HiUserGroup,      color: '#00bcd4', type: 'image' },
+    { key: 'sprint_analysis', label: 'Sprint Bursts',    icon: HiBolt,           color: '#9b59b6', type: 'image', comingSoon: true },
+    { key: 'defensive_line',  label: 'Defensive Line',   icon: HiUserGroup,      color: '#00bcd4', type: 'image', comingSoon: true },
     { key: 'ai_summary',      label: 'AI Summary',       icon: HiSparkles,       color: '#ec4899', type: 'text' },
 ];
 
@@ -275,12 +275,34 @@ export default function Dashboard() {
                             initial={{ opacity: 0, scale: 0.96 }}
                             animate={{ opacity: 1, scale: 1 }}
                         >
-                            <div className="feature-card__header" style={{ borderColor: feat.color }}>
+                            <div
+                                className="feature-card__header"
+                                style={{
+                                    borderColor: feat.color,
+                                    opacity: feat.comingSoon ? 0.55 : 1,
+                                }}
+                            >
                                 <Icon style={{ color: feat.color }} />
                                 <span>{feat.label}</span>
                                 {state.status === 'done' && <HiCheckCircle className="feature-card__done-icon" />}
                             </div>
                             <div className="feature-card__body">
+                                {feat.comingSoon ? (
+                                    <div
+                                        style={{
+                                            padding: '1.5rem 1rem',
+                                            textAlign: 'center',
+                                            color: '#94a3b8',
+                                            fontStyle: 'italic',
+                                            background: 'rgba(15,23,42,0.5)',
+                                            borderRadius: 8,
+                                            border: '1px dashed #334155',
+                                        }}
+                                    >
+                                        Feature in development
+                                    </div>
+                                ) : (
+                                    <>
                                 {state.status === 'locked' && (
                                     <p className="feature-card__hint">Waiting for analysis to finish…</p>
                                 )}
@@ -334,9 +356,11 @@ export default function Dashboard() {
                                 {state.status === 'error' && (
                                     <p className="feature-card__error">❌ {state.error}</p>
                                 )}
+                                    </>
+                                )}
                             </div>
 
-                            {state.status === 'done' && state.url && feat.type !== 'text' && (
+                            {!feat.comingSoon && state.status === 'done' && state.url && feat.type !== 'text' && (
                                 <button
                                     onClick={() =>
                                         handleDownload(

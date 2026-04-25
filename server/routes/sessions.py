@@ -29,7 +29,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from ..auth import require_api_key
+from ..auth import require_api_key, require_api_key_or_query
 from ..config import settings
 from ..deps import get_session_manager
 from ..events import bus
@@ -38,6 +38,9 @@ from ..storage.db import SessionManager
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"], dependencies=[Depends(require_api_key)])
+
+# Header-OR-query auth router for SSE (EventSource can't send custom headers).
+events_router = APIRouter(prefix="/api/sessions", tags=["sessions-events"])
 
 
 # ── Models ───────────────────────────────────────────────────────────────────
@@ -229,7 +232,7 @@ async def get_session(
     return s
 
 
-@router.get("/{session_id}/events")
+@events_router.get("/{session_id}/events", dependencies=[Depends(require_api_key_or_query)])
 async def session_events(
     session_id: str,
     request: Request,

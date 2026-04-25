@@ -147,6 +147,96 @@ def _probe_fps(path: str):
     return None
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# 阶段 0：首帧球员检测（轻量同步任务，给前端选择球员用）
+# ═══════════════════════════════════════════════════════════════════════
+
+def detect_frame_players(session_id: str, session: dict, frame_idx: int,
+                         sm: SessionManager) -> dict:
+    """
+    在指定帧上运行 YOLO，返回球员 bbox 列表 + 标注后的帧图。
+
+    Returns:
+        {
+          "players": [{"id": 1, "bbox": [x1,y1,x2,y2]}, ...],
+          "annotated_frame_path": "first_frame.jpg",  # relative to session dir
+          "image_dimensions": {"width": W, "height": H},
+        }
+    """
+    from ultralytics import YOLO
+
+    video_path = session.get("video_path")
+    if not video_path or not os.path.exists(video_path):
+        raise FileNotFoundError(f"Session {session_id} has no video")
+    _require_file(MODEL_PATH, "YOLO model")
+
+    cap = cv2.VideoCapture(video_path)
+    try:
+        if frame_idx > 0:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+        ok, frame = cap.read()
+        if not ok or frame is None:
+            raise RuntimeError(f"Failed to read frame {frame_idx} from {video_path}")
+    finally:
+        cap.release()
+
+    h, w = frame.shape[:2]
+    model = YOLO(MODEL_PATH)
+    results = model.predict([frame], conf=0.30, iou=0.45, verbose=False)[0]
+
+    # YOLO returns class names dict; pick the player class id
+    class_names = model.names
+    player_class_id = None
+    for cid, name in class_names.items():
+        n = name.lower()
+        if "player" in n or "person" in n:
+            player_class_id = cid
+            break
+    if player_class_id is None:
+        player_class_id = 0
+
+    players = []
+    annotated = frame.copy()
+    if results.boxes is not None and len(results.boxes) > 0:
+        boxes_xyxy = results.boxes.xyxy.cpu().numpy()
+        cls_ids = results.boxes.cls.cpu().numpy().astype(int)
+        confs = results.boxes.conf.cpu().numpy()
+        # Map YOLO classes: goalkeeper → player
+        for k, cid in enumerate(cls_ids):
+            if "goalkeeper" in class_names[int(cid)].lower():
+                cls_ids[k] = player_class_id
+
+        # Sort by confidence descending so the best players come first
+        order = np.argsort(-confs)
+        for player_no, k in enumerate(order, start=1):
+            if int(cls_ids[k]) != player_class_id:
+                continue
+            x1, y1, x2, y2 = boxes_xyxy[k].tolist()
+            players.append({
+                "id": player_no,
+                "bbox": [float(x1), float(y1), float(x2), float(y2)],
+                "confidence": float(confs[k]),
+                "name": f"Player {player_no}",
+                "number": "?",
+                "avatar": "👤",
+            })
+            # Draw box on annotated frame
+            cv2.rectangle(annotated, (int(x1), int(y1)), (int(x2), int(y2)),
+                          (0, 215, 255), 2)
+            cv2.putText(annotated, f"#{player_no}", (int(x1), max(int(y1) - 6, 12)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 215, 255), 2)
+
+    out_dir = sm.session_output_dir(session_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    rel_path = "first_frame.jpg"
+    cv2.imwrite(str(out_dir / rel_path), annotated, [cv2.IMWRITE_JPEG_QUALITY, 88])
+
+    return {
+        "players": players,
+        "annotated_frame_path": rel_path,
+        "image_dimensions": {"width": int(w), "height": int(h)},
+    }
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # 阶段 1：SAMURAI 追踪

@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from ..auth import require_api_key
+from ..auth import require_api_key, require_api_key_or_query
 from ..config import settings
 from ..deps import get_session_manager, get_worker_pool
 from ..pipeline import tasks as pipeline_tasks
@@ -27,6 +27,11 @@ from ..workers.pool import WorkerPool
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/sessions", tags=["analysis"], dependencies=[Depends(require_api_key)])
+
+# Separate router for endpoints that need ?key= query auth (img/video tags can't
+# send headers). Mounted at the same prefix; the global header-based auth on the
+# main router does NOT apply here.
+files_router = APIRouter(prefix="/api/sessions", tags=["analysis-files"])
 
 
 # ── Feature table ────────────────────────────────────────────────────────────
@@ -48,9 +53,50 @@ class TrackPayload(BaseModel):
     frame: int = Field(ge=0, default=0)
 
 
+class DetectFramePayload(BaseModel):
+    frame: int = Field(ge=0, default=0)
+
+
 class QueuedResponse(BaseModel):
     task_id: str
     status: str = "queued"
+
+
+# ── First-frame player detection (sync, fast) ────────────────────────────────
+
+
+@router.post("/{session_id}/detect-frame")
+async def detect_frame(
+    session_id: str,
+    payload: DetectFramePayload | None = None,
+    sm: SessionManager = Depends(get_session_manager),
+    pool: WorkerPool = Depends(get_worker_pool),
+) -> dict:
+    s = sm.get_session(session_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="Unknown session")
+    if not s.get("video_path") or not Path(s["video_path"]).exists():
+        raise HTTPException(status_code=400, detail="Session has no video")
+
+    frame_idx = payload.frame if payload else 0
+
+    import asyncio
+    loop = asyncio.get_running_loop()
+    fut = loop.run_in_executor(
+        pool._gpu,  # YOLO uses GPU; reuse the GPU pool to avoid concurrent CUDA ctx
+        pipeline_tasks.detect_frame_players,
+        session_id, s, frame_idx, sm,
+    )
+    try:
+        result = await fut
+    except Exception as e:
+        log.exception("detect_frame failed")
+        raise HTTPException(status_code=500, detail=f"Detection failed: {e}")
+
+    # Build a frame URL the frontend can render
+    rel = result.get("annotated_frame_path", "first_frame.jpg")
+    result["annotated_frame_url"] = f"/api/sessions/{session_id}/files/{rel}"
+    return result
 
 
 # ── Start global analysis ────────────────────────────────────────────────────
@@ -198,7 +244,7 @@ async def get_summary(
 # ── Artifact serving ─────────────────────────────────────────────────────────
 
 
-@router.get("/{session_id}/files/{path:path}")
+@files_router.get("/{session_id}/files/{path:path}", dependencies=[Depends(require_api_key_or_query)])
 async def serve_artifact(
     session_id: str,
     path: str,

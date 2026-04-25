@@ -131,7 +131,9 @@ def create_app() -> FastAPI:
     )
     app.include_router(health_routes.router)
     app.include_router(session_routes.router)
+    app.include_router(session_routes.events_router)
     app.include_router(analysis_routes.router)
+    app.include_router(analysis_routes.files_router)
     return app
 
 

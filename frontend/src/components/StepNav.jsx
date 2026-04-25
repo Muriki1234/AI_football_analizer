@@ -4,9 +4,8 @@ import './StepNav.css';
 
 const STEPS = [
     { path: '/upload', label: 'Upload', num: 1 },
-    { path: '/trim', label: 'Trim', num: 2 },
-    { path: '/configure', label: 'Configure', num: 3 },
-    { path: '/dashboard', label: 'Dashboard', num: 4 },
+    { path: '/configure', label: 'Configure', num: 2 },
+    { path: '/dashboard', label: 'Dashboard', num: 3 },
 ];
 
 export default function StepNav() {

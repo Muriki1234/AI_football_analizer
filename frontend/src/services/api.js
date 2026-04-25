@@ -122,13 +122,15 @@ export const getSummary = (sessionId) =>
     api.get(`/api/sessions/${sessionId}/summary`).then(unwrap);
 
 /**
- * Build a signed-ish URL to a session artifact (hits /files/{path}).
- * `X-API-Key` isn't trivially attachable to <img src>/<video src>, so when
- * auth is on the server admin should either allow-list the frontend origin
- * in CORS or move file serving behind a pre-signed mechanism.
+ * Build a URL to a session artifact (hits /files/{path}). When an API key is
+ * configured, append it as ?key= so plain <img>/<video> tags can authenticate
+ * (these tags can't send custom headers).
  */
-export const artifactUrl = (sessionId, relPath) =>
-    absUrl(`/api/sessions/${sessionId}/files/${encodeURIComponent(relPath).replace(/%2F/g, '/')}`);
+export const artifactUrl = (sessionId, relPath) => {
+    const path = encodeURIComponent(relPath).replace(/%2F/g, '/');
+    const base = absUrl(`/api/sessions/${sessionId}/files/${path}`);
+    return API_KEY ? `${base}?key=${encodeURIComponent(API_KEY)}` : base;
+};
 
 // ── Legacy shims (keep existing pages compiling) ─────────────────────────────
 // The old UI calls these; keep them around so we don't break imports while
@@ -137,12 +139,18 @@ export const artifactUrl = (sessionId, relPath) =>
 
 export const registerSession = async () => ({ ok: true });
 
-export const analyzeFrame = async () => ({
-    players_data: [],
-    annotated_frame_url: null,
-    image_dimensions: null,
-    not_implemented: true,
-});
+export const analyzeFrame = async (sessionId, frame = 0) => {
+    const res = await api.post(`/api/sessions/${sessionId}/detect-frame`, { frame });
+    const data = res.data || {};
+    // The server returned a relative URL like /api/sessions/{id}/files/first_frame.jpg.
+    // Convert to artifactUrl() which handles ?key= for img-tag auth.
+    const rel = data.annotated_frame_path || 'first_frame.jpg';
+    return {
+        players_data: data.players || [],
+        annotated_frame_url: artifactUrl(sessionId, rel),
+        image_dimensions: data.image_dimensions || null,
+    };
+};
 
 export const startGlobalAnalysis = startAnalysis;
 
@@ -158,11 +166,9 @@ export const generateFeature = queueFeature;
  *   onError(err)  — fired on network / protocol errors
  */
 export const subscribeSession = (sessionId, handlers = {}) => {
-    const url = absUrl(`/api/sessions/${sessionId}/events`);
-    // EventSource does not support custom headers; when API_KEY is set,
-    // clients should configure the server with a CORS-friendly auth cookie
-    // or a pre-signed query param. For dev / behind a reverse proxy that
-    // injects the header, this works out of the box.
+    const baseUrl = absUrl(`/api/sessions/${sessionId}/events`);
+    // EventSource can't send custom headers; pass the API key via ?key= query.
+    const url = API_KEY ? `${baseUrl}?key=${encodeURIComponent(API_KEY)}` : baseUrl;
     const source = new EventSource(url, { withCredentials: false });
 
     const parse = (raw) => {
