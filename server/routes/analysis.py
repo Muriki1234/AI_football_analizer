@@ -157,12 +157,26 @@ async def start_tracking(
                      start_frame=payload.frame)
 
     def _on_error(exc: BaseException) -> None:
-        sm.update_status(session_id, "tracking_failed", error=str(exc))
+        # Whichever phase raised, mark the appropriate failure status.
+        cur = sm.get_session(session_id) or {}
+        st = cur.get("status") or ""
+        if st.startswith("track"):
+            sm.update_status(session_id, "tracking_failed", error=str(exc))
+        else:
+            sm.update_status(session_id, "analysis_failed", error=str(exc))
 
-    pool.submit_gpu(
-        pipeline_tasks.run_samurai_tracking,
-        session_id, s_merged, sm, on_error=_on_error,
-    )
+    def _track_then_analyze() -> None:
+        # Phase 1: SAMURAI tracking (catches its own errors → tracking_failed).
+        pipeline_tasks.run_samurai_tracking(session_id, s_merged, sm)
+        s_after = sm.get_session(session_id) or {}
+        if s_after.get("status") != "tracking_done":
+            log.info("[chain] SAMURAI did not complete (status=%s); skipping analysis.",
+                     s_after.get("status"))
+            return
+        # Phase 2: global analysis (also catches its own errors → analysis_failed).
+        pipeline_tasks.run_global_analysis(session_id, s_after, sm)
+
+    pool.submit_gpu(_track_then_analyze, on_error=_on_error)
     return QueuedResponse(task_id=session_id, status="tracking")
 
 

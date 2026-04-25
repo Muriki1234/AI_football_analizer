@@ -9,6 +9,7 @@ import {
 } from 'react-icons/hi2';
 import {
     startAnalysis,
+    startTracking,
     queueFeature,
     getSummary,
     artifactUrl,
@@ -34,10 +35,26 @@ const PHASE_LABELS = {
     queued:          'Queued for analysis…',
     analyzing:       'Running analysis…',
     analysis_done:   'Analysis complete.',
-    tracking:        'Running SAMURAI tracking…',
+    tracking:        'Tracking selected player (SAMURAI)…',
     tracking_done:   'Tracking complete — starting analysis…',
     analysis_failed: 'Analysis failed.',
     tracking_failed: 'Tracking failed.',
+};
+
+const STAGE_LABELS = {
+    samurai_queued:    'Queued for SAMURAI…',
+    extracting_frames: 'Extracting frames for SAMURAI…',
+    samurai_running:   'SAMURAI tracking the selected player…',
+    samurai_done:      'SAMURAI tracking finished.',
+    loading_video:     'Loading video metadata…',
+    yolo_detection:    'YOLO detection…',
+    camera_motion:     'Camera motion compensation…',
+    keypoints:         'Detecting field keypoints…',
+    perspective:       'Perspective transform…',
+    speed_calc:        'Computing speed & distance…',
+    team_colors:       'Resolving team colors…',
+    possession:        'Computing possession…',
+    summary:           'Building summary…',
 };
 
 const initialFeatures = Object.fromEntries(
@@ -49,6 +66,8 @@ export default function Dashboard() {
     const navigate = useNavigate();
 
     const sessionId = location.state?.sessionId || location.state?.videoId;
+    const selectedBbox = location.state?.selectedBbox || null;
+    const playerName = location.state?.playerName || null;
 
     const [session, setSession] = useState(null);
     const [summary, setSummary] = useState(null);
@@ -66,9 +85,14 @@ export default function Dashboard() {
     const isDone = phase === 'analysis_done';
     const isFailed = phase === 'analysis_failed' || phase === 'tracking_failed';
 
-    const phaseLabel = PHASE_LABELS[phase] || stage || phase;
+    const phaseLabel = PHASE_LABELS[phase] || STAGE_LABELS[stage] || stage || phase;
+    const stageLabel = STAGE_LABELS[stage] || stage;
 
-    // ── Kick off analysis on mount ──────────────────────────────────────────
+    // ── Kick off pipeline on mount ──────────────────────────────────────────
+    // If we have a bbox from the Configure page, run SAMURAI → analysis (server
+    // chains them). Otherwise fall back to plain global analysis (which will
+    // currently fail because run_global_analysis depends on samurai output —
+    // we surface the error so the user knows to pick a player).
     useEffect(() => {
         if (!sessionId) return;
         if (analysisKicked.current) return;
@@ -76,14 +100,20 @@ export default function Dashboard() {
 
         (async () => {
             try {
-                await startAnalysis(sessionId);
+                if (selectedBbox && Array.isArray(selectedBbox) && selectedBbox.length === 4) {
+                    const [x1, y1, x2, y2] = selectedBbox;
+                    await startTracking(sessionId, { x1, y1, x2, y2 }, 0);
+                    if (playerName) toast.success(`Tracking ${playerName}…`);
+                } else {
+                    await startAnalysis(sessionId);
+                }
             } catch (e) {
                 const msg = e?.response?.data?.detail || e?.message || 'Failed to start analysis';
                 setError(msg);
                 toast.error(msg);
             }
         })();
-    }, [sessionId]);
+    }, [sessionId, selectedBbox, playerName]);
 
     // ── SSE stream for live session + task updates ──────────────────────────
     useEffect(() => {
@@ -231,7 +261,7 @@ export default function Dashboard() {
                                 transition={{ ease: 'easeOut', duration: 0.5 }}
                             />
                         </div>
-                        {stage && <p className="pipeline-status__stage">{stage}</p>}
+                        {stage && <p className="pipeline-status__stage">{stageLabel}</p>}
                     </motion.div>
                 )}
 
