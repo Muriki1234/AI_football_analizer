@@ -57,7 +57,7 @@ class Settings(BaseSettings):
 
     # ── Model weights (HuggingFace Hub) ───────────────────────────────────────
     HF_REPO_ID: str = Field(
-        default="hansdu/ai-football-assistant-weights",
+        default="Muriki123/ai-football-assistant-weights",
         description="HF Hub repo that hosts soccana_best.pt and soccana_kpts_best.pt.",
     )
     HF_YOLO_FILENAME: str = "soccana_best.pt"
