@@ -110,12 +110,25 @@ async def start_tracking(
                      selected_bbox=s_merged["selected_bbox"],
                      start_frame=payload.frame)
 
+    # Convert the xyxy bbox the API exposes into the xywh+frame shape
+    # run_samurai_tracking expects (`player_bbox['x' | 'y' | 'w' | 'h']`
+    # plus `player_bbox.get('frame', 0)` — see server/pipeline/tasks.py).
+    # Forgetting the conversion + dropping the SessionManager arg made
+    # every track call raise TypeError (issue #4).
+    player_bbox = {
+        "x": x1,
+        "y": y1,
+        "w": x2 - x1,
+        "h": y2 - y1,
+        "frame": payload.frame,
+    }
+
     def _on_error(exc: BaseException) -> None:
         sm.update_status(session_id, "tracking_failed", error=str(exc))
 
     pool.submit_gpu(
         pipeline_tasks.run_samurai_tracking,
-        session_id, s_merged, sm, on_error=_on_error,
+        session_id, s_merged, player_bbox, sm, on_error=_on_error,
     )
     return QueuedResponse(task_id=session_id, status="tracking")
 
