@@ -147,6 +147,16 @@ async def start_tracking(
     if x2 <= x1 or y2 <= y1:
         raise HTTPException(status_code=400, detail="Invalid bbox")
 
+    # The tracking task wants xywh + frame in a single dict (it indexes
+    # player_bbox['x'] / 'y' / 'w' / 'h' and player_bbox.get('frame')).
+    # The route receives xyxy from the frontend, so convert here.
+    player_bbox = {
+        "x": float(x1),
+        "y": float(y1),
+        "w": float(x2 - x1),
+        "h": float(y2 - y1),
+        "frame": int(payload.frame),
+    }
     s_merged = {
         **s,
         "selected_bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
@@ -167,7 +177,7 @@ async def start_tracking(
 
     def _track_then_analyze() -> None:
         # Phase 1: SAMURAI tracking (catches its own errors → tracking_failed).
-        pipeline_tasks.run_samurai_tracking(session_id, s_merged, sm)
+        pipeline_tasks.run_samurai_tracking(session_id, s_merged, player_bbox, sm)
         s_after = sm.get_session(session_id) or {}
         if s_after.get("status") != "tracking_done":
             log.info("[chain] SAMURAI did not complete (status=%s); skipping analysis.",
