@@ -2166,13 +2166,20 @@ def _find_matched_player(player_frame: dict, target_center: tuple,
 def _finish_task(sm: SessionManager, session_id: str, task_id: str,
                  file_path: Path, result: dict = None):
     """任务成功完成时统一写入状态"""
+    file_path = Path(file_path)
+    session_dir = sm.session_output_dir(session_id)
+    try:
+        rel_path = str(file_path.resolve().relative_to(session_dir.resolve()))
+    except ValueError:
+        rel_path = file_path.name
     sm.update_task(
         session_id, task_id,
         status="done",
         progress=100,
         file_path=str(file_path),
-        # URL 前端用来直接展示（对应 Flask route /api/<sid>/file/<tid>）
-        url=f"/api/{session_id}/file/{task_id}",
+        # Store the artifact path relative to the session output dir so the
+        # frontend can serve it via /api/sessions/{sid}/files/{path}.
+        url=rel_path,
         result=result,
     )
 

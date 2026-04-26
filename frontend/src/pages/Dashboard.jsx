@@ -12,6 +12,8 @@ import {
     startTracking,
     queueFeature,
     getSummary,
+    absUrl,
+    API_KEY,
     artifactUrl,
     subscribeSession,
 } from '../services/api';
@@ -66,6 +68,22 @@ const STAGE_LABELS = {
 const initialFeatures = Object.fromEntries(
     FEATURES.map((f) => [f.key, { status: 'locked', taskId: null, url: null, result: null, progress: 0 }])
 );
+
+const taskResultUrl = (sessionId, rawUrl) => {
+    if (!rawUrl) return null;
+    if (/^https?:\/\//i.test(rawUrl)) return rawUrl;
+    if (rawUrl.startsWith('/api/sessions/')) {
+        const full = absUrl(rawUrl);
+        return API_KEY ? `${full}${full.includes('?') ? '&' : '?'}key=${encodeURIComponent(API_KEY)}` : full;
+    }
+    return artifactUrl(sessionId, rawUrl.replace(/^\//, ''));
+};
+
+const taskTextResult = (result) => {
+    if (!result) return '';
+    if (typeof result === 'string') return result;
+    return result.report_markdown || result.summary || '';
+};
 
 export default function Dashboard() {
     const location = useLocation();
@@ -140,7 +158,7 @@ export default function Dashboard() {
                             t.status === 'failed' ? 'error' :
                             t.status === 'running' ? 'generating' : 'generating',
                         progress: t.progress || 0,
-                        url: t.url ? artifactUrl(sessionId, (t.url || '').replace(/^\//, '')) : next[key].url,
+                        url: t.url ? taskResultUrl(sessionId, t.url) : next[key].url,
                         result: t.result ?? next[key].result,
                         error: t.error ?? next[key].error,
                     };
@@ -384,9 +402,7 @@ export default function Dashboard() {
                                             overflow: 'auto',
                                         }}
                                     >
-                                        {typeof state.result === 'string'
-                                            ? state.result
-                                            : state.result.summary || JSON.stringify(state.result, null, 2)}
+                                        {taskTextResult(state.result) || JSON.stringify(state.result, null, 2)}
                                     </div>
                                 )}
                                 {state.status === 'error' && (
