@@ -38,6 +38,17 @@ RUN python -m pip install --upgrade pip setuptools wheel \
 
 COPY server/ /app/server/
 
+# ── SAMURAI + SAM2 ──────────────────────────────────────────────────────────
+# Copy SAMURAI inference code and SAM2 package source (checkpoints are
+# downloaded at runtime to /workspace/weights/ by ensure_weights()).
+COPY samurai/ /app/samurai/
+RUN pip install -e /app/samurai/sam2
+
+# SAMURAI_SCRIPT tells the server where to find run_samurai.py.
+# SAM2_MODEL_PATH is set at runtime by ensure_weights() once the checkpoint
+# has been downloaded to the persistent Network Volume.
+ENV SAMURAI_SCRIPT=/app/samurai/run_samurai.py
+
 # Default workspace; RunPod mounts the Network Volume over this at runtime.
 RUN mkdir -p /workspace
 ENV WORKSPACE_DIR=/workspace

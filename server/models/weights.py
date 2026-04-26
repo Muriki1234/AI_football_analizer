@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
+import urllib.request
 from pathlib import Path
 
 from huggingface_hub import hf_hub_download
@@ -52,8 +53,31 @@ def _download_one(repo_id: str, filename: str, dest_dir: Path, token: str | None
     return local_path
 
 
+_SAM2_URL = (
+    "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt"
+)
+
+
+def _download_url(url: str, dest_dir: Path, filename: str) -> Path:
+    """Download a file from a plain URL (no auth). Skips if already present."""
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    target = dest_dir / filename
+    if target.exists() and target.stat().st_size > 0:
+        log.info("weights: %s already present (skipping)", filename)
+        return target
+    log.info("weights: downloading %s -> %s", url, target)
+    tmp = target.with_suffix(".tmp")
+    try:
+        urllib.request.urlretrieve(url, str(tmp))
+        tmp.rename(target)
+    except Exception as e:
+        tmp.unlink(missing_ok=True)
+        raise WeightsError(f"Failed to download {url}: {e}") from e
+    return target
+
+
 def ensure_weights() -> dict[str, Path]:
-    """Pull both model weights and expose their paths to the pipeline via env vars."""
+    """Pull all model weights and expose their paths via env vars."""
     yolo = _download_one(
         settings.HF_REPO_ID,
         settings.HF_YOLO_FILENAME,
@@ -67,10 +91,14 @@ def ensure_weights() -> dict[str, Path]:
         settings.HF_TOKEN,
     )
 
-    # The legacy pipeline reads these env vars to find weights — so we set them
-    # here rather than threading a config object through pipeline/tasks.py.
+    # SAM2 checkpoint — public Meta URL, no token required.
+    sam2 = _download_url(_SAM2_URL, settings.weights_root, "sam2.1_hiera_base_plus.pt")
+
+    # The pipeline reads these env vars to find weights.
     os.environ["YOLO_MODEL_PATH"] = str(yolo)
     os.environ["KEYPOINT_MODEL_PATH"] = str(kpt)
+    os.environ["SAM2_MODEL_PATH"] = str(sam2)
     log.info("weights: YOLO_MODEL_PATH=%s", yolo)
     log.info("weights: KEYPOINT_MODEL_PATH=%s", kpt)
-    return {"yolo": yolo, "keypoint": kpt}
+    log.info("weights: SAM2_MODEL_PATH=%s", sam2)
+    return {"yolo": yolo, "keypoint": kpt, "sam2": sam2}
