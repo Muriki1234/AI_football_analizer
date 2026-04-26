@@ -42,7 +42,13 @@ COPY server/ /app/server/
 # Copy SAMURAI inference code and SAM2 package source (checkpoints are
 # downloaded at runtime to /workspace/weights/ by ensure_weights()).
 COPY samurai/ /app/samurai/
-RUN pip install -e /app/samurai/sam2
+# Install sam2 WITHOUT reinstalling torch/torchvision (already pinned above).
+# Skip CUDA extension compilation — the runtime image lacks cuda-dev headers;
+# sam2 falls back to pure-PyTorch implementations automatically.
+RUN pip install --no-deps -e /app/samurai/sam2
+
+# Make sam2 importable even if the editable install didn't fully register.
+ENV PYTHONPATH="/app/samurai/sam2:/app/samurai:${PYTHONPATH:-}"
 
 # SAMURAI_SCRIPT tells the server where to find run_samurai.py.
 # SAM2_MODEL_PATH is set at runtime by ensure_weights() once the checkpoint

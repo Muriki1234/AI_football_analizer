@@ -3,7 +3,6 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { ProgressProvider } from './components/ProgressBar';
 import Welcome from './pages/Welcome';
 import Upload from './pages/Upload';
-import Trimmer from './pages/Trimmer';
 import Configuration from './pages/Configuration';
 import Dashboard from './pages/Dashboard';
 import PlayerLibrary from './pages/PlayerLibrary';
@@ -25,7 +24,6 @@ function AnimatedRoutes() {
                 <Route path="/login" element={<PageWrap><Login /></PageWrap>} />
                 <Route path="/" element={<PageWrap><Welcome /></PageWrap>} />
                 <Route path="/upload" element={<PageWrap><Upload /></PageWrap>} />
-                <Route path="/trim" element={<PageWrap><Trimmer /></PageWrap>} />
                 <Route path="/configure" element={<PageWrap><Configuration /></PageWrap>} />
                 <Route path="/dashboard" element={<PageWrap><Dashboard /></PageWrap>} />
                 <Route path="/players" element={<PageWrap><PlayerLibrary /></PageWrap>} />
