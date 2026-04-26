@@ -69,6 +69,29 @@ async def lifespan(app: FastAPI):
     # Event bus needs the running loop to schedule callbacks from pipeline threads.
     bus.bind_loop(asyncio.get_running_loop())
 
+    # Pre-warm YOLO on the GPU pool so CUDA JIT compiles at startup, not on
+    # the first user request (which would cause a 1-2 min hang). Warm at the
+    # same imgsz=1280 the streaming pipeline uses so the JIT cache actually
+    # hits during analysis (not just during /detect-frame which uses 640).
+    def _prewarm_yolo():
+        import numpy as np
+        from .pipeline.tasks import _get_yolo_model
+        try:
+            log.info("Pre-warming YOLO (first CUDA JIT may take ~60s)…")
+            model = _get_yolo_model()
+            dummy_lo = np.zeros((640, 640, 3), dtype=np.uint8)
+            dummy_hi = np.zeros((1280, 1280, 3), dtype=np.uint8)
+            # Warm both code paths (detect-frame uses 640, pipeline uses 1280).
+            model.predict([dummy_lo], verbose=False)
+            model.predict([dummy_hi], verbose=False, imgsz=1280, half=True)
+            log.info("YOLO pre-warm done.")
+        except Exception as exc:
+            # Non-fatal: detect-frame / analyze will still try and surface a
+            # clear FileNotFoundError if weights are missing.
+            log.warning("YOLO pre-warm failed (non-fatal): %s", exc)
+
+    pool.submit_gpu(_prewarm_yolo)
+
     # Scheduled session cleanup.
     scheduler = BackgroundScheduler(daemon=True)
     scheduler.add_job(

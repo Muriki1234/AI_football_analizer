@@ -79,6 +79,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _resolve_model_path(env_var: str, preferred_name: str) -> str:
+    """Resolve a weight file path lazily — re-read env var EVERY call so we
+    pick up paths set by ensure_weights() during lifespan startup. Module-level
+    capture would freeze the value before weights are downloaded and break
+    every YOLO load downstream."""
     configured = os.environ.get(env_var)
     if configured:
         return configured
@@ -96,13 +100,24 @@ def _require_file(path: str, label: str) -> None:
         raise FileNotFoundError(f"{label} not found: {path}")
 
 
-# ── 环境变量配置（部署时设置）────────────────────────────────────────────────
-MODEL_PATH          = _resolve_model_path("YOLO_MODEL_PATH", "soccana_best.pt")
-KEYPOINT_MODEL_PATH = _resolve_model_path("KEYPOINT_MODEL_PATH", "soccana_kpts_best.pt")
-SAMURAI_SCRIPT      = os.environ.get("SAMURAI_SCRIPT", "samurai/run_samurai.py")
+# ── 模型路径：必须 lazy 解析 ─────────────────────────────────────────────────
+# 不要在 module import 时缓存：FastAPI lifespan 启动顺序是
+#   1) import server.main → import routes → import pipeline.tasks
+#   2) lifespan 运行 ensure_weights() 才设 YOLO_MODEL_PATH 等 env var
+# 如果在 import 时就把 MODEL_PATH 算出来，env var 还是空的 → 拿到 /app/soccana_best.pt
+# (不存在) → 单帧检测、全局分析全部 FileNotFoundError。这是 RunPod 部署后所有
+# YOLO 推理失败的根本原因。
+def get_yolo_model_path() -> str:
+    return _resolve_model_path("YOLO_MODEL_PATH", "soccana_best.pt")
 
-SHORT_VIDEO_FRAMES = 3000  # ≤3000 frames (~2min@24fps): read once into RAM for speed
-                            # >3000 frames: use streaming to avoid OOM
+
+def get_keypoint_model_path() -> str:
+    return _resolve_model_path("KEYPOINT_MODEL_PATH", "soccana_kpts_best.pt")
+
+
+def get_samurai_script() -> str:
+    return os.environ.get("SAMURAI_SCRIPT", "/app/samurai/scripts/demo.py")
+
 
 # SAMURAI 插值：缺口 ≤ 30 帧线性插，超过则保留 NaN 由下游跳过
 MAX_INTERP_GAP_FRAMES = 30
@@ -154,11 +169,17 @@ def _probe_fps(path: str):
 _cached_yolo_model = None
 
 def _get_yolo_model():
-    """Return a cached YOLO instance — loads once, reused across all calls."""
+    """Return a cached YOLO instance — loads once, reused across all calls.
+
+    Resolves the weight path *now* (not at module import) so ensure_weights()
+    has time to set YOLO_MODEL_PATH during lifespan startup. Without this the
+    cache key would be the wrong /app fallback even after weights download."""
     global _cached_yolo_model
     if _cached_yolo_model is None:
         from ultralytics import YOLO as _YOLO
-        _cached_yolo_model = _YOLO(MODEL_PATH)
+        path = get_yolo_model_path()
+        _require_file(path, "YOLO model")
+        _cached_yolo_model = _YOLO(path)
     return _cached_yolo_model
 
 
@@ -179,7 +200,6 @@ def detect_frame_players(session_id: str, session: dict, frame_idx: int,
     video_path = session.get("video_path")
     if not video_path or not os.path.exists(video_path):
         raise FileNotFoundError(f"Session {session_id} has no video")
-    _require_file(MODEL_PATH, "YOLO model")
 
     cap = cv2.VideoCapture(video_path)
     try:
@@ -334,16 +354,30 @@ def run_samurai_tracking(session_id: str, session: dict,
 
             temp_video = output_dir / "samurai_temp.mp4"
 
+            samurai_script = get_samurai_script()
+            _require_file(samurai_script, "SAMURAI demo script")
+            sam2_model_path = os.environ.get(
+                "SAM2_MODEL_PATH",
+                "/workspace/weights/sam2.1_hiera_base_plus.pt",
+            )
+            _require_file(sam2_model_path, "SAM2 checkpoint")
+
             cmd = [
-                "python", SAMURAI_SCRIPT,
+                "python", samurai_script,
                 "--video_path",  str(frames_dir),
                 "--txt_path",    str(init_txt),
                 "--video_output_path", str(temp_video),
-                "--model_path",  os.environ.get("SAM2_MODEL_PATH", "sam2/checkpoints/sam2.1_hiera_base_plus.pt"),
+                "--model_path",  sam2_model_path,
             ]
+            # samurai_root must be the directory that *contains* the sam2/
+            # package — demo.py does `sys.path.append("./sam2")`, so cwd has
+            # to be /app/samurai (not /app). Compute it from the demo.py path:
+            #   .../samurai/scripts/demo.py → parents[1] = .../samurai
+            samurai_root = str(Path(samurai_script).resolve().parents[1])
             env = os.environ.copy()
-            samurai_root = str(Path(SAMURAI_SCRIPT).parent.parent)
-            env["PYTHONPATH"] = f"{samurai_root}:{samurai_root}/sam2:" + env.get("PYTHONPATH", "")
+            env["PYTHONPATH"] = (
+                f"{samurai_root}:{samurai_root}/sam2:" + env.get("PYTHONPATH", "")
+            )
             env["HYDRA_FULL_ERROR"] = "1"
 
             result = subprocess.run(
@@ -479,85 +513,58 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         print(f"[INFO] SAMURAI bboxes: {len(tracked_bboxes)} frames, "
               f"range [{tb_keys[0] if tb_keys else 'N/A'} – {tb_keys[-1] if tb_keys else 'N/A'}]")
 
-        # ── 2-4. 检测 + 光流 + 关键点（短视频一次读入内存，长视频流式）────────
+        # ── 2-4. 检测 + 光流 + 关键点（一律流式，避免 18 GB 全帧 read_video()）────
+        # 之前 ≤3000 帧走 read_video() 一次性加载所有帧，3000×1080p×3 ≈ 18 GB RAM，
+        # 在 RunPod 上必爆 OOM。流式路径单 chunk = 500 帧 × 6MB ≈ 3GB，长短视频
+        # 都用同一条路径，行为一致、不会 OOM。
         sm.update_status(session_id, "analyzing", progress=10, stage="yolo_detection")
-        _require_file(MODEL_PATH, "YOLO model")
-        _require_file(KEYPOINT_MODEL_PATH, "Keypoint model")
+        yolo_path = get_yolo_model_path()
+        kpt_path  = get_keypoint_model_path()
+        _require_file(yolo_path, "YOLO model")
+        _require_file(kpt_path, "Keypoint model")
         if not HAS_SPORTS:
             raise ImportError("sports library is required for keypoint and minimap analysis")
-        tracker = Tracker(MODEL_PATH)
+        tracker = Tracker(yolo_path)
 
-        if total <= SHORT_VIDEO_FRAMES:
-            # 短视频：一次读入内存，三个模块共享同一份帧（省去2次重复IO）
-            print(f"[INFO] Short video ({total} frames) — loading into RAM for speed")
-            _t = _time.perf_counter()
-            frames = read_video(video_path)
-            tracks = tracker.get_object_tracks(frames)
-            tracks["ball"] = tracker.interpolate_ball_positions(tracks["ball"])
-            tracker.add_position_to_tracks(tracks)
-            _bench("yolo_detection", _t)
+        print(f"[INFO] Streaming pipeline ({total} frames) — RAM-bounded mode")
+        _t = _time.perf_counter()
 
-            sm.update_status(session_id, "analyzing", progress=35, stage="camera_motion")
-            _t = _time.perf_counter()
-            cam = CameraMovementEstimator(frames[0])
-            cam_mov = cam.get_camera_movement(frames)
-            cam.add_adjust_positions_to_tracks(tracks, cam_mov)
-            _bench("camera_motion", _t)
+        # 进度回调：YOLO 阶段占 10%→35%（25 个百分点）
+        _yolo_p0, _yolo_range = 10, 25
 
-            sm.update_status(session_id, "analyzing", progress=50, stage="keypoint_detection")
-            _t = _time.perf_counter()
-            kp  = KeypointDetector(KEYPOINT_MODEL_PATH)
-            vt  = ViewTransformer()
-            kps = kp.predict(frames, cam_movement=cam_mov)
-            vt.add_transformed_position_to_tracks(tracks, kps)
-            vt.interpolate_2d_positions(tracks)
-            _bench("keypoint_detection", _t)
+        def _yolo_progress(ratio, frames_done, frames_total, eta_sec):
+            pct = int(_yolo_p0 + ratio * _yolo_range)
+            eta_str = (f"{int(eta_sec // 60)}m{int(eta_sec % 60):02d}s"
+                       if eta_sec > 0 else "?")
+            sm.update_status(
+                session_id, "analyzing", progress=pct,
+                stage=f"yolo_detection ({frames_done}/{frames_total} frames, ETA {eta_str})"
+            )
 
-            del frames  # 释放内存
-            import gc; gc.collect()
-            _check_memory_and_gc()
+        tracks = tracker.get_object_tracks_streamed(
+            video_path, total, progress_callback=_yolo_progress)
+        tracks["ball"] = tracker.interpolate_ball_positions(tracks["ball"])
+        tracker.add_position_to_tracks(tracks)
+        _bench("yolo_detection", _t)
+        _check_memory_and_gc()
 
-        else:
-            # 长视频：流式处理，内存恒定
-            print(f"[INFO] Long video ({total} frames) — using streaming mode")
-            _t = _time.perf_counter()
+        sm.update_status(session_id, "analyzing", progress=35, stage="camera_motion")
+        _t = _time.perf_counter()
+        cam     = CameraMovementEstimator.from_video_path(video_path)
+        cam_mov = cam.get_camera_movement_streamed(video_path, total)
+        cam.add_adjust_positions_to_tracks(tracks, cam_mov)
+        _bench("camera_motion", _t)
+        _check_memory_and_gc()
 
-            # 进度回调：YOLO 阶段占 10%→35%（25 个百分点）
-            _yolo_p0, _yolo_range = 10, 25
-
-            def _yolo_progress(ratio, frames_done, frames_total, eta_sec):
-                pct = int(_yolo_p0 + ratio * _yolo_range)
-                eta_str = (f"{int(eta_sec // 60)}m{int(eta_sec % 60):02d}s"
-                           if eta_sec > 0 else "?")
-                sm.update_status(
-                    session_id, "analyzing", progress=pct,
-                    stage=f"yolo_detection ({frames_done}/{frames_total} frames, ETA {eta_str})"
-                )
-
-            tracks = tracker.get_object_tracks_streamed(
-                video_path, total, progress_callback=_yolo_progress)
-            tracks["ball"] = tracker.interpolate_ball_positions(tracks["ball"])
-            tracker.add_position_to_tracks(tracks)
-            _bench("yolo_detection", _t)
-            _check_memory_and_gc()
-
-            sm.update_status(session_id, "analyzing", progress=35, stage="camera_motion")
-            _t = _time.perf_counter()
-            cam     = CameraMovementEstimator.from_video_path(video_path)
-            cam_mov = cam.get_camera_movement_streamed(video_path, total)
-            cam.add_adjust_positions_to_tracks(tracks, cam_mov)
-            _bench("camera_motion", _t)
-            _check_memory_and_gc()
-
-            sm.update_status(session_id, "analyzing", progress=50, stage="keypoint_detection")
-            _t = _time.perf_counter()
-            kp  = KeypointDetector(KEYPOINT_MODEL_PATH)
-            vt  = ViewTransformer()
-            kps = kp.predict_streamed(video_path, total, cam_movement=cam_mov)
-            vt.add_transformed_position_to_tracks(tracks, kps)
-            vt.interpolate_2d_positions(tracks)
-            _bench("keypoint_detection", _t)
-            _check_memory_and_gc()
+        sm.update_status(session_id, "analyzing", progress=50, stage="keypoint_detection")
+        _t = _time.perf_counter()
+        kp  = KeypointDetector(kpt_path)
+        vt  = ViewTransformer()
+        kps = kp.predict_streamed(video_path, total, cam_movement=cam_mov)
+        vt.add_transformed_position_to_tracks(tracks, kps)
+        vt.interpolate_2d_positions(tracks)
+        _bench("keypoint_detection", _t)
+        _check_memory_and_gc()
 
         # ── 5. 速度 & 距离 ───────────────────────────────────────────
         sm.update_status(session_id, "analyzing", progress=70, stage="speed_calculation")
@@ -1252,7 +1259,7 @@ def run_full_replay(session_id: str, session: dict, task_id: str, sm: SessionMan
         sm.update_task(session_id, task_id, progress=10)
 
         # Prepare helpers (no frame data — lightweight)
-        tracker_obj = Tracker(MODEL_PATH)
+        tracker_obj = Tracker(get_yolo_model_path())
         team_assigner = TeamAssigner()
         team_colors = {
             1: np.array([int(hex_t1[5:7], 16), int(hex_t1[3:5], 16), int(hex_t1[1:3], 16)]),

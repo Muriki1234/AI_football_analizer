@@ -42,18 +42,31 @@ COPY server/ /app/server/
 # Copy SAMURAI inference code and SAM2 package source (checkpoints are
 # downloaded at runtime to /workspace/weights/ by ensure_weights()).
 COPY samurai/ /app/samurai/
-# Install sam2 WITHOUT reinstalling torch/torchvision (already pinned above).
-# Skip CUDA extension compilation — the runtime image lacks cuda-dev headers;
-# sam2 falls back to pure-PyTorch implementations automatically.
-RUN pip install --no-deps -e /app/samurai/sam2
+# SAM2's __init__.py imports hydra at top level and demo.py imports loguru,
+# so we MUST install those deps. Previously this ran with --no-deps which
+# skipped hydra-core / iopath / loguru / omegaconf, and SAMURAI tracking
+# crashed on `from hydra import initialize_config_module` before it could
+# even argparse. We install the deps explicitly (avoids reinstalling torch),
+# then the package itself with --no-deps to skip the CUDA extension build
+# that would fail without nvcc in this runtime image.
+RUN pip install \
+        "hydra-core>=1.3.2" \
+        "iopath>=0.1.10" \
+        "omegaconf>=2.3.0" \
+        "loguru>=0.7.0" \
+        "tqdm>=4.66.1" \
+ && pip install --no-deps --no-build-isolation -e /app/samurai/sam2
 
 # Make sam2 importable even if the editable install didn't fully register.
 ENV PYTHONPATH="/app/samurai/sam2:/app/samurai:${PYTHONPATH:-}"
 
-# SAMURAI_SCRIPT tells the server where to find run_samurai.py.
+# SAMURAI_SCRIPT must point at the SAM2 demo.py — that's the script whose
+# argparse contract (--video_path / --txt_path / --video_output_path /
+# --model_path) the server actually calls. The bundled run_samurai.py is a
+# separate wrapper with a different CLI and is not used by the server.
 # SAM2_MODEL_PATH is set at runtime by ensure_weights() once the checkpoint
 # has been downloaded to the persistent Network Volume.
-ENV SAMURAI_SCRIPT=/app/samurai/run_samurai.py
+ENV SAMURAI_SCRIPT=/app/samurai/scripts/demo.py
 
 # Default workspace; RunPod mounts the Network Volume over this at runtime.
 RUN mkdir -p /workspace
