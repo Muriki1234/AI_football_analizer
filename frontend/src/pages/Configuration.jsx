@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
@@ -19,8 +19,13 @@ export default function Configuration() {
     const navigate = useNavigate();
     const location = useLocation();
     const videoId = location.state?.videoId || location.state?.sessionId;
+    const detectCalled = useRef(false);
 
     useEffect(() => {
+        // Guard against React StrictMode double-invoke and re-renders
+        if (detectCalled.current) return;
+        detectCalled.current = true;
+
         async function fetchPlayers() {
             if (!videoId) {
                 setDetectError('No video. Go back to upload.');

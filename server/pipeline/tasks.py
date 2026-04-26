@@ -151,6 +151,17 @@ def _probe_fps(path: str):
 # 阶段 0：首帧球员检测（轻量同步任务，给前端选择球员用）
 # ═══════════════════════════════════════════════════════════════════════
 
+_cached_yolo_model = None
+
+def _get_yolo_model():
+    """Return a cached YOLO instance — loads once, reused across all calls."""
+    global _cached_yolo_model
+    if _cached_yolo_model is None:
+        from ultralytics import YOLO as _YOLO
+        _cached_yolo_model = _YOLO(MODEL_PATH)
+    return _cached_yolo_model
+
+
 def detect_frame_players(session_id: str, session: dict, frame_idx: int,
                          sm: SessionManager) -> dict:
     """
@@ -181,7 +192,7 @@ def detect_frame_players(session_id: str, session: dict, frame_idx: int,
         cap.release()
 
     h, w = frame.shape[:2]
-    model = YOLO(MODEL_PATH)
+    model = _get_yolo_model()
     results = model.predict([frame], conf=0.30, iou=0.45, verbose=False)[0]
 
     # YOLO returns class names dict; pick the player class id
