@@ -25,8 +25,18 @@ log = logging.getLogger(__name__)
 
 
 class WorkerPool:
-    def __init__(self, gpu_workers: int = 1, io_workers: int = 4) -> None:
+    def __init__(self, gpu_workers: int = 1, io_workers: int = 4,
+                 quick_workers: int = 2) -> None:
+        # _gpu  : long-running pipeline tasks (SAMURAI, full analysis) that
+        #         hold the GPU for minutes. Single-threaded so we never have
+        #         two heavy tasks fighting for VRAM.
+        # _quick: fast GPU ops (detect-frame ~200ms). Lives on its own pool
+        #         so it never queues behind a 10-minute analysis. CUDA will
+        #         serialize kernel launches under contention but VRAM is
+        #         plentiful on a 48 GB A40.
+        # _io   : ffmpeg / disk / network. CPU-bound, no GPU.
         self._gpu = ThreadPoolExecutor(max_workers=gpu_workers, thread_name_prefix="gpu")
+        self._quick = ThreadPoolExecutor(max_workers=quick_workers, thread_name_prefix="quick")
         self._io = ThreadPoolExecutor(max_workers=io_workers, thread_name_prefix="io")
         self._shutting_down = threading.Event()
 
@@ -38,6 +48,15 @@ class WorkerPool:
         **kwargs: Any,
     ):
         return self._submit(self._gpu, fn, args, kwargs, on_error)
+
+    def submit_quick(
+        self,
+        fn: Callable[..., Any],
+        *args: Any,
+        on_error: Callable[[BaseException], None] | None = None,
+        **kwargs: Any,
+    ):
+        return self._submit(self._quick, fn, args, kwargs, on_error)
 
     def submit_io(
         self,
@@ -76,6 +95,7 @@ class WorkerPool:
     def shutdown(self, wait: bool = True, timeout: float | None = 10.0) -> None:
         self._shutting_down.set()
         self._gpu.shutdown(wait=wait, cancel_futures=True)
+        self._quick.shutdown(wait=wait, cancel_futures=True)
         self._io.shutdown(wait=wait, cancel_futures=True)
 
 

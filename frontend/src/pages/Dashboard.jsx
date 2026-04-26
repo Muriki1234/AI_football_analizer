@@ -49,12 +49,18 @@ const STAGE_LABELS = {
     loading_video:     'Loading video metadata…',
     yolo_detection:    'YOLO detection…',
     camera_motion:     'Camera motion compensation…',
-    keypoints:         'Detecting field keypoints…',
+    keypoint_detection:'Detecting field keypoints…',
     perspective:       'Perspective transform…',
     speed_calc:        'Computing speed & distance…',
+    speed_calculation: 'Computing speed & distance…',
     team_colors:       'Resolving team colors…',
+    team_assignment:   'Resolving team colors…',
     possession:        'Computing possession…',
+    scene_segmentation:'Detecting scene segments…',
+    computing_summary: 'Building summary…',
     summary:           'Building summary…',
+    done:              'Analysis complete.',
+    analysis_error:    'Analysis failed.',
 };
 
 const initialFeatures = Object.fromEntries(

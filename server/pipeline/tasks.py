@@ -137,11 +137,17 @@ def _atomic_pickle_dump(obj, target_path: Path) -> None:
     """原子写 pickle：先写 .tmp → fsync → os.replace"""
     target_path = Path(target_path)
     tmp_path = target_path.with_suffix(target_path.suffix + ".tmp")
+    print(f"[INFO] Writing pickle to {target_path} (tmp: {tmp_path})")
     with open(tmp_path, "wb") as f:
         pickle.dump(obj, f)
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp_path, target_path)
+    try:
+        size_mb = target_path.stat().st_size / (1024 * 1024)
+        print(f"[INFO] Pickle write complete: {target_path.name} ({size_mb:.1f} MB)")
+    except Exception:
+        print(f"[INFO] Pickle write complete: {target_path.name}")
 
 
 def _probe_fps(path: str):
@@ -687,8 +693,11 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
               f"(durations: {[round(s['duration_sec']) for s in segments]}s)")
 
         sm.update_status(session_id, "analyzing", progress=92, stage="computing_summary")
+        print(f"[INFO] Computing summary for session {session_id}…")
+        _t = _time.perf_counter()
         player_summary = _compute_player_summary(
             tracks, tracked_bboxes, team_control, fps=fps, segments=segments)
+        _bench("compute_summary", _t)
 
         cache_payload = {
             "tracks":              tracks,
@@ -704,7 +713,10 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                 k: bgr_to_hex(v) for k, v in team_assigner.team_colors.items()
             },
         }
+        print(f"[INFO] Persisting analysis cache for session {session_id}…")
+        _t = _time.perf_counter()
         _atomic_pickle_dump(cache_payload, tracks_cache)
+        _bench("persist_tracks_cache", _t)
 
         sm.update_status(
             session_id, "analysis_done",

@@ -83,7 +83,7 @@ async def detect_frame(
     import asyncio
     loop = asyncio.get_running_loop()
     fut = loop.run_in_executor(
-        pool._gpu,  # YOLO uses GPU; reuse the GPU pool to avoid concurrent CUDA ctx
+        pool._quick,  # Fast GPU detections should not queue behind long analysis jobs.
         pipeline_tasks.detect_frame_players,
         session_id, s, frame_idx, sm,
     )

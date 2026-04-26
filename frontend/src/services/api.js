@@ -179,12 +179,18 @@ export const subscribeSession = (sessionId, handlers = {}) => {
         }
     };
 
+    const unwrapEventPayload = (payload) => {
+        if (!payload || typeof payload !== 'object') return payload;
+        if ('kind' in payload && 'data' in payload) return payload.data;
+        return payload;
+    };
+
     source.addEventListener('session', (e) => {
-        const data = parse(e.data);
+        const data = unwrapEventPayload(parse(e.data));
         if (data && handlers.onSession) handlers.onSession(data);
     });
     source.addEventListener('task', (e) => {
-        const data = parse(e.data);
+        const data = unwrapEventPayload(parse(e.data));
         if (data && handlers.onTask) handlers.onTask(data);
     });
     source.addEventListener('heartbeat', () => {
