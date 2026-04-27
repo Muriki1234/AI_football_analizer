@@ -13,6 +13,7 @@
     "axios": "^1.13.5",
     "framer-motion": "^12.34.0",
     "hls.js": "^1.6.16",
+    "marked": "^14.1.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-dropzone": "^15.0.0",

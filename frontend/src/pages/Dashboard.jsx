@@ -12,11 +12,10 @@ import {
     startTracking,
     queueFeature,
     getSummary,
-    absUrl,
-    API_KEY,
     artifactUrl,
     subscribeSession,
 } from '../services/api';
+import { absUrl, API_KEY } from '../services/config';
 import StepNav from '../components/StepNav';
 import './Dashboard.css';
 
@@ -318,8 +317,74 @@ export default function Dashboard() {
                 )}
             </AnimatePresence>
 
+            {/* Hero card: Annotated Replay is the showcase output, give it the
+                full-width spot at the top of the dashboard. */}
+            {(() => {
+                const hero = FEATURES.find((f) => f.key === 'full_replay');
+                if (!hero) return null;
+                const state = features[hero.key];
+                const Icon = hero.icon;
+                return (
+                    <motion.div
+                        className="feature-card feature-card--hero"
+                        initial={{ opacity: 0, scale: 0.96 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                    >
+                        <div
+                            className="feature-card__header"
+                            style={{ borderColor: hero.color }}
+                        >
+                            <Icon style={{ color: hero.color }} />
+                            <span>{hero.label}</span>
+                            {state.status === 'done' && <HiCheckCircle className="feature-card__done-icon" />}
+                        </div>
+                        <div className="feature-card__body">
+                            {state.status === 'locked' && (
+                                <p className="feature-card__hint">Waiting for analysis to finish…</p>
+                            )}
+                            {state.status === 'idle' && (
+                                <button
+                                    className="btn btn-primary feature-card__btn"
+                                    onClick={() => handleGenerate(hero.key)}
+                                >
+                                    Generate {hero.label}
+                                </button>
+                            )}
+                            {state.status === 'generating' && (
+                                <div className="feature-card__loading">
+                                    <div className="feature-card__spinner" />
+                                    <span>Generating… {state.progress || 0}%</span>
+                                </div>
+                            )}
+                            {state.status === 'done' && state.url && (
+                                <video
+                                    src={state.url}
+                                    controls
+                                    autoPlay
+                                    muted
+                                    loop
+                                    className="feature-card__result-img feature-card__result-img--hero"
+                                />
+                            )}
+                            {state.status === 'error' && (
+                                <p className="feature-card__error">❌ {state.error}</p>
+                            )}
+                        </div>
+                        {state.status === 'done' && state.url && (
+                            <button
+                                onClick={() => handleDownload(state.url, `${hero.key}_${sessionId}.mp4`)}
+                                className="btn btn-ghost feature-card__download"
+                                style={{ width: '100%', borderTop: '1px solid #333', marginTop: '1rem', paddingTop: '1rem' }}
+                            >
+                                ↓ Download
+                            </button>
+                        )}
+                    </motion.div>
+                );
+            })()}
+
             <div className="dashboard__features">
-                {FEATURES.map((feat) => {
+                {FEATURES.filter((f) => f.key !== 'full_replay').map((feat) => {
                     const state = features[feat.key];
                     const Icon = feat.icon;
                     return (

@@ -1,8 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { HiSparkles, HiDocumentArrowDown, HiExclamationCircle } from 'react-icons/hi2';
+import { marked } from 'marked';
 import { generateFeature, pollTaskStatus } from '../services/api';
 import './AIInsights.css';
+
+// Render Qwen's markdown output to HTML so ** ## - render as bold/heading/list
+// instead of leaking through as literal characters in a <pre> block.
+marked.setOptions({ gfm: true, breaks: true });
 
 const STAGE_LABELS = {
     loading_data:        '加载统计数据...',
@@ -154,7 +159,10 @@ export default function AIInsights({ sessionId }) {
                         animate={{ opacity: 1 }}
                     >
                         <div className="ai-panel__report" ref={containerRef}>
-                            <pre className="ai-panel__text">{displayedText}</pre>
+                            <div
+                                className="ai-panel__text ai-panel__markdown"
+                                dangerouslySetInnerHTML={{ __html: marked.parse(displayedText || '') }}
+                            />
                             {phase === 'streaming' && <span className="ai-panel__cursor" />}
                         </div>
 

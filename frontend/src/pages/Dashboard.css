@@ -310,6 +310,27 @@
     margin-bottom: var(--space-xl);
 }
 
+/* Hero card: Annotated Replay sits above the grid, full width, and the
+   video gets a much bigger viewport since it's the showcase output. */
+.feature-card--hero {
+    margin-bottom: var(--space-lg);
+    box-shadow: 0 14px 36px -22px rgba(109, 40, 217, 0.55);
+    border-color: rgba(109, 40, 217, 0.45);
+}
+.feature-card--hero .feature-card__header {
+    font-size: 1.1rem;
+    padding: var(--space-md) var(--space-xl);
+}
+.feature-card--hero .feature-card__body {
+    padding: var(--space-xl);
+    min-height: 320px;
+}
+.feature-card__result-img--hero {
+    max-height: min(70vh, 720px);
+    width: 100%;
+    background: #000;
+}
+
 .feature-card {
     background: var(--color-bg-card);
     border: 1px solid var(--color-border);

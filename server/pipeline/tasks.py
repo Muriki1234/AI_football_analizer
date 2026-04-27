@@ -1351,6 +1351,72 @@ def run_full_replay(session_id: str, session: dict, task_id: str, sm: SessionMan
         _log_error("full_replay", session_id, exc)
 
 
+def _draw_ball_marker(frame, ball_cx: int, ball_top_y: int, color):
+    """Draw a small downward-pointing triangle floating above the ball.
+
+    Replaces the old yellow rectangle + 'Ball 0.83' label with a clean
+    broadcast-style indicator: a green ▼ ~14 px above the ball, easier to
+    read on busy pitches and consistent with the possession triangle.
+    """
+    # Triangle apex sits 6 px above the ball, body 14 px tall × 16 px wide.
+    apex_y = max(0, ball_top_y - 6)
+    base_y = max(0, ball_top_y - 22)
+    half_w = 9
+    pts = np.array([
+        [ball_cx, apex_y],
+        [ball_cx - half_w, base_y],
+        [ball_cx + half_w, base_y],
+    ], dtype=np.int32)
+    cv2.drawContours(frame, [pts], 0, color, cv2.FILLED)
+    cv2.drawContours(frame, [pts], 0, (0, 0, 0), 2)
+
+
+def _draw_speed_badge(frame, center_x: int, bottom_y: int, speed_kmh: float):
+    """Render a broadcast-style speed pill BELOW the tracked player.
+
+    Layout: gold rounded pill, drop shadow, white "##.# km/h" reading.
+    Mimics the Bundesliga / Premier League TV overlay. Sits 12 px under the
+    foot ellipse, centered horizontally on the player.
+    """
+    if cv2 is None or np is None:
+        return frame
+    h, w = frame.shape[:2]
+    text = f"{speed_kmh:.1f} km/h"
+    font = cv2.FONT_HERSHEY_DUPLEX
+    scale = 0.6
+    thickness = 2
+    (tw, th), baseline = cv2.getTextSize(text, font, scale, thickness)
+
+    pad_x, pad_y = 10, 6
+    box_w = tw + pad_x * 2
+    box_h = th + pad_y * 2 + baseline
+    # Pill rectangle, centered under the player's feet.
+    x0 = max(2, center_x - box_w // 2)
+    y0 = min(h - box_h - 2, bottom_y + 12)
+    x1 = min(w - 2, x0 + box_w)
+    y1 = y0 + box_h
+
+    # Drop shadow (slightly offset, dark, semi-transparent).
+    shadow = frame.copy()
+    cv2.rectangle(shadow, (x0 + 2, y0 + 3), (x1 + 2, y1 + 3), (0, 0, 0), -1)
+    cv2.addWeighted(shadow, 0.35, frame, 0.65, 0, frame)
+
+    # Gold pill background. BGR (50, 200, 245) = soft amber, matches the
+    # tracked-player gold ellipse used elsewhere.
+    cv2.rectangle(frame, (x0, y0), (x1, y1), (50, 200, 245), -1)
+    # Thin black outline so the pill never blends into yellow ad boards.
+    cv2.rectangle(frame, (x0, y0), (x1, y1), (0, 0, 0), 1)
+
+    # White text, slight shadow for legibility.
+    text_x = x0 + pad_x
+    text_y = y1 - pad_y - baseline + th
+    cv2.putText(frame, text, (text_x + 1, text_y + 1), font, scale,
+                (0, 0, 0), thickness + 1, cv2.LINE_AA)
+    cv2.putText(frame, text, (text_x, text_y), font, scale,
+                (255, 255, 255), thickness, cv2.LINE_AA)
+    return frame
+
+
 def _render_single_frame_worker_full(args):
     """单帧全景渲"""
     i, frame, tracks, tracked_bboxes, team_control, team_assigner, tracker, config, hex_t1, hex_t2 = args
@@ -1378,6 +1444,11 @@ def _render_single_frame_worker_full(args):
                     current_matched_yolo_id = pid
                     current_yolo_info = info
 
+        # Possession marker: BLUE ▼ above the player who has the ball.
+        # Was red — switched to blue per user spec so it visually distinguishes
+        # from "danger" reds elsewhere.
+        POSSESSION_BGR = (255, 80, 0)   # vivid blue (BGR)
+
         # Draw other players
         for pid, info in tracks['players'][i].items():
             if not info or pid == current_matched_yolo_id: continue
@@ -1397,7 +1468,7 @@ def _render_single_frame_worker_full(args):
             if info.get('has_ball', False):
                 confidence = info.get('possession_confidence', 1.0)
                 if confidence > 0.6:
-                    frame = tracker.draw_triangle(frame, bbox, (0, 0, 255))
+                    frame = tracker.draw_triangle(frame, bbox, POSSESSION_BGR)
 
         # Draw target player
         if samurai_bbox_xyxy is not None:
@@ -1423,21 +1494,33 @@ def _render_single_frame_worker_full(args):
             if current_yolo_info and current_yolo_info.get('has_ball', False):
                 confidence = current_yolo_info.get('possession_confidence', 1.0)
                 if confidence > 0.6:
-                    frame = tracker.draw_triangle(frame, samurai_bbox_xyxy, (0, 0, 255))
+                    frame = tracker.draw_triangle(frame, samurai_bbox_xyxy, POSSESSION_BGR)
 
-        # Draw ball with bbox rect + confidence label (referees intentionally not drawn)
+            # ── Speed badge under the tracked player (mimics broadcast HUDs).
+            # User asked for "图二的样子但更好看" — gold pill, drop shadow,
+            # bold reading, units suffix, only when speed is meaningful.
+            speed = float(current_yolo_info.get("speed", 0.0)) if current_yolo_info else 0.0
+            if speed >= 0.5:  # hide noisy 0-2 km/h floats so the badge isn't always on
+                _draw_speed_badge(
+                    frame,
+                    center_x=x_c,
+                    bottom_y=y2,
+                    speed_kmh=speed,
+                )
+
+        # Draw ball — small green ▼ floating ABOVE the ball (no rectangle).
+        # User specifically asked for the box to go away in favor of a clean
+        # broadcast-style indicator.
+        BALL_GREEN = (0, 255, 80)
         for _, info in tracks['ball'][i].items():
-            if info and 'bbox' in info:
-                bbox = info['bbox']
-                if len(bbox) == 4 and bbox[2] > bbox[0] and bbox[3] > bbox[1]:
-                    x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
-                    conf = info.get('conf')
-                    label = f"Ball {conf:.2f}" if conf is not None else "Ball"
-                    (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-                    cv2.rectangle(frame, (x1, y1 - th - 8), (x1 + tw + 6, y1), (0, 255, 255), -1)
-                    cv2.putText(frame, label, (x1 + 3, y1 - 4),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+            if not info or 'bbox' not in info:
+                continue
+            bbox = info['bbox']
+            if len(bbox) != 4 or bbox[2] <= bbox[0] or bbox[3] <= bbox[1]:
+                continue
+            cx_ball = int((bbox[0] + bbox[2]) / 2)
+            top_ball = int(bbox[1])
+            _draw_ball_marker(frame, cx_ball, top_ball, BALL_GREEN)
 
         frame = tracker.draw_team_ball_control(frame, i, np.array(team_control), team_assigner.team_colors)
 
