@@ -1090,6 +1090,7 @@ class AccurateSpeedEstimator:
 class TeamAssigner:
     # 对全场球员颜色聚类时使用 k=5，以分离门将/裁判的颜色簇
     _TEAM_CLUSTERS = 5
+    _MAX_COLOR_PLAYERS_PER_FRAME = 40
 
     def __init__(self):
         self.team_colors      = {}
@@ -1134,6 +1135,22 @@ class TeamAssigner:
         self.team_colors[1]   = km.cluster_centers_[team_ids[0]]
         self.team_colors[2]   = km.cluster_centers_[team_ids[1]]
 
+    def _iter_color_sample_players(self, player_frame: dict):
+        """Yield a bounded set of plausible on-pitch players for jersey sampling."""
+        candidates = []
+        for pid, info in player_frame.items():
+            if not info or "bbox" not in info:
+                continue
+            bbox = info["bbox"]
+            if len(bbox) != 4 or bbox[2] <= bbox[0] or bbox[3] <= bbox[1]:
+                continue
+            area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
+            candidates.append((area, pid, info))
+
+        candidates.sort(reverse=True, key=lambda item: item[0])
+        for _, pid, info in candidates[:self._MAX_COLOR_PLAYERS_PER_FRAME]:
+            yield pid, info
+
     def assign_team_color(self, frame, player_detections: dict):
         colors = [self._get_player_color(frame, d["bbox"])
                   for d in player_detections.values() if d]
@@ -1157,9 +1174,7 @@ class TeamAssigner:
         for idx in sample_idx:
             if idx >= len(tracks_players):
                 continue
-            for pid, info in tracks_players[idx].items():
-                if not info or 'bbox' not in info:
-                    continue
+            for pid, info in self._iter_color_sample_players(tracks_players[idx]):
                 try:
                     c = self._get_player_color(frames[idx], info['bbox'])
                     if c is not None and not np.all(c == 0):
@@ -1185,9 +1200,7 @@ class TeamAssigner:
             frame = frame_dict.get(idx)
             if frame is None or idx >= len(tracks_players):
                 continue
-            for pid, info in tracks_players[idx].items():
-                if not info or 'bbox' not in info:
-                    continue
+            for pid, info in self._iter_color_sample_players(tracks_players[idx]):
                 try:
                     c = self._get_player_color(frame, info['bbox'])
                     if c is not None and not np.all(c == 0):

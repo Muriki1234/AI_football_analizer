@@ -588,6 +588,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         ball_history  = []
 
         # 多帧聚合初始化队伍颜色（流式 seek 采样 8 帧）
+        sm.update_status(session_id, "analyzing", progress=82, stage="team_color_init")
         _t = _time.perf_counter()
         team_assigner.assign_team_color_from_video(video_path, tracks["players"], n_samples=8)
         team_color_initialized = bool(team_assigner.kmeans is not None)
@@ -599,7 +600,12 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
 
         if team_color_initialized:
             # ── 多帧投票：按索引 seek 采样帧，不缓存全部帧 ──
+            sm.update_status(session_id, "analyzing", progress=85, stage="team_voting")
             _t = _time.perf_counter()
+            _t_read_total = 0.0
+            _t_color_total = 0.0
+            vote_samples = 0
+            vote_color_ops = 0
             from collections import Counter
             player_vote_dict = {}
             SAMPLE_STEP = max(1, total // 20)   # 最多20帧投票，短视频无需120帧
@@ -608,16 +614,19 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             # 分批 seek（每批50帧，避免长时间无进度）
             for chunk_start in range(0, len(vote_indices), 50):
                 batch_idxs = vote_indices[chunk_start:chunk_start + 50]
+                _tr = _time.perf_counter()
                 frame_dict = read_frames_at_indices(video_path, batch_idxs)
+                _t_read_total += _time.perf_counter() - _tr
                 for idx in batch_idxs:
                     frame = frame_dict.get(idx)
                     if frame is None or idx >= len(tracks["players"]):
                         continue
-                    for pid, info in tracks["players"][idx].items():
-                        if not info or 'bbox' not in info:
-                            continue
+                    vote_samples += 1
+                    for pid, info in team_assigner._iter_color_sample_players(tracks["players"][idx]):
                         try:
+                            _tc = _time.perf_counter()
                             color = team_assigner._get_player_color(frame, info['bbox'])
+                            _t_color_total += _time.perf_counter() - _tc
                             if color is not None and not np.all(color == 0):
                                 cluster_id = int(team_assigner.kmeans.predict(
                                     color.reshape(1, -1))[0])
@@ -628,6 +637,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                                     d2 = np.linalg.norm(color - team_assigner.team_colors.get(2, np.zeros(3)))
                                     predicted = 1 if d1 <= d2 else 2
                                 player_vote_dict.setdefault(pid, []).append(predicted)
+                                vote_color_ops += 1
                         except Exception:
                             pass
 
@@ -636,8 +646,13 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                 for pid, votes in player_vote_dict.items() if votes
             }
             _bench("team_voting", _t)
-            print(f"[INFO] Multi-frame voting done: {len(player_final_team)} players assigned")
+            print(
+                f"[INFO] Multi-frame voting done: {len(player_final_team)} players assigned "
+                f"from {vote_samples} sampled frames / {vote_color_ops} color ops "
+                f"(read={_t_read_total:.1f}s, color={_t_color_total:.1f}s)"
+            )
 
+            sm.update_status(session_id, "analyzing", progress=88, stage="possession_detection")
             _t = _time.perf_counter()
             for i, p_tracks in enumerate(tracks["players"]):
                 for pid, info in p_tracks.items():
