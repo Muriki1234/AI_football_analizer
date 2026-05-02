@@ -1112,18 +1112,46 @@ class TeamAssigner:
         self._cluster_to_team = {}  # cluster_id → team_id (1 or 2)
 
     def _get_player_color(self, frame, bbox) -> np.ndarray:
-        img = frame[int(bbox[1]):int(bbox[3]), int(bbox[0]):int(bbox[2])]
-        if img.shape[0]==0 or img.shape[1]==0: return np.array([0,0,0])
-        top = img[:img.shape[0]//2, :]
-        # Convert to HSV for lighting-robust clustering
+        h, w = frame.shape[:2]
+        x1 = max(0, min(w - 1, int(bbox[0])))
+        y1 = max(0, min(h - 1, int(bbox[1])))
+        x2 = max(0, min(w, int(bbox[2])))
+        y2 = max(0, min(h, int(bbox[3])))
+        if x2 <= x1 or y2 <= y1:
+            return np.array([0, 0, 0])
+
+        img = frame[y1:y2, x1:x2]
+        if img.shape[0] == 0 or img.shape[1] == 0:
+            return np.array([0, 0, 0])
+
+        top = img[:max(1, img.shape[0] // 2), :]
+
+        # Downsample before clustering. sklearn KMeans on full 1080p crops was
+        # taking hundreds of ms per player; OpenCV kmeans on a tiny sample keeps
+        # the same background-vs-kit idea while making team voting cheap.
+        max_pixels = 576  # 24x24 equivalent
+        pix_count = top.shape[0] * top.shape[1]
+        if pix_count > max_pixels:
+            scale = (max_pixels / pix_count) ** 0.5
+            new_w = max(4, int(top.shape[1] * scale))
+            new_h = max(4, int(top.shape[0] * scale))
+            top = cv2.resize(top, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
         top_hsv = cv2.cvtColor(top, cv2.COLOR_BGR2HSV)
-        km  = KMeans(n_clusters=2, init="k-means++", n_init=1).fit(top_hsv.reshape(-1,3))
-        lbl = km.labels_.reshape(top.shape[0], top.shape[1])
-        corners = [lbl[0,0], lbl[0,-1], lbl[-1,0], lbl[-1,-1]]
+        pixels = top_hsv.reshape(-1, 3).astype(np.float32)
+        if len(pixels) < 2 or len(np.unique(pixels, axis=0)) < 2:
+            return np.median(top.reshape(-1, 3), axis=0).astype(float)
+
+        criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_MAX_ITER, 8, 1.0)
+        _, labels, centers = cv2.kmeans(
+            pixels, 2, None, criteria, 1, cv2.KMEANS_PP_CENTERS)
+        lbl = labels.reshape(top.shape[0], top.shape[1])
+
+        corners = [int(lbl[0, 0]), int(lbl[0, -1]), int(lbl[-1, 0]), int(lbl[-1, -1])]
         bg_cluster = max(set(corners), key=corners.count)
         kit_cluster = 1 - bg_cluster
-        # Return the kit cluster center converted back to BGR for downstream use
-        kit_hsv = km.cluster_centers_[kit_cluster].astype(np.uint8).reshape(1,1,3)
+
+        kit_hsv = centers[kit_cluster].astype(np.uint8).reshape(1, 1, 3)
         return cv2.cvtColor(kit_hsv, cv2.COLOR_HSV2BGR).reshape(3).astype(float)
 
     def _fit_team_kmeans(self, all_colors: list):
