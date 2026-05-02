@@ -532,6 +532,17 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             raise ImportError("sports library is required for keypoint and minimap analysis")
         tracker = Tracker(yolo_path)
 
+        team_init_start = max(0, int(total * 0.05))
+        team_init_end = min(total - 1, int(total * 0.95))
+        team_init_indices = (
+            np.linspace(team_init_start, team_init_end, 8, dtype=int).tolist()
+            if total > 0 else []
+        )
+        team_vote_step = max(1, total // 20)
+        team_vote_indices = list(range(0, total, team_vote_step))
+        team_sample_indices = sorted(set(team_init_indices + team_vote_indices))
+        team_sample_frames = {}
+
         print(f"[INFO] Streaming pipeline ({total} frames) — RAM-bounded mode")
         _t = _time.perf_counter()
 
@@ -548,10 +559,14 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             )
 
         tracks = tracker.get_object_tracks_streamed(
-            video_path, total, progress_callback=_yolo_progress)
+            video_path, total, progress_callback=_yolo_progress,
+            sample_frame_indices=team_sample_indices,
+            sampled_frames_out=team_sample_frames)
         tracks["ball"] = tracker.interpolate_ball_positions(tracks["ball"])
         tracker.add_position_to_tracks(tracks)
         _bench("yolo_detection", _t)
+        print(f"[INFO] Captured {len(team_sample_frames)}/{len(team_sample_indices)} "
+              "team sample frames during YOLO")
         _check_memory_and_gc()
 
         sm.update_status(session_id, "analyzing", progress=35, stage="camera_motion")
@@ -587,59 +602,65 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         poss_detector = SmartBallPossessionDetector(fps=fps, video_w=_vid_w, video_h=_vid_h)
         ball_history  = []
 
-        # 多帧聚合初始化队伍颜色（流式 seek 采样 8 帧）
+        # 多帧聚合初始化队伍颜色。优先复用 YOLO 流式阶段顺手抓到的采样帧，
+        # 避免在 MP4 上反复 CAP_PROP_POS_FRAMES 随机 seek。
         sm.update_status(session_id, "analyzing", progress=82, stage="team_color_init")
         _t = _time.perf_counter()
-        team_assigner.assign_team_color_from_video(video_path, tracks["players"], n_samples=8)
+        init_colors = team_assigner.assign_team_color_from_frame_dict(
+            team_sample_frames, tracks["players"], team_init_indices)
+        if team_assigner.kmeans is None:
+            print("[WARN] Missing streamed team samples; falling back to video seek")
+            team_assigner.assign_team_color_from_video(video_path, tracks["players"], n_samples=8)
         team_color_initialized = bool(team_assigner.kmeans is not None)
         _bench("team_color_init", _t)
         if team_color_initialized:
-            print(f"[INFO] Team colors initialized from 8 sampled frames")
+            print(f"[INFO] Team colors initialized from {init_colors} color samples")
         else:
             print("[WARN] Team color initialization failed — all players assigned to team 1")
 
         if team_color_initialized:
-            # ── 多帧投票：按索引 seek 采样帧，不缓存全部帧 ──
+            # ── 多帧投票：复用 YOLO 阶段缓存的采样帧 ──
             sm.update_status(session_id, "analyzing", progress=85, stage="team_voting")
             _t = _time.perf_counter()
-            _t_read_total = 0.0
+            _t_read_total = 0.0  # kept in logs; should stay 0 on the fast path
             _t_color_total = 0.0
             vote_samples = 0
             vote_color_ops = 0
             from collections import Counter
             player_vote_dict = {}
-            SAMPLE_STEP = max(1, total // 20)   # 最多20帧投票，短视频无需120帧
-            vote_indices = list(range(0, total, SAMPLE_STEP))
 
-            # 分批 seek（每批50帧，避免长时间无进度）
-            for chunk_start in range(0, len(vote_indices), 50):
-                batch_idxs = vote_indices[chunk_start:chunk_start + 50]
+            missing_vote_indices = [idx for idx in team_vote_indices
+                                    if idx not in team_sample_frames]
+            if missing_vote_indices:
+                print(f"[WARN] Missing {len(missing_vote_indices)} vote sample frames; "
+                      "falling back to video seek for those")
                 _tr = _time.perf_counter()
-                frame_dict = read_frames_at_indices(video_path, batch_idxs)
+                team_sample_frames.update(read_frames_at_indices(video_path, missing_vote_indices))
                 _t_read_total += _time.perf_counter() - _tr
-                for idx in batch_idxs:
-                    frame = frame_dict.get(idx)
-                    if frame is None or idx >= len(tracks["players"]):
-                        continue
-                    vote_samples += 1
-                    for pid, info in team_assigner._iter_color_sample_players(tracks["players"][idx]):
-                        try:
-                            _tc = _time.perf_counter()
-                            color = team_assigner._get_player_color(frame, info['bbox'])
-                            _t_color_total += _time.perf_counter() - _tc
-                            if color is not None and not np.all(color == 0):
-                                cluster_id = int(team_assigner.kmeans.predict(
-                                    color.reshape(1, -1))[0])
-                                # 用 _cluster_to_team 映射到 team 1/2，小簇按颜色距离归队
-                                predicted = team_assigner._cluster_to_team.get(cluster_id)
-                                if predicted is None:
-                                    d1 = np.linalg.norm(color - team_assigner.team_colors.get(1, np.zeros(3)))
-                                    d2 = np.linalg.norm(color - team_assigner.team_colors.get(2, np.zeros(3)))
-                                    predicted = 1 if d1 <= d2 else 2
-                                player_vote_dict.setdefault(pid, []).append(predicted)
-                                vote_color_ops += 1
-                        except Exception:
-                            pass
+
+            for idx in team_vote_indices:
+                frame = team_sample_frames.get(idx)
+                if frame is None or idx >= len(tracks["players"]):
+                    continue
+                vote_samples += 1
+                for pid, info in team_assigner._iter_color_sample_players(tracks["players"][idx]):
+                    try:
+                        _tc = _time.perf_counter()
+                        color = team_assigner._get_player_color(frame, info['bbox'])
+                        _t_color_total += _time.perf_counter() - _tc
+                        if color is not None and not np.all(color == 0):
+                            cluster_id = int(team_assigner.kmeans.predict(
+                                color.reshape(1, -1))[0])
+                            # 用 _cluster_to_team 映射到 team 1/2，小簇按颜色距离归队
+                            predicted = team_assigner._cluster_to_team.get(cluster_id)
+                            if predicted is None:
+                                d1 = np.linalg.norm(color - team_assigner.team_colors.get(1, np.zeros(3)))
+                                d2 = np.linalg.norm(color - team_assigner.team_colors.get(2, np.zeros(3)))
+                                predicted = 1 if d1 <= d2 else 2
+                            player_vote_dict.setdefault(pid, []).append(predicted)
+                            vote_color_ops += 1
+                    except Exception:
+                        pass
 
             player_final_team = {
                 pid: Counter(votes).most_common(1)[0][0]

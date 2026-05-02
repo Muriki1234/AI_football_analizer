@@ -526,13 +526,18 @@ class Tracker:
 
     def get_object_tracks_streamed(self, video_path: str, total_frames: int,
                                     chunk_size: int = 500,
-                                    progress_callback=None) -> dict:
+                                    progress_callback=None,
+                                    sample_frame_indices=None,
+                                    sampled_frames_out: dict = None) -> dict:
         """流式版本：分块处理视频，ByteTrack 跨块保持连续状态。
 
         Args:
             progress_callback: 每个 chunk 完成后调用，签名：
                                callback(ratio: float, frames_done: int,
                                         frames_total: int, eta_sec: float)
+            sample_frame_indices: optional frame indices to copy while the video
+                                  is already being decoded for YOLO.
+            sampled_frames_out: dict populated as {frame_idx: frame}.
         """
         import time as _time
         tracks = {"players":  [{} for _ in range(total_frames)],
@@ -540,8 +545,16 @@ class Tracker:
                   "ball":     [{} for _ in range(total_frames)]}
 
         t_start = _time.perf_counter()
+        sample_set = set(int(i) for i in (sample_frame_indices or [])
+                         if 0 <= int(i) < total_frames)
 
         for start_idx, chunk in stream_video_chunks(video_path, chunk_size):
+            if sampled_frames_out is not None and sample_set:
+                end_idx = start_idx + len(chunk)
+                for fidx in sample_set:
+                    if start_idx <= fidx < end_idx and fidx not in sampled_frames_out:
+                        sampled_frames_out[fidx] = chunk[fidx - start_idx].copy()
+
             det_local = list(range(0, len(chunk), YOLO_DETECTION_STRIDE))
             det_dict  = {}
             for i in range(0, len(det_local), YOLO_BATCH_SIZE):
@@ -1209,6 +1222,26 @@ class TeamAssigner:
                     pass
 
         self._fit_team_kmeans(all_colors)
+
+    def assign_team_color_from_frame_dict(self, frame_dict: dict,
+                                          tracks_players: list,
+                                          sample_indices) -> int:
+        """Fit team colors from already-captured sampled frames."""
+        all_colors = []
+        for idx in sorted(set(int(i) for i in sample_indices)):
+            frame = frame_dict.get(idx)
+            if frame is None or idx >= len(tracks_players):
+                continue
+            for pid, info in self._iter_color_sample_players(tracks_players[idx]):
+                try:
+                    c = self._get_player_color(frame, info["bbox"])
+                    if c is not None and not np.all(c == 0):
+                        all_colors.append(c)
+                except Exception:
+                    pass
+
+        self._fit_team_kmeans(all_colors)
+        return len(all_colors)
 
     def get_player_team(self, frame, bbox, player_id: int) -> int:
         if player_id in self.player_team_dict:
