@@ -47,6 +47,50 @@ FEATURE_TASKS: dict[str, Callable[..., Any]] = {
     "ai_summary":      pipeline_tasks.run_ai_summary,
 }
 
+_BUSY_STATUSES = {"queued", "tracking", "tracking_done", "analyzing"}
+_ARTIFACT_FILES = {
+    "samurai_tracking.pkl",
+    "tracks.pkl",
+    "heatmap.png",
+    "speed_chart.png",
+    "possession_chart.png",
+    "minimap_replay.mp4",
+    "full_replay.mp4",
+    "full_replay_ffmpeg.log",
+    "sprint_analysis.png",
+    "defensive_line.png",
+    "ai_summary.md",
+    "gemini_video.mp4",
+}
+
+
+def _reject_if_busy(session: dict, sm: SessionManager) -> None:
+    if session.get("status") in _BUSY_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail="Analysis is already running for this session.",
+        )
+    active_tasks = [
+        t for t in sm.list_tasks(session.get("session_id", ""))
+        if t.get("status") in ("queued", "running")
+    ]
+    if active_tasks:
+        raise HTTPException(
+            status_code=409,
+            detail="A feature is still generating for this session.",
+        )
+
+
+def _clear_session_artifacts(session_id: str, sm: SessionManager) -> None:
+    output_dir = sm.session_output_dir(session_id)
+    for name in _ARTIFACT_FILES:
+        target = output_dir / name
+        try:
+            if target.exists() and target.is_file():
+                target.unlink()
+        except Exception:
+            log.warning("Failed to remove stale artifact %s", target, exc_info=True)
+
 
 def _run_auto_full_replay(session_id: str, sm: SessionManager) -> None:
     """Generate the showcase replay once analysis finishes, unless it exists."""
@@ -133,8 +177,10 @@ async def start_analysis(
         raise HTTPException(status_code=404, detail="Unknown session")
     if not s.get("video_path") or not Path(s["video_path"]).exists():
         raise HTTPException(status_code=400, detail="Session has no video")
+    _reject_if_busy(s, sm)
 
     sm.clear_tasks(session_id)
+    _clear_session_artifacts(session_id, sm)
     sm.update_status(
         session_id, "analyzing", progress=0, stage="queued",
         samurai_cache_path=None,
@@ -174,6 +220,7 @@ async def start_tracking(
     s = sm.get_session(session_id)
     if not s:
         raise HTTPException(status_code=404, detail="Unknown session")
+    _reject_if_busy(s, sm)
 
     x1, y1, x2, y2 = payload.bbox
     if x2 <= x1 or y2 <= y1:
@@ -195,6 +242,7 @@ async def start_tracking(
         "start_frame": payload.frame,
     }
     sm.clear_tasks(session_id)
+    _clear_session_artifacts(session_id, sm)
     sm.update_status(
         session_id, "tracking", progress=0, stage="samurai_queued",
         selected_bbox=s_merged["selected_bbox"],
@@ -250,10 +298,20 @@ async def queue_feature(
     s = sm.get_session(session_id)
     if not s:
         raise HTTPException(status_code=404, detail="Unknown session")
-    if s.get("status") not in ("analysis_done", "analyzing"):
-        # Allow queuing while analyzing so the UI can pre-queue features;
-        # tasks.py will refuse to run until data is ready and update the task row.
-        pass
+    if s.get("status") != "analysis_done":
+        raise HTTPException(status_code=409, detail="Analysis is not complete yet.")
+
+    existing_tasks = [
+        t for t in sm.list_tasks(session_id)
+        if t.get("task_type") == feature
+        and t.get("status") in ("queued", "running", "done")
+    ]
+    if existing_tasks:
+        existing = existing_tasks[-1]
+        return QueuedResponse(
+            task_id=existing.get("task_id", session_id),
+            status=existing.get("status", "queued"),
+        )
 
     fn = FEATURE_TASKS[feature]
     task_id = sm.create_task(session_id, feature)

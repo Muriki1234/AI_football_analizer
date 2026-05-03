@@ -118,6 +118,7 @@ export default function Dashboard() {
     const isAnalyzing = ['queued', 'analyzing', 'tracking', 'tracking_done'].includes(phase);
     const isDone = phase === 'analysis_done';
     const isFailed = phase === 'analysis_failed' || phase === 'tracking_failed';
+    const hasGeneratingFeature = Object.values(features).some((f) => f.status === 'generating');
 
     const phaseLabel = PHASE_LABELS[phase] || STAGE_LABELS[stage] || stage || phase;
     const stageLabel = STAGE_LABELS[stage] || stage;
@@ -280,6 +281,10 @@ export default function Dashboard() {
 
     const handleNewPlayer = () => {
         if (!sessionId) return;
+        if (isAnalyzing || hasGeneratingFeature) {
+            toast('Wait for the current analysis or replay generation to finish before choosing another player.');
+            return;
+        }
         navigate(`/configure?sessionId=${encodeURIComponent(sessionId)}`, {
             state: { videoId: sessionId, sessionId },
         });
@@ -406,20 +411,15 @@ export default function Dashboard() {
                         </div>
                         <div className="feature-card__body">
                             {state.status === 'locked' && (
-                                <p className="feature-card__hint">Waiting for analysis to finish…</p>
+                                <p className="feature-card__hint">Replay will generate automatically after analysis.</p>
                             )}
                             {state.status === 'idle' && (
-                                <button
-                                    className="btn btn-primary feature-card__btn"
-                                    onClick={() => handleGenerate(hero.key)}
-                                >
-                                    Generate {hero.label}
-                                </button>
+                                <p className="feature-card__hint">Replay is queued automatically and will appear here.</p>
                             )}
                             {state.status === 'generating' && (
                                 <div className="feature-card__loading">
                                     <div className="feature-card__spinner" />
-                                    <span>Generating… {state.progress || 0}%</span>
+                                    <span>Automatically generating replay… {state.progress || 0}%</span>
                                 </div>
                             )}
                             {state.status === 'done' && state.url && (
@@ -433,7 +433,15 @@ export default function Dashboard() {
                                 />
                             )}
                             {state.status === 'error' && (
-                                <p className="feature-card__error">❌ {state.error}</p>
+                                <div className="feature-card__error-block">
+                                    <p className="feature-card__error">❌ {state.error}</p>
+                                    <button
+                                        className="btn btn-primary feature-card__btn"
+                                        onClick={() => handleGenerate(hero.key)}
+                                    >
+                                        Retry {hero.label}
+                                    </button>
+                                </div>
                             )}
                         </div>
                         {state.status === 'done' && state.url && (
@@ -566,7 +574,16 @@ export default function Dashboard() {
                 <button className="btn btn-secondary" onClick={() => navigate('/')}>
                     <HiHome /> Back to Home
                 </button>
-                <button className="btn btn-secondary" onClick={handleNewPlayer}>
+                <button
+                    className="btn btn-secondary"
+                    onClick={handleNewPlayer}
+                    disabled={isAnalyzing || hasGeneratingFeature}
+                    title={
+                        isAnalyzing || hasGeneratingFeature
+                            ? 'Wait for the current analysis or replay generation to finish'
+                            : 'Choose another player from this video'
+                    }
+                >
                     <HiUserGroup /> New Player
                 </button>
                 <button className="btn btn-primary" onClick={() => navigate('/upload')}>

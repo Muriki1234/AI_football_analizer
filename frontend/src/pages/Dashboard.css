@@ -420,6 +420,14 @@
     font-size: 0.85rem;
 }
 
+.feature-card__error-block {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-md);
+}
+
 .feature-card__download {
     display: block;
     text-align: center;
