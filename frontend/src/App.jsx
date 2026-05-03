@@ -20,7 +20,7 @@ function AnimatedRoutes() {
     const location = useLocation();
     return (
         <AnimatePresence mode="wait">
-            <Routes location={location} key={location.pathname}>
+            <Routes location={location} key={location.key}>
                 <Route path="/login" element={<PageWrap><Login /></PageWrap>} />
                 <Route path="/" element={<PageWrap><Welcome /></PageWrap>} />
                 <Route path="/upload" element={<PageWrap><Upload /></PageWrap>} />

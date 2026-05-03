@@ -18,7 +18,8 @@ export default function Configuration() {
 
     const navigate = useNavigate();
     const location = useLocation();
-    const videoId = location.state?.videoId || location.state?.sessionId;
+    const query = new URLSearchParams(location.search);
+    const videoId = location.state?.videoId || location.state?.sessionId || query.get('sessionId');
     const detectCalled = useRef(false);
 
     useEffect(() => {
@@ -73,7 +74,7 @@ export default function Configuration() {
         setAnalyzing(true);
         // Pass selected bbox/player info forward so the dashboard can highlight it
         // once SAMURAI tracking is wired in. Global analysis doesn't need it.
-        navigate('/dashboard', {
+        navigate(`/dashboard?sessionId=${encodeURIComponent(videoId)}`, {
             state: {
                 sessionId: videoId,
                 videoId,

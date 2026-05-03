@@ -1,11 +1,13 @@
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
+import toast from 'react-hot-toast';
 import { IoFootball } from 'react-icons/io5';
 import { HiArrowRight, HiUserGroup, HiArrowRightOnRectangle } from 'react-icons/hi2';
 import './Welcome.css';
 
 export default function Welcome() {
     const navigate = useNavigate();
+    const showInDevelopment = () => toast('Feature in development');
 
     return (
         <div className="welcome">
@@ -18,10 +20,10 @@ export default function Welcome() {
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.3 }}
             >
-                <button className="btn btn-ghost" onClick={() => navigate('/players')}>
+                <button className="btn btn-ghost" onClick={showInDevelopment}>
                     <HiUserGroup /> Player Library
                 </button>
-                <button className="btn btn-ghost" onClick={() => navigate('/login')}>
+                <button className="btn btn-ghost" onClick={showInDevelopment}>
                     <HiArrowRightOnRectangle /> Login
                 </button>
             </motion.div>

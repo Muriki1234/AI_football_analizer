@@ -28,7 +28,9 @@ export default function Trimmer() {
     const clipDuration = Math.max(0, range[1] - range[0]);
 
     const goToDashboard = () => {
-        navigate('/dashboard', { state: { sessionId: videoId, videoId } });
+        navigate(`/dashboard?sessionId=${encodeURIComponent(videoId)}`, {
+            state: { sessionId: videoId, videoId, startAnalysis: true },
+        });
     };
 
     const handleConfirm = async () => {

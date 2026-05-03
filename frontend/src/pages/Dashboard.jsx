@@ -11,7 +11,9 @@ import {
     startAnalysis,
     startTracking,
     queueFeature,
+    getSession,
     getSummary,
+    listTasks,
     artifactUrl,
     subscribeSession,
 } from '../services/api';
@@ -56,6 +58,9 @@ const STAGE_LABELS = {
     speed_calculation: 'Computing speed & distance…',
     team_colors:       'Resolving team colors…',
     team_assignment:   'Resolving team colors…',
+    team_color_init:   'Resolving team colors…',
+    team_voting:       'Assigning team colors…',
+    possession_detection: 'Computing possession…',
     possession:        'Computing possession…',
     scene_segmentation:'Detecting scene segments…',
     computing_summary: 'Building summary…',
@@ -88,9 +93,15 @@ export default function Dashboard() {
     const location = useLocation();
     const navigate = useNavigate();
 
-    const sessionId = location.state?.sessionId || location.state?.videoId;
+    const query = new URLSearchParams(location.search);
+    const sessionId = location.state?.sessionId || location.state?.videoId || query.get('sessionId');
     const selectedBbox = location.state?.selectedBbox || null;
     const playerName = location.state?.playerName || null;
+    const startWithoutSelection = location.state?.startAnalysis === true;
+    const isFreshAnalysis = Boolean(
+        (selectedBbox && Array.isArray(selectedBbox) && selectedBbox.length === 4) ||
+        startWithoutSelection
+    );
 
     const [session, setSession] = useState(null);
     const [summary, setSummary] = useState(null);
@@ -111,6 +122,15 @@ export default function Dashboard() {
     const phaseLabel = PHASE_LABELS[phase] || STAGE_LABELS[stage] || stage || phase;
     const stageLabel = STAGE_LABELS[stage] || stage;
 
+    useEffect(() => {
+        setSession(null);
+        setSummary(null);
+        setFeatures(initialFeatures);
+        setError(null);
+        analysisKicked.current = false;
+        summaryFetched.current = false;
+    }, [sessionId]);
+
     // ── Kick off pipeline on mount ──────────────────────────────────────────
     // If we have a bbox from the Configure page, run SAMURAI → analysis (server
     // chains them). Otherwise fall back to plain global analysis (which will
@@ -127,7 +147,7 @@ export default function Dashboard() {
                     const [x1, y1, x2, y2] = selectedBbox;
                     await startTracking(sessionId, { x1, y1, x2, y2 }, 0);
                     if (playerName) toast.success(`Tracking ${playerName}…`);
-                } else {
+                } else if (startWithoutSelection) {
                     await startAnalysis(sessionId);
                 }
             } catch (e) {
@@ -136,11 +156,47 @@ export default function Dashboard() {
                 toast.error(msg);
             }
         })();
-    }, [sessionId, selectedBbox, playerName]);
+    }, [sessionId, selectedBbox, playerName, startWithoutSelection]);
 
     // ── SSE stream for live session + task updates ──────────────────────────
     useEffect(() => {
         if (!sessionId) return;
+
+        let cancelled = false;
+        getSession(sessionId)
+            .then((s) => {
+                if (!cancelled) setSession(s);
+            })
+            .catch(() => {});
+
+        if (!isFreshAnalysis) {
+            listTasks(sessionId)
+                .then((tasks = []) => {
+                if (cancelled) return;
+                setFeatures((prev) => {
+                    const next = { ...prev };
+                    for (const t of tasks) {
+                        const key = t.task_type;
+                        if (!(key in next)) continue;
+                        next[key] = {
+                            ...next[key],
+                            taskId: t.task_id,
+                            status:
+                                t.status === 'done' ? 'done' :
+                                t.status === 'failed' ? 'error' :
+                                t.status === 'running' || t.status === 'queued' ? 'generating' :
+                                next[key].status,
+                            progress: t.progress || 0,
+                            url: t.url ? taskResultUrl(sessionId, t.url) : next[key].url,
+                            result: t.result ?? next[key].result,
+                            error: t.error ?? next[key].error,
+                        };
+                    }
+                    return next;
+                });
+            })
+            .catch(() => {});
+        }
 
         const unsub = subscribeSession(sessionId, {
             onSession: (s) => setSession((prev) => ({ ...prev, ...s })),
@@ -169,8 +225,11 @@ export default function Dashboard() {
                 console.warn('[SSE] disconnected, reconnecting…');
             },
         });
-        return unsub;
-    }, [sessionId]);
+        return () => {
+            cancelled = true;
+            unsub();
+        };
+    }, [sessionId, isFreshAnalysis]);
 
     // Unlock feature buttons once analysis_done fires.
     useEffect(() => {
@@ -217,6 +276,13 @@ export default function Dashboard() {
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+    };
+
+    const handleNewPlayer = () => {
+        if (!sessionId) return;
+        navigate(`/configure?sessionId=${encodeURIComponent(sessionId)}`, {
+            state: { videoId: sessionId, sessionId },
+        });
     };
 
     const summaryCards = useMemo(() => {
@@ -374,7 +440,7 @@ export default function Dashboard() {
                             <button
                                 onClick={() => handleDownload(state.url, `${hero.key}_${sessionId}.mp4`)}
                                 className="btn btn-ghost feature-card__download"
-                                style={{ width: '100%', borderTop: '1px solid #333', marginTop: '1rem', paddingTop: '1rem' }}
+                                style={{ width: '100%', borderTop: '1px solid #333' }}
                             >
                                 ↓ Download
                             </button>
@@ -499,6 +565,9 @@ export default function Dashboard() {
             <motion.div className="dashboard__actions-footer" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }}>
                 <button className="btn btn-secondary" onClick={() => navigate('/')}>
                     <HiHome /> Back to Home
+                </button>
+                <button className="btn btn-secondary" onClick={handleNewPlayer}>
+                    <HiUserGroup /> New Player
                 </button>
                 <button className="btn btn-primary" onClick={() => navigate('/upload')}>
                     <HiArrowPath /> New Video

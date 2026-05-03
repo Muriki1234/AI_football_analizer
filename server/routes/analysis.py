@@ -48,6 +48,26 @@ FEATURE_TASKS: dict[str, Callable[..., Any]] = {
 }
 
 
+def _run_auto_full_replay(session_id: str, sm: SessionManager) -> None:
+    """Generate the showcase replay once analysis finishes, unless it exists."""
+    existing = [
+        t for t in sm.list_tasks(session_id)
+        if t.get("task_type") == "full_replay"
+        and t.get("status") in ("queued", "running", "done")
+    ]
+    if existing:
+        log.info("[auto-full-replay] skipping; task already exists for %s", session_id)
+        return
+
+    session = sm.get_session(session_id)
+    if not session or session.get("status") != "analysis_done":
+        return
+
+    task_id = sm.create_task(session_id, "full_replay")
+    log.info("[auto-full-replay] queued %s for session %s", task_id, session_id)
+    pipeline_tasks.run_full_replay(session_id, session, task_id, sm)
+
+
 class TrackPayload(BaseModel):
     bbox: list[float] = Field(min_length=4, max_length=4)
     frame: int = Field(ge=0, default=0)
@@ -114,12 +134,24 @@ async def start_analysis(
     if not s.get("video_path") or not Path(s["video_path"]).exists():
         raise HTTPException(status_code=400, detail="Session has no video")
 
-    sm.update_status(session_id, "analyzing", progress=0, stage="queued")
+    sm.clear_tasks(session_id)
+    sm.update_status(
+        session_id, "analyzing", progress=0, stage="queued",
+        samurai_cache_path=None,
+        tracks_cache_path=None,
+        player_summary=None,
+        total_frames=None,
+        segments=None,
+    )
 
     def _on_error(exc: BaseException) -> None:
         sm.update_status(session_id, "analysis_failed", error=str(exc))
 
-    pool.submit_gpu(pipeline_tasks.run_global_analysis, session_id, s, sm, on_error=_on_error)
+    def _analyze_then_replay() -> None:
+        pipeline_tasks.run_global_analysis(session_id, s, sm)
+        _run_auto_full_replay(session_id, sm)
+
+    pool.submit_gpu(_analyze_then_replay, on_error=_on_error)
     return QueuedResponse(task_id=session_id, status="analyzing")
 
 
@@ -162,9 +194,17 @@ async def start_tracking(
         "selected_bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
         "start_frame": payload.frame,
     }
-    sm.update_status(session_id, "tracking", progress=0, stage="samurai_queued",
-                     selected_bbox=s_merged["selected_bbox"],
-                     start_frame=payload.frame)
+    sm.clear_tasks(session_id)
+    sm.update_status(
+        session_id, "tracking", progress=0, stage="samurai_queued",
+        selected_bbox=s_merged["selected_bbox"],
+        start_frame=payload.frame,
+        samurai_cache_path=None,
+        tracks_cache_path=None,
+        player_summary=None,
+        total_frames=None,
+        segments=None,
+    )
 
     def _on_error(exc: BaseException) -> None:
         # Whichever phase raised, mark the appropriate failure status.
@@ -185,6 +225,7 @@ async def start_tracking(
             return
         # Phase 2: global analysis (also catches its own errors → analysis_failed).
         pipeline_tasks.run_global_analysis(session_id, s_after, sm)
+        _run_auto_full_replay(session_id, sm)
 
     pool.submit_gpu(_track_then_analyze, on_error=_on_error)
     return QueuedResponse(task_id=session_id, status="tracking")

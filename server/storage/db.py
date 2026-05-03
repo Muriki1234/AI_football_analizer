@@ -175,6 +175,10 @@ class SessionManager:
             ).fetchall()
         return [_row_to_task(r) for r in rows]
 
+    def clear_tasks(self, session_id: str) -> None:
+        with self._lock:
+            self._conn.execute("DELETE FROM tasks WHERE session_id=?", (session_id,))
+
     def update_task(self, session_id: str, task_id: str, **kwargs: Any) -> None:
         if not kwargs:
             return

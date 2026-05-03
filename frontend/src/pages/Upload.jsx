@@ -72,7 +72,7 @@ export default function Upload() {
 
     const goToTrim = () => {
         if (!uploadSuccess || !uploadedVideoId) return;
-        navigate('/configure', {
+        navigate(`/configure?sessionId=${encodeURIComponent(uploadedVideoId)}`, {
             state: { videoId: uploadedVideoId, sessionId: uploadedVideoId },
         });
     };
