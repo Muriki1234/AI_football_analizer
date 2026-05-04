@@ -1,0 +1,27 @@
+# Use the official PyTorch image with CUDA support
+FROM pytorch/pytorch:2.2.1-cuda12.1-cudnn8-runtime
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies (ffmpeg for video, libgl for OpenCV)
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install
+COPY server/requirements.txt /app/server/requirements.txt
+RUN pip install --no-cache-dir -r server/requirements.txt
+# Ensure runpod is installed
+RUN pip install --no-cache-dir runpod boto3
+
+# Copy the server code
+COPY server /app/server
+
+# Set Python path
+ENV PYTHONPATH=/app
+
+# Command to run the RunPod Serverless handler
+CMD ["python", "-m", "server.handler"]
