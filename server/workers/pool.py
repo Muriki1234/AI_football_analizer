@@ -47,7 +47,7 @@ class WorkerPool:
         on_error: Callable[[BaseException], None] | None = None,
         **kwargs: Any,
     ):
-        return self._submit(self._gpu, fn, args, kwargs, on_error)
+        return self._submit(self._gpu, fn, args, kwargs, on_error, max_queue_size=5)
 
     def submit_quick(
         self,
@@ -74,9 +74,14 @@ class WorkerPool:
         args: tuple,
         kwargs: dict,
         on_error: Callable[[BaseException], None] | None,
+        max_queue_size: int | None = None,
     ):
         if self._shutting_down.is_set():
             raise RuntimeError("WorkerPool is shutting down; refusing new submissions.")
+            
+        if max_queue_size is not None and hasattr(pool, "_work_queue"):
+            if pool._work_queue.qsize() >= max_queue_size:
+                raise RuntimeError("Server is currently under heavy load (too many queued tasks). Please try again later.")
 
         def _run() -> Any:
             try:

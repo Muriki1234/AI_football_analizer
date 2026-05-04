@@ -22,51 +22,51 @@ import StepNav from '../components/StepNav';
 import './Dashboard.css';
 
 const FEATURES = [
-    { key: 'heatmap',         label: 'Heatmap',          icon: HiMapPin,         color: '#e74c3c', type: 'image' },
-    { key: 'speed_chart',     label: 'Speed & Distance', icon: HiBolt,           color: '#f39c12', type: 'image' },
-    { key: 'possession',      label: 'Possession',       icon: HiChartBar,       color: '#3498db', type: 'image' },
-    { key: 'minimap_replay',  label: 'Minimap Replay',   icon: HiArrowTrendingUp,color: '#00e59b', type: 'video' },
-    { key: 'full_replay',     label: 'Annotated Replay', icon: HiPlayCircle,     color: '#6d28d9', type: 'video' },
-    { key: 'sprint_analysis', label: 'Sprint Bursts',    icon: HiBolt,           color: '#9b59b6', type: 'image', comingSoon: true },
-    { key: 'defensive_line',  label: 'Defensive Line',   icon: HiUserGroup,      color: '#00bcd4', type: 'image', comingSoon: true },
-    { key: 'ai_summary',      label: 'AI Summary',       icon: HiSparkles,       color: '#ec4899', type: 'text' },
+    { key: 'heatmap', label: 'Heatmap', icon: HiMapPin, color: '#e74c3c', type: 'image' },
+    { key: 'speed_chart', label: 'Speed & Distance', icon: HiBolt, color: '#f39c12', type: 'image' },
+    { key: 'possession', label: 'Possession', icon: HiChartBar, color: '#3498db', type: 'image' },
+    { key: 'minimap_replay', label: 'Minimap Replay', icon: HiArrowTrendingUp, color: '#00e59b', type: 'video' },
+    { key: 'full_replay', label: 'Annotated Replay', icon: HiPlayCircle, color: '#6d28d9', type: 'video' },
+    { key: 'sprint_analysis', label: 'Sprint Bursts', icon: HiBolt, color: '#9b59b6', type: 'image', comingSoon: true },
+    { key: 'defensive_line', label: 'Defensive Line', icon: HiUserGroup, color: '#00bcd4', type: 'image', comingSoon: true },
+    { key: 'ai_summary', label: 'AI Summary', icon: HiSparkles, color: '#ec4899', type: 'text' },
 ];
 
 const PHASE_LABELS = {
-    uploaded:        'Ready to analyze.',
-    uploading:       'Waiting for upload to finish…',
-    queued:          'Queued for analysis…',
-    analyzing:       'Running analysis…',
-    analysis_done:   'Analysis complete.',
-    tracking:        'Tracking selected player (SAMURAI)…',
-    tracking_done:   'Tracking complete — starting analysis…',
+    uploaded: 'Ready to analyze.',
+    uploading: 'Waiting for upload to finish…',
+    queued: 'Queued for analysis…',
+    analyzing: 'Running analysis…',
+    analysis_done: 'Analysis complete.',
+    tracking: 'Tracking selected player (SAMURAI)…',
+    tracking_done: 'Tracking complete — starting analysis…',
     analysis_failed: 'Analysis failed.',
     tracking_failed: 'Tracking failed.',
 };
 
 const STAGE_LABELS = {
-    samurai_queued:    'Queued for SAMURAI…',
+    samurai_queued: 'Queued for SAMURAI…',
     extracting_frames: 'Extracting frames for SAMURAI…',
-    samurai_running:   'SAMURAI tracking the selected player…',
-    samurai_done:      'SAMURAI tracking finished.',
-    loading_video:     'Loading video metadata…',
-    yolo_detection:    'YOLO detection…',
-    camera_motion:     'Camera motion compensation…',
-    keypoint_detection:'Detecting field keypoints…',
-    perspective:       'Perspective transform…',
-    speed_calc:        'Computing speed & distance…',
+    samurai_running: 'SAMURAI tracking the selected player…',
+    samurai_done: 'SAMURAI tracking finished.',
+    loading_video: 'Loading video metadata…',
+    yolo_detection: 'YOLO detection…',
+    camera_motion: 'Camera motion compensation…',
+    keypoint_detection: 'Detecting field keypoints…',
+    perspective: 'Perspective transform…',
+    speed_calc: 'Computing speed & distance…',
     speed_calculation: 'Computing speed & distance…',
-    team_colors:       'Resolving team colors…',
-    team_assignment:   'Resolving team colors…',
-    team_color_init:   'Resolving team colors…',
-    team_voting:       'Assigning team colors…',
+    team_colors: 'Resolving team colors…',
+    team_assignment: 'Resolving team colors…',
+    team_color_init: 'Resolving team colors…',
+    team_voting: 'Assigning team colors…',
     possession_detection: 'Computing possession…',
-    possession:        'Computing possession…',
-    scene_segmentation:'Detecting scene segments…',
+    possession: 'Computing possession…',
+    scene_segmentation: 'Detecting scene segments…',
     computing_summary: 'Building summary…',
-    summary:           'Building summary…',
-    done:              'Analysis complete.',
-    analysis_error:    'Analysis failed.',
+    summary: 'Building summary…',
+    done: 'Analysis complete.',
+    analysis_error: 'Analysis failed.',
 };
 
 const initialFeatures = Object.fromEntries(
@@ -168,35 +168,35 @@ export default function Dashboard() {
             .then((s) => {
                 if (!cancelled) setSession(s);
             })
-            .catch(() => {});
+            .catch(() => { });
 
         if (!isFreshAnalysis) {
             listTasks(sessionId)
                 .then((tasks = []) => {
-                if (cancelled) return;
-                setFeatures((prev) => {
-                    const next = { ...prev };
-                    for (const t of tasks) {
-                        const key = t.task_type;
-                        if (!(key in next)) continue;
-                        next[key] = {
-                            ...next[key],
-                            taskId: t.task_id,
-                            status:
-                                t.status === 'done' ? 'done' :
-                                t.status === 'failed' ? 'error' :
-                                t.status === 'running' || t.status === 'queued' ? 'generating' :
-                                next[key].status,
-                            progress: t.progress || 0,
-                            url: t.url ? taskResultUrl(sessionId, t.url) : next[key].url,
-                            result: t.result ?? next[key].result,
-                            error: t.error ?? next[key].error,
-                        };
-                    }
-                    return next;
-                });
-            })
-            .catch(() => {});
+                    if (cancelled) return;
+                    setFeatures((prev) => {
+                        const next = { ...prev };
+                        for (const t of tasks) {
+                            const key = t.task_type;
+                            if (!(key in next)) continue;
+                            next[key] = {
+                                ...next[key],
+                                taskId: t.task_id,
+                                status:
+                                    t.status === 'done' ? 'done' :
+                                        t.status === 'failed' ? 'error' :
+                                            t.status === 'running' || t.status === 'queued' ? 'generating' :
+                                                next[key].status,
+                                progress: t.progress || 0,
+                                url: t.url ? taskResultUrl(sessionId, t.url) : next[key].url,
+                                result: t.result ?? next[key].result,
+                                error: t.error ?? next[key].error,
+                            };
+                        }
+                        return next;
+                    });
+                })
+                .catch(() => { });
         }
 
         const unsub = subscribeSession(sessionId, {
@@ -211,8 +211,8 @@ export default function Dashboard() {
                         taskId: t.task_id,
                         status:
                             t.status === 'done' ? 'done' :
-                            t.status === 'failed' ? 'error' :
-                            t.status === 'running' ? 'generating' : 'generating',
+                                t.status === 'failed' ? 'error' :
+                                    t.status === 'running' ? 'generating' : 'generating',
                         progress: t.progress || 0,
                         url: t.url ? taskResultUrl(sessionId, t.url) : next[key].url,
                         result: t.result ?? next[key].result,
@@ -246,7 +246,7 @@ export default function Dashboard() {
             summaryFetched.current = true;
             getSummary(sessionId)
                 .then((s) => setSummary(s?.session || s))
-                .catch(() => {});
+                .catch(() => { });
         }
     }, [isDone, sessionId]);
 
@@ -293,12 +293,12 @@ export default function Dashboard() {
     const summaryCards = useMemo(() => {
         if (!summary) return [];
         return [
-            summary.max_speed_kmh       != null && { label: 'Max Speed',   value: `${summary.max_speed_kmh} km/h`, icon: '⚡' },
-            summary.avg_speed_kmh       != null && { label: 'Avg Speed',   value: `${summary.avg_speed_kmh} km/h`, icon: '🏃' },
-            summary.total_distance_m    != null && { label: 'Distance',    value: `${summary.total_distance_m} m`, icon: '📏' },
-            summary.possession_seconds  != null && { label: 'Possession',  value: `${summary.possession_seconds}s`, icon: '⚽' },
-            summary.team1_possession_pct!= null && { label: 'Team 1 %',    value: `${summary.team1_possession_pct}%`, icon: '🔵' },
-            summary.team2_possession_pct!= null && { label: 'Team 2 %',    value: `${summary.team2_possession_pct}%`, icon: '🔴' },
+            summary.max_speed_kmh != null && { label: 'Max Speed', value: `${summary.max_speed_kmh} km/h`, icon: '⚡' },
+            summary.avg_speed_kmh != null && { label: 'Avg Speed', value: `${summary.avg_speed_kmh} km/h`, icon: '🏃' },
+            summary.total_distance_m != null && { label: 'Distance', value: `${summary.total_distance_m} m`, icon: '📏' },
+            summary.possession_seconds != null && { label: 'Possession', value: `${summary.possession_seconds}s`, icon: '⚽' },
+            summary.team1_possession_pct != null && { label: 'Team 1 %', value: `${summary.team1_possession_pct}%`, icon: '🔵' },
+            summary.team2_possession_pct != null && { label: 'Team 2 %', value: `${summary.team2_possession_pct}%`, icon: '🔴' },
         ].filter(Boolean);
     }, [summary]);
 
@@ -356,6 +356,15 @@ export default function Dashboard() {
                             />
                         </div>
                         {stage && <p className="pipeline-status__stage">{stageLabel}</p>}
+                    </motion.div>
+                )}
+
+                {session && phase === 'uploaded' && !isFreshAnalysis && !isAnalyzing && (
+                    <motion.div className="dashboard__error-banner" initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ background: 'rgba(59, 130, 246, 0.12)', borderColor: 'rgba(59, 130, 246, 0.4)', color: '#3b82f6' }}>
+                        <HiExclamationCircle /> Session uploaded but no player selected yet.
+                        <button className="btn btn-primary" style={{ marginLeft: 'auto', padding: '6px 12px', fontSize: '0.8rem' }} onClick={handleNewPlayer}>
+                            Select Player
+                        </button>
                     </motion.div>
                 )}
 
@@ -496,57 +505,57 @@ export default function Dashboard() {
                                     </div>
                                 ) : (
                                     <>
-                                {state.status === 'locked' && (
-                                    <p className="feature-card__hint">Waiting for analysis to finish…</p>
-                                )}
-                                {state.status === 'idle' && (
-                                    <button
-                                        className="btn btn-primary feature-card__btn"
-                                        onClick={() => handleGenerate(feat.key)}
-                                    >
-                                        Generate {feat.label}
-                                    </button>
-                                )}
-                                {state.status === 'generating' && (
-                                    <div className="feature-card__loading">
-                                        <div className="feature-card__spinner" />
-                                        <span>Generating… {state.progress || 0}%</span>
-                                    </div>
-                                )}
-                                {state.status === 'done' && feat.type === 'image' && state.url && (
-                                    <img src={state.url} alt={feat.label} className="feature-card__result-img" />
-                                )}
-                                {state.status === 'done' && feat.type === 'video' && state.url && (
-                                    <video
-                                        src={state.url}
-                                        controls
-                                        autoPlay
-                                        muted
-                                        loop
-                                        className="feature-card__result-img"
-                                    />
-                                )}
-                                {state.status === 'done' && feat.type === 'text' && state.result && (
-                                    <div
-                                        style={{
-                                            padding: '1rem',
-                                            background: '#0b1220',
-                                            borderRadius: 8,
-                                            border: '1px solid #1e293b',
-                                            color: '#cbd5e1',
-                                            whiteSpace: 'pre-wrap',
-                                            fontSize: 14,
-                                            lineHeight: 1.6,
-                                            maxHeight: 320,
-                                            overflow: 'auto',
-                                        }}
-                                    >
-                                        {taskTextResult(state.result) || JSON.stringify(state.result, null, 2)}
-                                    </div>
-                                )}
-                                {state.status === 'error' && (
-                                    <p className="feature-card__error">❌ {state.error}</p>
-                                )}
+                                        {state.status === 'locked' && (
+                                            <p className="feature-card__hint">Waiting for analysis to finish…</p>
+                                        )}
+                                        {state.status === 'idle' && (
+                                            <button
+                                                className="btn btn-primary feature-card__btn"
+                                                onClick={() => handleGenerate(feat.key)}
+                                            >
+                                                Generate {feat.label}
+                                            </button>
+                                        )}
+                                        {state.status === 'generating' && (
+                                            <div className="feature-card__loading">
+                                                <div className="feature-card__spinner" />
+                                                <span>Generating… {state.progress || 0}%</span>
+                                            </div>
+                                        )}
+                                        {state.status === 'done' && feat.type === 'image' && state.url && (
+                                            <img src={state.url} alt={feat.label} className="feature-card__result-img" />
+                                        )}
+                                        {state.status === 'done' && feat.type === 'video' && state.url && (
+                                            <video
+                                                src={state.url}
+                                                controls
+                                                autoPlay
+                                                muted
+                                                loop
+                                                className="feature-card__result-img"
+                                            />
+                                        )}
+                                        {state.status === 'done' && feat.type === 'text' && state.result && (
+                                            <div
+                                                style={{
+                                                    padding: '1rem',
+                                                    background: '#0b1220',
+                                                    borderRadius: 8,
+                                                    border: '1px solid #1e293b',
+                                                    color: '#cbd5e1',
+                                                    whiteSpace: 'pre-wrap',
+                                                    fontSize: 14,
+                                                    lineHeight: 1.6,
+                                                    maxHeight: 320,
+                                                    overflow: 'auto',
+                                                }}
+                                            >
+                                                {taskTextResult(state.result) || JSON.stringify(state.result, null, 2)}
+                                            </div>
+                                        )}
+                                        {state.status === 'error' && (
+                                            <p className="feature-card__error">❌ {state.error}</p>
+                                        )}
                                     </>
                                 )}
                             </div>

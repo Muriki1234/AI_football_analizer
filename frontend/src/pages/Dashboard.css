@@ -1,8 +1,14 @@
 .dashboard {
-    padding: var(--space-xl) var(--space-lg);
+    padding: var(--space-md) var(--space-sm);
     max-width: 1440px;
     margin: 0 auto;
     position: relative;
+}
+
+@media (min-width: 768px) {
+    .dashboard {
+        padding: var(--space-xl) var(--space-lg);
+    }
 }
 
 .dashboard__header {
@@ -19,7 +25,13 @@
 }
 
 .dashboard__title {
-    font-size: 1.8rem;
+    font-size: 1.4rem;
+}
+
+@media (min-width: 768px) {
+    .dashboard__title {
+        font-size: 1.8rem;
+    }
 }
 
 .dashboard__subtitle {

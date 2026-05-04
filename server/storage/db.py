@@ -225,6 +225,26 @@ class SessionManager:
             self._conn.execute("DELETE FROM tasks WHERE session_id=?", (session_id,))
             self._conn.execute("DELETE FROM sessions WHERE session_id=?", (session_id,))
 
+    def cleanup_zombies(self, timeout_minutes: int = 60) -> None:
+        """Mark sessions and tasks stuck in active states for too long as failed."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=timeout_minutes)).isoformat()
+        now = _utcnow_iso()
+        with self._lock:
+            # Clean up zombie sessions
+            self._conn.execute(
+                """UPDATE sessions 
+                   SET status='analysis_failed', error='Task timed out (zombie watcher)' 
+                   WHERE status IN ('analyzing', 'tracking', 'queued') AND updated_at < ?""",
+                (cutoff,)
+            )
+            # Clean up zombie tasks
+            self._conn.execute(
+                """UPDATE tasks 
+                   SET status='failed', error='Task timed out (zombie watcher)', finished_at=? 
+                   WHERE status IN ('running', 'queued') AND created_at < ?""",
+                (now, cutoff)
+            )
+
     def close(self) -> None:
         with self._lock:
             self._conn.close()

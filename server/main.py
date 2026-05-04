@@ -122,6 +122,12 @@ async def lifespan(app: FastAPI):
 def _cleanup_expired_sessions(sm: SessionManager) -> None:
     import shutil
 
+    # Watchdog for zombie tasks
+    try:
+        sm.cleanup_zombies(timeout_minutes=60)
+    except Exception as exc:
+        log.warning("cleanup: failed to purge zombie tasks: %s", exc)
+
     expired = sm.expired_sessions(settings.SESSION_TTL_HOURS)
     if not expired:
         return
