@@ -8,6 +8,7 @@ pydantic-settings==2.7.1
 
 # ── Storage / scheduling ─────────────────────────────────────────────────────
 apscheduler==3.11.0
+boto3==1.35.81
 
 # ── Model weights pull ───────────────────────────────────────────────────────
 huggingface_hub==0.27.0

@@ -77,6 +77,15 @@ class Settings(BaseSettings):
     # ── Logging ───────────────────────────────────────────────────────────────
     LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
+    # ── Cloud Services ────────────────────────────────────────────────────────
+    SUPABASE_URL: str | None = None
+    SUPABASE_SERVICE_KEY: str | None = None
+    
+    R2_ACCOUNT_ID: str | None = None
+    R2_BUCKET_NAME: str | None = None
+    R2_ACCESS_KEY_ID: str | None = None
+    R2_SECRET_ACCESS_KEY: str | None = None
+
     # ── Derived paths ─────────────────────────────────────────────────────────
     @property
     def output_root(self) -> Path:

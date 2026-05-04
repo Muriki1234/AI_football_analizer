@@ -2284,21 +2284,30 @@ def _find_matched_player(player_frame: dict, target_center: tuple,
 
 def _finish_task(sm: SessionManager, session_id: str, task_id: str,
                  file_path: Path, result: dict = None):
-    """任务成功完成时统一写入状态"""
+    """任务成功完成时统一写入状态，如果配置了 R2 则上传到云端"""
+    from .r2 import upload_to_r2
+    
     file_path = Path(file_path)
     session_dir = sm.session_output_dir(session_id)
     try:
         rel_path = str(file_path.resolve().relative_to(session_dir.resolve()))
     except ValueError:
         rel_path = file_path.name
+        
+    # Attempt to upload to R2
+    remote_key = f"{session_id}/{rel_path}"
+    r2_url = upload_to_r2(file_path, remote_key)
+    
+    # Fallback to local URL if R2 fails or is not configured
+    final_url = r2_url if r2_url else rel_path
+    
     sm.update_task(
         session_id, task_id,
         status="done",
         progress=100,
         file_path=str(file_path),
-        # Store the artifact path relative to the session output dir so the
-        # frontend can serve it via /api/sessions/{sid}/files/{path}.
-        url=rel_path,
+        # Store the R2 presigned URL or the local relative path
+        url=final_url,
         result=result,
     )
 

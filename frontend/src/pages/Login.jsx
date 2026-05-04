@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { HiEnvelope, HiLockClosed, HiEye, HiEyeSlash } from 'react-icons/hi2';
 import { IoFootball } from 'react-icons/io5';
+import toast from 'react-hot-toast';
+import { supabase } from '../lib/supabase';
 import './Login.css';
 
 export default function Login() {
@@ -14,13 +16,32 @@ export default function Login() {
     const [loading, setLoading] = useState(false);
     const navigate = useNavigate();
 
-    const handleSubmit = (e) => {
+    const handleSubmit = async (e) => {
         e.preventDefault();
         setLoading(true);
-        setTimeout(() => {
+        try {
+            if (isSignUp) {
+                const { error } = await supabase.auth.signUp({
+                    email,
+                    password,
+                    options: { data: { full_name: name } }
+                });
+                if (error) throw error;
+                toast.success('Check your email for the confirmation link!');
+            } else {
+                const { error } = await supabase.auth.signInWithPassword({
+                    email,
+                    password
+                });
+                if (error) throw error;
+                toast.success('Welcome back!');
+                navigate('/');
+            }
+        } catch (error) {
+            toast.error(error.message || 'Authentication failed');
+        } finally {
             setLoading(false);
-            navigate('/');
-        }, 1200);
+        }
     };
 
     return (
