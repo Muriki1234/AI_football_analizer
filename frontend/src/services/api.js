@@ -1,242 +1,162 @@
-/**
- * API client for the v2 FastAPI server. No more Colab branching — the server
- * is always the same URL (configured via VITE_API_BASE_URL).
- *
- * Highlights:
- *   - uploadVideo: chunked upload (5 MB) with retries for flaky tunnels.
- *   - subscribeSession: SSE stream so the dashboard doesn't poll.
- *   - All requests carry X-API-Key when configured (see services/config.js).
- */
+import { supabase } from '../lib/supabase';
 
-import axios from 'axios';
-import { API_BASE_URL, API_KEY, absUrl, authHeaders } from './config';
-
-const CHUNK_SIZE = 5 * 1024 * 1024; // 5 MB
-const MAX_CHUNK_RETRIES = 3;
-
-export const api = axios.create({
-    baseURL: API_BASE_URL || '',
-    headers: { 'Content-Type': 'application/json' },
-});
-
-api.interceptors.request.use((cfg) => {
-    if (API_KEY) cfg.headers['X-API-Key'] = API_KEY;
-    return cfg;
-});
-
-const unwrap = (res) => res.data;
-
-// ── Sessions (upload + trim) ─────────────────────────────────────────────────
-
-const createSessionShell = async () => {
-    const res = await api.post('/api/sessions');
-    return res.data.session_id;
+// Helper to get public URL for a file in Supabase Storage
+const getPublicUrl = (fileName) => {
+    const { data } = supabase.storage.from('videos').getPublicUrl(fileName);
+    return data.publicUrl;
 };
 
-const putChunk = async (sessionId, index, chunk) => {
-    let attempt = 0;
-    while (true) {
-        try {
-            await axios.put(
-                absUrl(`/api/sessions/${sessionId}/chunks/${index}`),
-                chunk,
-                {
-                    headers: {
-                        'Content-Type': 'application/octet-stream',
-                        ...authHeaders(),
-                    },
-                    timeout: 120_000,
-                }
-            );
-            return;
-        } catch (err) {
-            attempt += 1;
-            if (attempt >= MAX_CHUNK_RETRIES) throw err;
-            await new Promise((r) => setTimeout(r, 500 * attempt));
-        }
-    }
-};
+// ── Sessions (Supabase Auth & DB) ──────────────────────────────────────────
 
 /**
- * Upload a file in 5MB chunks. Returns { session_id, video_path }.
- * onProgress is called with integer percent 0..100.
+ * Upload a file directly to Supabase Storage.
+ * Then creates a record in the 'sessions' table.
  */
 export const uploadVideo = async (file, onProgress) => {
-    const sessionId = await createSessionShell();
+    const sessionId = `sess_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const fileName = `${sessionId}/${file.name}`;
 
-    const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
-    for (let i = 0; i < totalChunks; i++) {
-        const start = i * CHUNK_SIZE;
-        const end = Math.min(start + CHUNK_SIZE, file.size);
-        // eslint-disable-next-line no-await-in-loop
-        await putChunk(sessionId, i, file.slice(start, end));
-        if (onProgress) {
-            onProgress(Math.round(((i + 1) / totalChunks) * 95));
-        }
-    }
+    // 1. Upload to Supabase Storage
+    const { error: uploadError } = await supabase.storage
+        .from('videos')
+        .upload(fileName, file, {
+            cacheControl: '3600',
+            upsert: false
+        });
 
-    const complete = await api.post(`/api/sessions/${sessionId}/complete`, {
-        total_chunks: totalChunks,
-        filename: file.name,
-    });
+    if (uploadError) throw uploadError;
     if (onProgress) onProgress(100);
 
-    return {
-        video_id: sessionId,
-        session_id: sessionId,
-        ...complete.data,
-    };
+    const videoUrl = getPublicUrl(fileName);
+
+    // 2. Create session record in Database
+    const { error: dbError } = await supabase
+        .from('sessions')
+        .insert([{
+            id: sessionId,
+            video_url: videoUrl,
+            status: 'uploaded'
+        }]);
+
+    if (dbError) throw dbError;
+
+    return { session_id: sessionId, video_url: videoUrl };
 };
 
-export const trimVideo = async (sessionId, start, end) => {
-    const res = await api.post(`/api/sessions/${sessionId}/trim`, { start, end });
-    return res.data;
+export const getSession = async (sessionId) => {
+    const { data, error } = await supabase
+        .from('sessions')
+        .select('*')
+        .eq('id', sessionId)
+        .single();
+    
+    if (error) throw error;
+    return data;
 };
 
-export const getSession = (sessionId) =>
-    api.get(`/api/sessions/${sessionId}`).then(unwrap);
+// ── Analysis (Vercel Proxy to RunPod) ───────────────────────────────────────
 
-// ── Analysis ─────────────────────────────────────────────────────────────────
-
-export const startAnalysis = (sessionId) =>
-    api.post(`/api/sessions/${sessionId}/analyze`).then(unwrap);
-
-export const startTracking = (sessionId, bbox, frame = 0) =>
-    api
-        .post(`/api/sessions/${sessionId}/track`, {
-            bbox: [bbox.x1, bbox.y1, bbox.x2, bbox.y2],
-            frame,
+export const startAnalysis = async (sessionId) => {
+    const session = await getSession(sessionId);
+    
+    // Call our Vercel Proxy instead of RunPod directly
+    const res = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            input: {
+                action: 'analyze',
+                session_id: sessionId,
+                video_url: session.video_url
+            }
         })
-        .then(unwrap);
+    });
 
-export const queueFeature = (sessionId, feature) =>
-    api.post(`/api/sessions/${sessionId}/features/${feature}`).then(unwrap);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to start analysis');
 
-export const listTasks = (sessionId) =>
-    api.get(`/api/sessions/${sessionId}/tasks`).then(unwrap);
-
-export const getTask = (sessionId, taskId) =>
-    api.get(`/api/sessions/${sessionId}/tasks/${taskId}`).then(unwrap);
-
-export const getSummary = (sessionId) =>
-    api.get(`/api/sessions/${sessionId}/summary`).then(unwrap);
-
-/**
- * Build a URL to a session artifact (hits /files/{path}). When an API key is
- * configured, append it as ?key= so plain <img>/<video> tags can authenticate
- * (these tags can't send custom headers).
- */
-export const artifactUrl = (sessionId, relPath) => {
-    const path = encodeURIComponent(relPath).replace(/%2F/g, '/');
-    const base = absUrl(`/api/sessions/${sessionId}/files/${path}`);
-    return API_KEY ? `${base}?key=${encodeURIComponent(API_KEY)}` : base;
+    // Update session status to queued
+    await supabase.from('sessions').update({ status: 'queued' }).eq('id', sessionId);
+    
+    return data; // This is the RunPod Job ID
 };
 
-// ── Legacy shims (keep existing pages compiling) ─────────────────────────────
-// The old UI calls these; keep them around so we don't break imports while
-// the individual pages get rewritten. They quietly map to the v2 API where
-// possible, and return a clearly-flagged "not implemented" marker otherwise.
+export const queueFeature = async (sessionId, feature) => {
+    const res = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            input: {
+                action: 'feature',
+                feature: feature,
+                session_id: sessionId
+            }
+        })
+    });
 
-export const registerSession = async () => ({ ok: true });
-
-export const analyzeFrame = async (sessionId, frame = 0) => {
-    const res = await api.post(`/api/sessions/${sessionId}/detect-frame`, { frame });
-    const data = res.data || {};
-    // The server returned a relative URL like /api/sessions/{id}/files/first_frame.jpg.
-    // Convert to artifactUrl() which handles ?key= for img-tag auth.
-    const rel = data.annotated_frame_path || 'first_frame.jpg';
-    return {
-        players_data: data.players || [],
-        annotated_frame_url: artifactUrl(sessionId, rel),
-        image_dimensions: data.image_dimensions || null,
-    };
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to queue feature');
+    return data;
 };
 
-export const startGlobalAnalysis = startAnalysis;
+// ── Tasks & Real-time ────────────────────────────────────────────────────────
 
-export const generateFeature = queueFeature;
-
-// ── SSE (Server-Sent Events) subscription ────────────────────────────────────
+export const listTasks = async (sessionId) => {
+    const { data, error } = await supabase
+        .from('tasks')
+        .select('*')
+        .eq('session_id', sessionId)
+        .order('created_at', { ascending: true });
+    
+    if (error) throw error;
+    return data;
+};
 
 /**
- * Subscribe to session events. Returns an unsubscribe() function.
- * Pass handlers for each event kind:
- *   onSession({status, progress, stage, ...})
- *   onTask({task_id, task_type, status, progress, url, result})
- *   onError(err)  — fired on network / protocol errors
+ * The magic of Supabase: Subscribe to changes in real-time.
+ * No more polling!
  */
 export const subscribeSession = (sessionId, handlers = {}) => {
-    const baseUrl = absUrl(`/api/sessions/${sessionId}/events`);
-    // EventSource can't send custom headers; pass the API key via ?key= query.
-    const url = API_KEY ? `${baseUrl}?key=${encodeURIComponent(API_KEY)}` : baseUrl;
-    const source = new EventSource(url, { withCredentials: false });
+    const sessionChannel = supabase
+        .channel(`session:${sessionId}`)
+        .on('postgres_changes', {
+            event: '*',
+            schema: 'public',
+            table: 'sessions',
+            filter: `id=eq.${sessionId}`
+        }, (payload) => {
+            if (handlers.onSession) handlers.onSession(payload.new);
+        })
+        .on('postgres_changes', {
+            event: '*',
+            schema: 'public',
+            table: 'tasks',
+            filter: `session_id=eq.${sessionId}`
+        }, (payload) => {
+            if (handlers.onTask) handlers.onTask(payload.new);
+        })
+        .subscribe();
 
-    const parse = (raw) => {
-        try {
-            return typeof raw === 'string' ? JSON.parse(raw) : raw;
-        } catch {
-            return null;
-        }
-    };
-
-    const unwrapEventPayload = (payload) => {
-        if (!payload || typeof payload !== 'object') return payload;
-        if ('kind' in payload && 'data' in payload) return payload.data;
-        return payload;
-    };
-
-    source.addEventListener('session', (e) => {
-        const data = unwrapEventPayload(parse(e.data));
-        if (data && handlers.onSession) handlers.onSession(data);
-    });
-    source.addEventListener('task', (e) => {
-        const data = unwrapEventPayload(parse(e.data));
-        if (data && handlers.onTask) handlers.onTask(data);
-    });
-    source.addEventListener('heartbeat', () => {
-        if (handlers.onHeartbeat) handlers.onHeartbeat();
-    });
-    source.onerror = (err) => {
-        if (handlers.onError) handlers.onError(err);
-    };
-
-    return () => source.close();
+    return () => supabase.removeChannel(sessionChannel);
 };
 
-// ── Backwards-compat polling fallback (SSE is strongly preferred) ────────────
+// ── Compatibility Shims (keeping UI from breaking) ──────────────────────────
+export const getSummary = async (sessionId) => {
+    const { data } = await supabase.from('tasks').select('result').eq('session_id', sessionId).eq('task_type', 'ai_summary').single();
+    return data?.result || {};
+};
 
-export const pollSessionStatus = (sessionId, targetStatus, onProgress, interval = 1500) =>
-    new Promise((resolve, reject) => {
-        const tick = async () => {
-            try {
-                const data = await getSession(sessionId);
-                if (onProgress) onProgress(data);
-                if (data.status === targetStatus) return resolve(data);
-                if (data.status && data.status.endsWith('_failed'))
-                    return reject(new Error(data.error || 'Pipeline failed'));
-                setTimeout(tick, interval);
-            } catch (e) {
-                reject(e);
-            }
-        };
-        tick();
-    });
+export const artifactUrl = (sessionId, relPath) => {
+    // If it's already a full URL (like R2), return it.
+    if (relPath?.startsWith('http')) return relPath;
+    return relPath;
+};
 
-export const pollTaskStatus = (sessionId, taskId, onProgress, interval = 1000) =>
-    new Promise((resolve, reject) => {
-        const tick = async () => {
-            try {
-                const data = await getTask(sessionId, taskId);
-                if (onProgress) onProgress(data);
-                if (data.status === 'done') return resolve(data);
-                if (data.status === 'failed')
-                    return reject(new Error(data.error || 'Task failed'));
-                setTimeout(tick, interval);
-            } catch (e) {
-                reject(e);
-            }
-        };
-        tick();
-    });
-
-export default api;
+export default {
+    uploadVideo,
+    getSession,
+    startAnalysis,
+    queueFeature,
+    listTasks,
+    subscribeSession
+};
