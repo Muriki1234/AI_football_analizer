@@ -86,6 +86,13 @@ class Settings(BaseSettings):
     R2_ACCESS_KEY_ID: str | None = None
     R2_SECRET_ACCESS_KEY: str | None = None
     R2_ENDPOINT_URL: str | None = None
+    R2_PUBLIC_URL: str | None = Field(
+        default=None,
+        description="Public base URL for R2 bucket (e.g. https://pub-xxx.r2.dev). "
+                    "If set, uploaded files get permanent public URLs instead of "
+                    "7-day presigned URLs. Enable via Cloudflare Dashboard → R2 → "
+                    "bucket settings → Public access.",
+    )
 
     # ── Derived paths ─────────────────────────────────────────────────────────
     @property
