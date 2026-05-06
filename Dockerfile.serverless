@@ -23,10 +23,13 @@ COPY samurai /app/samurai
 
 # Install SAM2 package in editable mode.
 # - SAM2_BUILD_CUDA=0: skip CUDA extension (requires torch 2.3+, we have 2.2.1)
-# - --no-build-isolation: reuse the torch already in the image instead of
-#   pip downloading torch 2.11 (530 MB) into a throwaway build env
-RUN pip install --no-cache-dir setuptools wheel && \
-    SAM2_BUILD_CUDA=0 pip install --no-cache-dir --no-build-isolation -e /app/samurai/sam2
+# - --no-build-isolation: reuse the torch already in the image
+# - --no-deps: skip install_requires (torch>=2.3.1 hard-pinned in setup.py).
+#   All runtime deps already satisfied by the base image; only hydra-core
+#   and iopath are missing — installed explicitly below.
+RUN pip install --no-cache-dir hydra-core>=1.3.2 iopath>=0.1.10 && \
+    SAM2_BUILD_CUDA=0 pip install --no-cache-dir --no-build-isolation --no-deps \
+        -e /app/samurai/sam2
 
 # Download SAM2.1 base_plus checkpoint at build time — baking it into the
 # image avoids a 300 MB download on every cold start.
