@@ -4,25 +4,44 @@ FROM pytorch/pytorch:2.2.1-cuda12.1-cudnn8-runtime
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies (ffmpeg for video, libgl for OpenCV, git for requirements)
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     libgl1-mesa-glx \
     libglib2.0-0 \
     git \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install
+# Copy and install Python requirements
 COPY server/requirements.txt /app/server/requirements.txt
 RUN pip install --no-cache-dir -r server/requirements.txt
-# Ensure runpod is installed
-RUN pip install --no-cache-dir runpod boto3
 
-# Copy the server code
+# ── SAMURAI + SAM2 ────────────────────────────────────────────────────────────
+# Copy the samurai directory (already in repo, contains sam2/ sub-package)
+COPY samurai /app/samurai
+
+# Install SAM2 package in editable mode; skip CUDA extension build so it
+# works with PyTorch 2.2.x (extension requires 2.3+, but inference still works)
+RUN SAM2_BUILD_CUDA=0 pip install --no-cache-dir -e /app/samurai/sam2
+
+# Download SAM2.1 base_plus checkpoint at build time — baking it into the
+# image avoids a 300 MB download on every cold start.
+RUN mkdir -p /app/weights && \
+    wget -q \
+    https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt \
+    -O /app/weights/sam2.1_hiera_base_plus.pt
+
+# ── Server code ───────────────────────────────────────────────────────────────
 COPY server /app/server
 
-# Set Python path
+# Set Python path so both server and samurai packages resolve correctly
 ENV PYTHONPATH=/app
+
+# Bake default paths so RunPod doesn't need extra env vars for SAMURAI.
+# Both can still be overridden from the RunPod dashboard if needed.
+ENV SAMURAI_SCRIPT=/app/samurai/scripts/demo.py
+ENV SAM2_MODEL_PATH=/app/weights/sam2.1_hiera_base_plus.pt
 
 # Command to run the RunPod Serverless handler
 CMD ["python", "-m", "server.handler"]
