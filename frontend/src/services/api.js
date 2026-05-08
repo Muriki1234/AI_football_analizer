@@ -1,5 +1,19 @@
 import { supabase } from '../lib/supabase';
 
+// Poll /api/status until job completes or times out
+const pollJobResult = async (jobId, maxWaitMs = 120000, intervalMs = 2500) => {
+    const deadline = Date.now() + maxWaitMs;
+    while (Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, intervalMs));
+        const res = await fetch(`/api/status?id=${jobId}`);
+        const data = await res.json();
+        if (data.status === 'COMPLETED') return data.output;
+        if (data.status === 'FAILED') throw new Error(data.error || 'RunPod job failed');
+        // IN_QUEUE / IN_PROGRESS → keep polling
+    }
+    throw new Error('Detection timed out after 2 minutes');
+};
+
 // Helper to get public URL for a file in Supabase Storage
 const getPublicUrl = (fileName) => {
     const { data } = supabase.storage.from('videos').getPublicUrl(fileName);
@@ -143,8 +157,16 @@ export const analyzeFrame = async (sessionId, frameIndex = 0) => {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to analyze frame');
 
-    // RunPod returns { output: { players_data, annotated_frame_url, ... } }
-    const output = data.output || data;
+    // RunPod async: poll until COMPLETED
+    let output;
+    if (data.status === 'COMPLETED') {
+        output = data.output;
+    } else if (data.id) {
+        output = await pollJobResult(data.id);
+    } else {
+        output = data.output || data;
+    }
+
     return {
         players_data: output.players || output.players_data || [],
         annotated_frame_url: output.annotated_frame_url || null,
