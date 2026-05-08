@@ -13,8 +13,13 @@ const getPublicUrl = (fileName) => {
  * Then creates a record in the 'sessions' table.
  */
 export const uploadVideo = async (file, onProgress) => {
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-    if (authError || !user) throw new Error('Not authenticated');
+    // Try to get current user; if not logged in, auto sign-in anonymously
+    let { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+        const { data, error } = await supabase.auth.signInAnonymously();
+        if (error) throw new Error('Failed to create guest session: ' + error.message);
+        user = data.user;
+    }
 
     const sessionId = crypto.randomUUID();
     const fileName = `${sessionId}/${file.name}`;

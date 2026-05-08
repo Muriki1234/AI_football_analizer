@@ -23,7 +23,7 @@ export default function Welcome() {
                 <button className="btn btn-ghost" onClick={showInDevelopment}>
                     <HiUserGroup /> Player Library
                 </button>
-                <button className="btn btn-ghost" onClick={() => navigate('/login')}>
+                <button className="btn btn-ghost" onClick={showInDevelopment}>
                     <HiArrowRightOnRectangle /> Login
                 </button>
             </motion.div>
