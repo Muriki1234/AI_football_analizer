@@ -13,6 +13,15 @@ RUN apt-get update && apt-get install -y \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
+# The base image's conda ffmpeg lacks libx264 (only --enable-libopenh264).
+# Force the system ffmpeg (apt-installed, has libx264) by removing the conda
+# binary so /usr/bin/ffmpeg wins on PATH lookup.
+RUN rm -f /opt/conda/bin/ffmpeg /opt/conda/bin/ffprobe && \
+    ln -s /usr/bin/ffmpeg /opt/conda/bin/ffmpeg && \
+    ln -s /usr/bin/ffprobe /opt/conda/bin/ffprobe && \
+    /usr/bin/ffmpeg -encoders 2>/dev/null | grep -q libx264 && \
+    echo "✓ libx264 encoder available"
+
 # Copy and install Python requirements
 COPY server/requirements.txt /app/server/requirements.txt
 RUN pip install --no-cache-dir -r server/requirements.txt
