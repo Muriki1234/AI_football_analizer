@@ -199,6 +199,45 @@ export default function Dashboard() {
                 .catch(() => { });
         }
 
+        // Polling fallback — refetch session/tasks every 2s while analysis
+        // is in progress, in case Supabase Realtime drops or never fires.
+        const pollInterval = setInterval(() => {
+            getSession(sessionId)
+                .then((s) => {
+                    if (cancelled || !s) return;
+                    setSession(s);
+                    const terminal = ['analysis_done', 'analysis_failed', 'tracking_failed'];
+                    if (terminal.includes(s.status)) clearInterval(pollInterval);
+                })
+                .catch(() => { });
+            listTasks(sessionId)
+                .then((tasks = []) => {
+                    if (cancelled) return;
+                    setFeatures((prev) => {
+                        const next = { ...prev };
+                        for (const t of tasks) {
+                            const key = t.task_type;
+                            if (!(key in next)) continue;
+                            next[key] = {
+                                ...next[key],
+                                taskId: t.task_id,
+                                status:
+                                    t.status === 'done' ? 'done' :
+                                        t.status === 'failed' ? 'error' :
+                                            t.status === 'running' || t.status === 'queued' ? 'generating' :
+                                                next[key].status,
+                                progress: t.progress || 0,
+                                url: t.url ? taskResultUrl(sessionId, t.url) : next[key].url,
+                                result: t.result ?? next[key].result,
+                                error: t.error ?? next[key].error,
+                            };
+                        }
+                        return next;
+                    });
+                })
+                .catch(() => { });
+        }, 2000);
+
         const unsub = subscribeSession(sessionId, {
             onSession: (s) => setSession((prev) => ({ ...prev, ...s })),
             onTask: (t) => {
@@ -228,6 +267,7 @@ export default function Dashboard() {
         });
         return () => {
             cancelled = true;
+            clearInterval(pollInterval);
             unsub();
         };
     }, [sessionId, isFreshAnalysis]);
