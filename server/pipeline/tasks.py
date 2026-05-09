@@ -1364,7 +1364,12 @@ def run_full_replay(session_id: str, session: dict, task_id: str, sm: SessionMan
                                 team_assigner, tracker_obj, config, hex_t1, hex_t2)
                         _, rendered = _render_single_frame_worker_full(args)
 
-                        proc.stdin.write(rendered.tobytes())
+                        try:
+                            proc.stdin.write(rendered.tobytes())
+                        except BrokenPipeError:
+                            # ffmpeg died — stop writing and let the
+                            # post-loop validation surface the real stderr
+                            break
 
                         if i % 60 == 0:
                             pct = int(15 + (i / total_frames) * 80)
