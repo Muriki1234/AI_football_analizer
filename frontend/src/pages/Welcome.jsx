@@ -1,13 +1,39 @@
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 import { IoFootball } from 'react-icons/io5';
-import { HiArrowRight, HiUserGroup, HiArrowRightOnRectangle } from 'react-icons/hi2';
+import { HiArrowRight, HiUserGroup, HiArrowRightOnRectangle, HiClock, HiXMark } from 'react-icons/hi2';
+import { getRecentSessions, removeRecentSession } from '../lib/recentSessions';
 import './Welcome.css';
+
+const formatRelative = (ts) => {
+    const diff = Math.max(0, Date.now() - ts);
+    const m = Math.floor(diff / 60000);
+    if (m < 1) return 'just now';
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    return `${Math.floor(h / 24)}d ago`;
+};
 
 export default function Welcome() {
     const navigate = useNavigate();
     const showInDevelopment = () => toast('Feature in development');
+
+    const [recents, setRecents] = useState(() => getRecentSessions());
+
+    const handleOpenRecent = (sessionId) => {
+        navigate(`/dashboard?sessionId=${encodeURIComponent(sessionId)}`, {
+            state: { sessionId },
+        });
+    };
+
+    const handleRemoveRecent = (e, sessionId) => {
+        e.stopPropagation();
+        removeRecentSession(sessionId);
+        setRecents(getRecentSessions());
+    };
 
     return (
         <div className="welcome">
@@ -111,6 +137,45 @@ export default function Welcome() {
                         </motion.span>
                     ))}
                 </motion.div>
+
+                <AnimatePresence>
+                    {recents.length > 0 && (
+                        <motion.div
+                            className="welcome__recents"
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: 10 }}
+                            transition={{ delay: 1.5 }}
+                        >
+                            <div className="welcome__recents-header">
+                                <HiClock /> Recent uploads
+                            </div>
+                            <ul className="welcome__recents-list">
+                                {recents.map((r) => (
+                                    <li
+                                        key={r.id}
+                                        className="welcome__recent-item"
+                                        onClick={() => handleOpenRecent(r.id)}
+                                    >
+                                        <span className="welcome__recent-name" title={r.fileName}>
+                                            {r.fileName}
+                                        </span>
+                                        <span className="welcome__recent-time">
+                                            {formatRelative(r.addedAt)}
+                                        </span>
+                                        <button
+                                            className="welcome__recent-remove"
+                                            onClick={(e) => handleRemoveRecent(e, r.id)}
+                                            aria-label="Remove from recent"
+                                        >
+                                            <HiXMark />
+                                        </button>
+                                    </li>
+                                ))}
+                            </ul>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
             </motion.div>
         </div>
     );

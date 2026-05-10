@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabase';
+import { addRecentSession } from '../lib/recentSessions';
 
 // Poll /api/status until job completes or times out
 const pollJobResult = async (jobId, maxWaitMs = 120000, intervalMs = 2500) => {
@@ -62,6 +63,13 @@ export const uploadVideo = async (file, onProgress) => {
         }]);
 
     if (dbError) throw dbError;
+
+    addRecentSession({
+        id: sessionId,
+        fileName: file.name,
+        videoUrl,
+        size: file.size,
+    });
 
     return { session_id: sessionId, video_url: videoUrl };
 };

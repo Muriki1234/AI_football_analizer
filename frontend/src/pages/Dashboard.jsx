@@ -19,6 +19,7 @@ import {
 } from '../services/api';
 import { absUrl, API_KEY } from '../services/config';
 import StepNav from '../components/StepNav';
+import VideoTimelineMarkers from '../components/VideoTimelineMarkers';
 import './Dashboard.css';
 
 const FEATURES = [
@@ -110,6 +111,7 @@ export default function Dashboard() {
 
     const analysisKicked = useRef(false);
     const summaryFetched = useRef(false);
+    const heroVideoRef = useRef(null);
 
     const phase = session?.status || 'uploaded';
     const progress = session?.progress ?? 0;
@@ -120,8 +122,54 @@ export default function Dashboard() {
     const isFailed = phase === 'analysis_failed' || phase === 'tracking_failed';
     const hasGeneratingFeature = Object.values(features).some((f) => f.status === 'generating');
 
-    const phaseLabel = PHASE_LABELS[phase] || STAGE_LABELS[stage] || stage || phase;
+    // Cold start window: serverless worker is booting, no real progress yet.
+    // We show a friendlier "Warming up GPU…" label so users don't think the
+    // page is broken during the 20-30s cold-start.
+    const isColdStart = isAnalyzing && progress < 5 && !stage;
+    const [coldStartSec, setColdStartSec] = useState(0);
+    useEffect(() => {
+        if (!isColdStart) {
+            setColdStartSec(0);
+            return;
+        }
+        const t0 = Date.now();
+        const id = setInterval(() => {
+            setColdStartSec(Math.floor((Date.now() - t0) / 1000));
+        }, 1000);
+        return () => clearInterval(id);
+    }, [isColdStart]);
+
+    const phaseLabel = isColdStart
+        ? `Warming up GPU… (cold start ~30s, elapsed ${coldStartSec}s)`
+        : PHASE_LABELS[phase] || STAGE_LABELS[stage] || stage || phase;
     const stageLabel = STAGE_LABELS[stage] || stage;
+
+    // Smoothed progress: catches up fast when real progress jumps, then
+    // slowly creeps forward (max +5% above real) so the bar always feels
+    // alive between updates. Resets cleanly when phase exits analyzing.
+    const [smoothProgress, setSmoothProgress] = useState(0);
+    useEffect(() => {
+        if (!isAnalyzing) {
+            setSmoothProgress(isDone ? 100 : 0);
+            return;
+        }
+        const id = setInterval(() => {
+            setSmoothProgress((prev) => {
+                const target = progress;
+                const ceiling = Math.min(target + 5, 99);
+                if (prev < target) {
+                    return Math.min(target, prev + Math.max(1, (target - prev) * 0.3));
+                }
+                if (prev < ceiling) {
+                    return Math.min(ceiling, prev + 0.3);
+                }
+                return prev;
+            });
+        }, 200);
+        return () => clearInterval(id);
+    }, [isAnalyzing, isDone, progress]);
+
+    const displayProgress = Math.round(smoothProgress);
 
     useEffect(() => {
         setSession(null);
@@ -386,13 +434,13 @@ export default function Dashboard() {
                     >
                         <div className="pipeline-status__label">
                             <span>{phaseLabel}</span>
-                            <span className="pipeline-status__pct">{progress}%</span>
+                            <span className="pipeline-status__pct">{displayProgress}%</span>
                         </div>
                         <div className="pipeline-status__bar-track">
                             <motion.div
                                 className="pipeline-status__bar-fill"
-                                animate={{ width: `${progress}%` }}
-                                transition={{ ease: 'easeOut', duration: 0.5 }}
+                                animate={{ width: `${displayProgress}%` }}
+                                transition={{ ease: 'linear', duration: 0.2 }}
                             />
                         </div>
                         {stage && <p className="pipeline-status__stage">{stageLabel}</p>}
@@ -472,14 +520,23 @@ export default function Dashboard() {
                                 </div>
                             )}
                             {state.status === 'done' && state.url && (
-                                <video
-                                    src={state.url}
-                                    controls
-                                    autoPlay
-                                    muted
-                                    loop
-                                    className="feature-card__result-img feature-card__result-img--hero"
-                                />
+                                <>
+                                    <video
+                                        ref={heroVideoRef}
+                                        src={state.url}
+                                        controls
+                                        autoPlay
+                                        muted
+                                        loop
+                                        className="feature-card__result-img feature-card__result-img--hero"
+                                    />
+                                    <VideoTimelineMarkers
+                                        segments={session?.segments}
+                                        fps={session?.video_fps}
+                                        totalFrames={session?.total_frames}
+                                        videoRef={heroVideoRef}
+                                    />
+                                </>
                             )}
                             {state.status === 'error' && (
                                 <div className="feature-card__error-block">
@@ -594,7 +651,15 @@ export default function Dashboard() {
                                             </div>
                                         )}
                                         {state.status === 'error' && (
-                                            <p className="feature-card__error">❌ {state.error}</p>
+                                            <div className="feature-card__error-block">
+                                                <p className="feature-card__error">❌ {state.error || 'Generation failed'}</p>
+                                                <button
+                                                    className="btn btn-primary feature-card__btn"
+                                                    onClick={() => handleGenerate(feat.key)}
+                                                >
+                                                    <HiArrowPath /> Retry
+                                                </button>
+                                            </div>
                                         )}
                                     </>
                                 )}

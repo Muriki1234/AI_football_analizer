@@ -139,6 +139,96 @@ def _run_auto_full_replay(session_id: str, sm: SessionManager) -> None:
     pipeline_tasks.run_full_replay(session_id, session, task_id, sm)
 
 
+def _action_detect_frame(session_id: str, s: dict, payload: dict, sm: SessionManager) -> dict:
+    """Quick YOLO on a single frame for the player-selection UI."""
+    frame_idx = int(payload.get("frame", 0))
+    result = pipeline_tasks.detect_frame_players(session_id, s, frame_idx, sm)
+
+    output_dir = sm.session_output_dir(session_id)
+    frame_path = output_dir / result.get("annotated_frame_path", "first_frame.jpg")
+    frame_url = None
+    if frame_path.exists() and settings.SUPABASE_URL and settings.SUPABASE_SERVICE_KEY:
+        supa = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
+        storage_key = f"{session_id}/first_frame.jpg"
+        with open(frame_path, "rb") as f:
+            supa.storage.from_("videos").upload(
+                storage_key, f,
+                file_options={"content-type": "image/jpeg", "upsert": "true"}
+            )
+        frame_url = supa.storage.from_("videos").get_public_url(storage_key)
+
+    return {
+        "players": result.get("players", []),
+        "players_data": result.get("players", []),
+        "annotated_frame_url": frame_url,
+        "image_dimensions": result.get("image_dimensions"),
+    }
+
+
+def _action_track(session_id: str, s: dict, payload: dict, sm: SessionManager) -> dict:
+    """SAMURAI tracking → full analysis → auto-generate replay."""
+    bbox_raw = payload.get("bbox", {})
+    frame = int(payload.get("frame", 0))
+
+    if isinstance(bbox_raw, dict):
+        x1 = float(bbox_raw.get("x1", 0))
+        y1 = float(bbox_raw.get("y1", 0))
+        x2 = float(bbox_raw.get("x2", 0))
+        y2 = float(bbox_raw.get("y2", 0))
+    elif isinstance(bbox_raw, (list, tuple)) and len(bbox_raw) == 4:
+        x1, y1, x2, y2 = [float(v) for v in bbox_raw]
+    else:
+        return {"error": "bbox must be {x1,y1,x2,y2} or [x1,y1,x2,y2]"}
+
+    player_bbox = {
+        "x": x1, "y": y1,
+        "w": x2 - x1, "h": y2 - y1,
+        "frame": frame,
+    }
+    s_merged = {
+        **s,
+        "selected_bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
+        "start_frame": frame,
+    }
+
+    pipeline_tasks.run_samurai_tracking(session_id, s_merged, player_bbox, sm)
+    s_after = sm.get_session(session_id) or {}
+    if s_after.get("status") != "tracking_done":
+        return {"error": f"Tracking failed: {s_after.get('error', 'unknown')}"}
+
+    pipeline_tasks.run_global_analysis(session_id, s_after, sm)
+    _run_auto_full_replay(session_id, sm)
+    return {"ok": True, "session": sm.get_session(session_id)}
+
+
+def _action_analyze(session_id: str, s: dict, payload: dict, sm: SessionManager) -> dict:
+    """Full analysis (assumes SAMURAI cache already present)."""
+    pipeline_tasks.run_global_analysis(session_id, s, sm)
+    _run_auto_full_replay(session_id, sm)
+    return {"ok": True, "session": sm.get_session(session_id)}
+
+
+def _action_feature(session_id: str, s: dict, payload: dict, sm: SessionManager) -> dict:
+    """Generate a single feature output (heatmap, speed chart, etc.)."""
+    feature = payload.get("feature")
+    from .routes.analysis import FEATURE_TASKS
+    fn = FEATURE_TASKS.get(feature or "")
+    if not fn:
+        return {"error": f"unknown feature {feature!r}"}
+    task_id = sm.create_task(session_id, feature)
+    fn(session_id, s, task_id, sm)
+    return {"ok": True, "task": sm.get_task(session_id, task_id)}
+
+
+# Adding a new action = one entry here, no main-handler changes needed.
+ACTIONS = {
+    "detect_frame": _action_detect_frame,
+    "track":        _action_track,
+    "analyze":      _action_analyze,
+    "feature":      _action_feature,
+}
+
+
 def handler(event: dict[str, Any]) -> dict[str, Any]:
     """Entry point called by the RunPod Serverless runtime."""
     payload = event.get("input", {}) or {}
@@ -147,11 +237,14 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
     if not session_id:
         return {"error": "session_id is required"}
 
+    fn = ACTIONS.get(action)
+    if not fn:
+        return {"error": f"unknown action {action!r}"}
+
     video_url = payload.get("video_url", "")
     sm = _get_sm()
 
     try:
-        # Ensure session exists in Supabase (frontend usually creates it)
         s = sm.get_session(session_id)
         if not s:
             if video_url:
@@ -160,96 +253,10 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
             else:
                 return {"error": f"no session {session_id!r} and no video_url"}
 
-        # Make sure video is on local disk
-        local_video = _ensure_local_video(session_id, video_url or s.get("video_url", ""), sm)
-        # Refresh session to pick up updated video_path
+        _ensure_local_video(session_id, video_url or s.get("video_url", ""), sm)
         s = sm.get_session(session_id)
 
-        # ── detect_frame: quick YOLO on a single frame ───────────────────
-        if action == "detect_frame":
-            frame_idx = int(payload.get("frame", 0))
-            result = pipeline_tasks.detect_frame_players(session_id, s, frame_idx, sm)
-
-            # Upload annotated frame to Supabase Storage so frontend can display it
-            output_dir = sm.session_output_dir(session_id)
-            frame_path = output_dir / result.get("annotated_frame_path", "first_frame.jpg")
-            frame_url = None
-            if frame_path.exists() and settings.SUPABASE_URL and settings.SUPABASE_SERVICE_KEY:
-                supa = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
-                storage_key = f"{session_id}/first_frame.jpg"
-                with open(frame_path, "rb") as f:
-                    supa.storage.from_("videos").upload(
-                        storage_key, f,
-                        file_options={"content-type": "image/jpeg", "upsert": "true"}
-                    )
-                frame_url = supa.storage.from_("videos").get_public_url(storage_key)
-
-            return {
-                "players": result.get("players", []),
-                "players_data": result.get("players", []),
-                "annotated_frame_url": frame_url,
-                "image_dimensions": result.get("image_dimensions"),
-            }
-
-        # ── track: SAMURAI tracking → full analysis → auto replay ────────
-        if action == "track":
-            bbox_raw = payload.get("bbox", {})
-            frame = int(payload.get("frame", 0))
-
-            # Convert xyxy bbox to xywh format expected by run_samurai_tracking
-            if isinstance(bbox_raw, dict):
-                x1 = float(bbox_raw.get("x1", 0))
-                y1 = float(bbox_raw.get("y1", 0))
-                x2 = float(bbox_raw.get("x2", 0))
-                y2 = float(bbox_raw.get("y2", 0))
-            elif isinstance(bbox_raw, (list, tuple)) and len(bbox_raw) == 4:
-                x1, y1, x2, y2 = [float(v) for v in bbox_raw]
-            else:
-                return {"error": "bbox must be {x1,y1,x2,y2} or [x1,y1,x2,y2]"}
-
-            player_bbox = {
-                "x": x1, "y": y1,
-                "w": x2 - x1, "h": y2 - y1,
-                "frame": frame,
-            }
-            s_merged = {
-                **s,
-                "selected_bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
-                "start_frame": frame,
-            }
-
-            # Phase 1: SAMURAI tracking
-            pipeline_tasks.run_samurai_tracking(session_id, s_merged, player_bbox, sm)
-            s_after = sm.get_session(session_id) or {}
-            if s_after.get("status") != "tracking_done":
-                return {"error": f"Tracking failed: {s_after.get('error', 'unknown')}"}
-
-            # Phase 2: Global analysis
-            pipeline_tasks.run_global_analysis(session_id, s_after, sm)
-
-            # Phase 3: Auto-generate replay
-            _run_auto_full_replay(session_id, sm)
-
-            return {"ok": True, "session": sm.get_session(session_id)}
-
-        # ── analyze: full analysis (skip SAMURAI) ────────────────────────
-        if action == "analyze":
-            pipeline_tasks.run_global_analysis(session_id, s, sm)
-            _run_auto_full_replay(session_id, sm)
-            return {"ok": True, "session": sm.get_session(session_id)}
-
-        # ── feature: generate a single output (heatmap, speed chart…) ────
-        if action == "feature":
-            feature = payload.get("feature")
-            from .routes.analysis import FEATURE_TASKS
-            fn = FEATURE_TASKS.get(feature or "")
-            if not fn:
-                return {"error": f"unknown feature {feature!r}"}
-            task_id = sm.create_task(session_id, feature)
-            fn(session_id, s, task_id, sm)
-            return {"ok": True, "task": sm.get_task(session_id, task_id)}
-
-        return {"error": f"unknown action {action!r}"}
+        return fn(session_id, s, payload, sm)
     except Exception as exc:
         log.exception("handler failed")
         return {"error": str(exc)}
