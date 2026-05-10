@@ -235,7 +235,7 @@ export const subscribeSession = (sessionId, handlers = {}) => {
 
 // ── Compatibility Shims (keeping UI from breaking) ──────────────────────────
 export const getSummary = async (sessionId) => {
-    const { data } = await supabase.from('tasks').select('result').eq('session_id', sessionId).eq('task_type', 'ai_summary').single();
+    const { data } = await supabase.from('tasks').select('result').eq('session_id', sessionId).eq('task_type', 'ai_summary').maybeSingle();
     return data?.result || {};
 };
 

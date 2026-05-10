@@ -1522,6 +1522,7 @@ def _render_single_frame_worker_full(args):
 
         # Draw target player
         if samurai_bbox_xyxy is not None:
+            y1 = int(samurai_bbox_xyxy[1])
             y2 = int(samurai_bbox_xyxy[3])
             x_c = int((samurai_bbox_xyxy[0] + samurai_bbox_xyxy[2]) / 2)
             width = samurai_bbox_xyxy[2] - samurai_bbox_xyxy[0]
@@ -1529,8 +1530,9 @@ def _render_single_frame_worker_full(args):
             if width <= 0:
                 return i, frame
 
+            # Bright gold ellipse (outer) — thicker for visibility
             cv2.ellipse(frame, center=(x_c, y2), axes=(int(width), int(0.35*width)),
-                       angle=0.0, startAngle=-45, endAngle=235, color=(0, 215, 255), thickness=6)
+                       angle=0.0, startAngle=-45, endAngle=235, color=(0, 215, 255), thickness=10)
 
             team_color = (0, 215, 255)  # default gold outline
             if current_yolo_info:
@@ -1539,7 +1541,40 @@ def _render_single_frame_worker_full(args):
                     team_color = tuple(int(c) for c in raw_color[:3])
 
             cv2.ellipse(frame, center=(x_c, y2), axes=(int(width*0.9), int(0.35*width*0.9)),
-                       angle=0.0, startAngle=-45, endAngle=235, color=team_color, thickness=3)
+                       angle=0.0, startAngle=-45, endAngle=235, color=team_color, thickness=5)
+
+            # Pulsing downward arrow + "TARGET" label above the player's head
+            pulse = 1.0 + 0.15 * np.sin(i * 0.25)  # subtle 0.85-1.15 size oscillation
+            arrow_h = int(36 * pulse)
+            arrow_w = int(28 * pulse)
+            arrow_tip_y = max(y1 - 12, arrow_h + 30)
+            arrow_top_y = arrow_tip_y - arrow_h
+            tri = np.array([
+                [x_c - arrow_w, arrow_top_y],
+                [x_c + arrow_w, arrow_top_y],
+                [x_c, arrow_tip_y],
+            ], dtype=np.int32)
+            # Black drop-shadow underneath for contrast on bright pitches
+            shadow = tri + np.array([2, 2], dtype=np.int32)
+            cv2.fillPoly(frame, [shadow], color=(0, 0, 0))
+            cv2.fillPoly(frame, [tri], color=(0, 215, 255))     # gold fill
+            cv2.polylines(frame, [tri], isClosed=True, color=(255, 255, 255), thickness=2)
+
+            # "TARGET" label above the arrow with black background pill
+            label = "TARGET"
+            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_DUPLEX, 0.7, 2)
+            label_y = arrow_top_y - 8
+            label_x = x_c - tw // 2
+            cv2.rectangle(frame,
+                          (label_x - 8, label_y - th - 6),
+                          (label_x + tw + 8, label_y + 6),
+                          color=(0, 0, 0), thickness=-1)
+            cv2.rectangle(frame,
+                          (label_x - 8, label_y - th - 6),
+                          (label_x + tw + 8, label_y + 6),
+                          color=(0, 215, 255), thickness=2)
+            cv2.putText(frame, label, (label_x, label_y),
+                        cv2.FONT_HERSHEY_DUPLEX, 0.7, (0, 215, 255), 2, cv2.LINE_AA)
 
             if current_yolo_info and current_yolo_info.get('has_ball', False):
                 confidence = current_yolo_info.get('possession_confidence', 1.0)
