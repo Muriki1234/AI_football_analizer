@@ -112,6 +112,7 @@ export default function Dashboard() {
     const analysisKicked = useRef(false);
     const summaryFetched = useRef(false);
     const heroVideoRef = useRef(null);
+    const realtimeEvents = useRef(0);
 
     const phase = session?.status || 'uploaded';
     const progress = session?.progress ?? 0;
@@ -247,9 +248,15 @@ export default function Dashboard() {
                 .catch(() => { });
         }
 
-        // Polling fallback — refetch session/tasks every 2s while analysis
-        // is in progress, in case Supabase Realtime drops or never fires.
+        // Polling fallback — runs every 2s but auto-disables once we've
+        // seen ≥2 Realtime events (proof that Realtime is actually working).
+        // If Realtime never fires, polling keeps going forever as a safety net.
+        realtimeEvents.current = 0;
         const pollInterval = setInterval(() => {
+            if (realtimeEvents.current >= 2) {
+                clearInterval(pollInterval);
+                return;
+            }
             getSession(sessionId)
                 .then((s) => {
                     if (cancelled || !s) return;
@@ -287,8 +294,12 @@ export default function Dashboard() {
         }, 2000);
 
         const unsub = subscribeSession(sessionId, {
-            onSession: (s) => setSession((prev) => ({ ...prev, ...s })),
+            onSession: (s) => {
+                realtimeEvents.current += 1;
+                setSession((prev) => ({ ...prev, ...s }));
+            },
             onTask: (t) => {
+                realtimeEvents.current += 1;
                 setFeatures((prev) => {
                     const key = t.task_type;
                     if (!(key in prev)) return prev;

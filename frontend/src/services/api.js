@@ -1,11 +1,17 @@
 import { supabase } from '../lib/supabase';
 import { addRecentSession } from '../lib/recentSessions';
 
-// Poll /api/status until job completes or times out
-const pollJobResult = async (jobId, maxWaitMs = 120000, intervalMs = 2500) => {
+// Poll /api/status with exponential backoff: tight while warming up,
+// loose afterwards. Cuts Vercel function invocations ~60% versus a flat
+// 2.5s interval without sacrificing perceived responsiveness.
+//
+// Cadence: 2s × 5  →  5s × 6  →  10s for the rest. Total budget ≈ 2 min.
+const pollJobResult = async (jobId, maxWaitMs = 120000) => {
     const deadline = Date.now() + maxWaitMs;
+    const intervalFor = (n) => (n < 5 ? 2000 : n < 11 ? 5000 : 10000);
+    let n = 0;
     while (Date.now() < deadline) {
-        await new Promise(r => setTimeout(r, intervalMs));
+        await new Promise(r => setTimeout(r, intervalFor(n++)));
         const res = await fetch(`/api/status?id=${jobId}`);
         const data = await res.json();
         if (data.status === 'COMPLETED') return data.output;
