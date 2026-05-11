@@ -1,5 +1,6 @@
 import { supabase } from '../lib/supabase';
 import { addRecentSession } from '../lib/recentSessions';
+import { captureVideoFrame } from '../lib/captureVideoFrame';
 
 // Poll /api/status with exponential backoff: tight while warming up,
 // loose afterwards. Cuts Vercel function invocations ~60% versus a flat
@@ -149,43 +150,69 @@ export const startTracking = async (sessionId, bbox, frame = 0) => {
 };
 
 /**
- * Detect players on a specific frame via Vercel → RunPod.
- * Called from the Configuration page to show player bboxes on the first frame.
+ * Detect players on a specific frame entirely client-side:
+ *   1. Pull the frame out of the video in the browser (canvas)
+ *   2. POST it to /api/detect_frame which calls the Roboflow hosted API
+ *
+ * Skips RunPod GPU entirely — no cold-start, no idle time while the user
+ * picks a player. Falls back to the old RunPod path on failure so the UI
+ * still works even if Roboflow is down or out of quota.
  */
 export const analyzeFrame = async (sessionId, frameIndex = 0) => {
     const session = await getSession(sessionId);
 
-    const res = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            input: {
-                action: 'detect_frame',
-                session_id: sessionId,
-                video_url: session.video_url,
-                frame: frameIndex
-            }
-        })
-    });
+    try {
+        const fps = session.video_fps || 25;
+        const { dataUrl, base64, width, height } = await captureVideoFrame(
+            session.video_url, frameIndex, fps
+        );
 
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Failed to analyze frame');
+        const res = await fetch('/api/detect_frame', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image_base64: base64 }),
+        });
 
-    // RunPod async: poll until COMPLETED
-    let output;
-    if (data.status === 'COMPLETED') {
-        output = data.output;
-    } else if (data.id) {
-        output = await pollJobResult(data.id);
-    } else {
-        output = data.output || data;
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || `Detect frame failed (${res.status})`);
+        }
+
+        const data = await res.json();
+        return {
+            players_data: data.players || [],
+            annotated_frame_url: dataUrl,   // raw frame; Configuration draws SVG boxes over it
+            image_dimensions: data.image_dimensions || { width, height },
+        };
+    } catch (e) {
+        console.warn('Roboflow detect_frame failed, falling back to RunPod:', e);
+        // Fallback: the original RunPod path
+        const res = await fetch('/api/analyze', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                input: {
+                    action: 'detect_frame',
+                    session_id: sessionId,
+                    video_url: session.video_url,
+                    frame: frameIndex,
+                },
+            }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to analyze frame');
+
+        let output;
+        if (data.status === 'COMPLETED') output = data.output;
+        else if (data.id) output = await pollJobResult(data.id);
+        else output = data.output || data;
+
+        return {
+            players_data: output.players || output.players_data || [],
+            annotated_frame_url: output.annotated_frame_url || null,
+            image_dimensions: output.image_dimensions || null,
+        };
     }
-
-    return {
-        players_data: output.players || output.players_data || [],
-        annotated_frame_url: output.annotated_frame_url || null,
-        image_dimensions: output.image_dimensions || null,
-    };
 };
 
 export const queueFeature = async (sessionId, feature) => {
