@@ -6,11 +6,16 @@ import toast from 'react-hot-toast';
 import {
     HiHome, HiArrowPath, HiBars3, HiXMark, HiExclamationCircle,
     HiUserGroup, HiSparkles, HiChartBar, HiMapPin, HiFire,
-    HiArrowTrendingUp, HiPlayCircle, HiBolt,
+    HiPlayCircle,
 } from 'react-icons/hi2';
+import {
+    BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
+    PieChart, Pie, Cell,
+} from 'recharts';
 import {
     startAnalysis,
     startTracking,
+    queueFeature,
     getSession,
     getSummary,
     listTasks,
@@ -112,38 +117,102 @@ const DataAnalysisPanel = ({ playerSummary }) => {
     const overall = playerSummary.overall || playerSummary;
     const segments = playerSummary.by_segment || [];
 
+    const t1 = Number(overall.team1_possession_pct ?? 0);
+    const t2 = Number(overall.team2_possession_pct ?? 0);
+    const possessionData = [
+        { name: 'Team 1', value: t1, fill: '#3498db' },
+        { name: 'Team 2', value: t2, fill: '#e74c3c' },
+    ];
+
+    const speedData = [
+        { name: 'Avg', value: Number(overall.avg_speed_kmh ?? 0), fill: '#60a5fa' },
+        { name: 'Max', value: Number(overall.max_speed_kmh ?? 0), fill: '#f59e0b' },
+    ];
+
+    const periodData = segments.map((seg, i) => ({
+        name: (seg.segment_type || `Seg ${i + 1}`).replace('_', ' '),
+        distance: Number(seg.total_distance_m ?? 0),
+        avg: Number(seg.avg_speed_kmh ?? 0),
+        max: Number(seg.max_speed_kmh ?? 0),
+    }));
+
     return (
         <div className="drawer__section-body">
             <div className="stat-grid">
                 <StatRow icon="⚡" label="Max Speed" value={`${overall.max_speed_kmh ?? '-'} km/h`} />
                 <StatRow icon="🏃" label="Avg Speed" value={`${overall.avg_speed_kmh ?? '-'} km/h`} />
                 <StatRow icon="📏" label="Distance" value={`${overall.total_distance_m ?? '-'} m`} />
-                <StatRow icon="⚽" label="Possession Time" value={`${overall.possession_seconds ?? '-'} s`} />
-                <StatRow icon="🔄" label="Possession Switches" value={overall.possession_switches ?? '-'} />
+                <StatRow icon="⚽" label="Possession" value={`${overall.possession_seconds ?? '-'} s`} />
+                <StatRow icon="🔄" label="Switches" value={overall.possession_switches ?? '-'} />
+            </div>
+
+            <h4 className="drawer__subhead">Speed (km/h)</h4>
+            <div className="chart-wrap" style={{ height: 140 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={speedData} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
+                        <XAxis dataKey="name" stroke="#94a3b8" fontSize={12} />
+                        <YAxis stroke="#94a3b8" fontSize={11} />
+                        <Tooltip contentStyle={chartTooltipStyle} cursor={{ fill: 'rgba(255,255,255,0.04)' }} />
+                        <Bar dataKey="value" radius={[6, 6, 0, 0]} />
+                    </BarChart>
+                </ResponsiveContainer>
             </div>
 
             <h4 className="drawer__subhead">Team Possession</h4>
-            <PossessionBar team1={overall.team1_possession_pct} team2={overall.team2_possession_pct} />
+            <div className="poss-row">
+                <div className="chart-wrap chart-wrap--donut">
+                    <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                            <Pie
+                                data={possessionData}
+                                innerRadius={32}
+                                outerRadius={56}
+                                paddingAngle={2}
+                                dataKey="value"
+                                stroke="none"
+                            >
+                                {possessionData.map((entry, i) => (
+                                    <Cell key={i} fill={entry.fill} />
+                                ))}
+                            </Pie>
+                            <Tooltip
+                                contentStyle={chartTooltipStyle}
+                                formatter={(v) => `${Number(v).toFixed(1)}%`}
+                            />
+                        </PieChart>
+                    </ResponsiveContainer>
+                </div>
+                <div className="poss-row__legend">
+                    <div><span className="poss-dot poss-dot--t1" /> Team 1 <strong>{t1.toFixed(1)}%</strong></div>
+                    <div><span className="poss-dot poss-dot--t2" /> Team 2 <strong>{t2.toFixed(1)}%</strong></div>
+                </div>
+            </div>
+            <PossessionBar team1={t1} team2={t2} />
 
-            {segments.length > 0 && (
+            {periodData.length > 0 && (
                 <>
-                    <h4 className="drawer__subhead">By Period</h4>
+                    <h4 className="drawer__subhead">By Period — Distance (m)</h4>
+                    <div className="chart-wrap" style={{ height: 140 }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={periodData} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
+                                <XAxis dataKey="name" stroke="#94a3b8" fontSize={11} />
+                                <YAxis stroke="#94a3b8" fontSize={11} />
+                                <Tooltip contentStyle={chartTooltipStyle} cursor={{ fill: 'rgba(255,255,255,0.04)' }} />
+                                <Bar dataKey="distance" fill="#22d3ee" radius={[6, 6, 0, 0]} />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    </div>
                     <table className="seg-table">
                         <thead>
-                            <tr>
-                                <th>Period</th>
-                                <th>Distance</th>
-                                <th>Avg</th>
-                                <th>Max</th>
-                            </tr>
+                            <tr><th>Period</th><th>Dist</th><th>Avg</th><th>Max</th></tr>
                         </thead>
                         <tbody>
-                            {segments.map((seg, i) => (
+                            {periodData.map((seg, i) => (
                                 <tr key={i}>
-                                    <td>{seg.segment_type?.replace('_', ' ') || `Seg ${i + 1}`}</td>
-                                    <td>{seg.total_distance_m ?? '-'} m</td>
-                                    <td>{seg.avg_speed_kmh ?? '-'} km/h</td>
-                                    <td>{seg.max_speed_kmh ?? '-'} km/h</td>
+                                    <td>{seg.name}</td>
+                                    <td>{seg.distance} m</td>
+                                    <td>{seg.avg} km/h</td>
+                                    <td>{seg.max} km/h</td>
                                 </tr>
                             ))}
                         </tbody>
@@ -154,14 +223,13 @@ const DataAnalysisPanel = ({ playerSummary }) => {
     );
 };
 
-// ── Drawer section definition ─────────────────────────────────────────────
-const SECTIONS = [
-    { key: 'data',    label: 'Data Analysis',  icon: HiChartBar },
-    { key: 'ai',      label: 'AI Analysis',    icon: HiSparkles },
-    { key: 'minimap', label: 'Minimap Overlay', icon: HiMapPin },
-    { key: 'heatmap', label: 'Heatmap',         icon: HiFire },
-];
-
+const chartTooltipStyle = {
+    background: 'rgba(15, 23, 42, 0.95)',
+    border: '1px solid rgba(255, 255, 255, 0.1)',
+    borderRadius: 8,
+    fontSize: 12,
+    color: '#e2e8f0',
+};
 
 export default function Dashboard() {
     const location = useLocation();
@@ -183,8 +251,8 @@ export default function Dashboard() {
     const [error, setError] = useState(null);
 
     const [drawerOpen, setDrawerOpen] = useState(false);
-    const [activeSection, setActiveSection] = useState(null);
     const [minimapOn, setMinimapOn] = useState(false);
+    const [aiGenerating, setAiGenerating] = useState(false);
 
     const analysisKicked = useRef(false);
     const summaryFetched = useRef(false);
@@ -236,8 +304,8 @@ export default function Dashboard() {
         setAiSummary(null);
         setFullReplay({ status: 'locked', url: null, progress: 0, error: null });
         setError(null);
-        setActiveSection(null);
         setMinimapOn(false);
+        setAiGenerating(false);
         analysisKicked.current = false;
         summaryFetched.current = false;
     }, [sessionId]);
@@ -341,14 +409,22 @@ export default function Dashboard() {
         try { return marked.parse(txt); } catch { return txt; }
     }, [aiSummary]);
 
-    const openSection = (key) => {
-        if (key === 'minimap') {
-            setMinimapOn((v) => !v);
-            return;
+    const handleGenerateAI = async () => {
+        if (aiGenerating || !sessionId) return;
+        setAiGenerating(true);
+        try {
+            await queueFeature(sessionId, 'ai_summary');
+            toast.success('AI summary queued — this takes ~1 minute.');
+        } catch (e) {
+            toast.error(e?.message || 'Failed to queue AI summary');
+            setAiGenerating(false);
         }
-        setActiveSection((prev) => (prev === key ? null : key));
-        setDrawerOpen(true);
     };
+
+    // Clear the local "generating" flag when the result actually arrives
+    useEffect(() => {
+        if (aiSummary) setAiGenerating(false);
+    }, [aiSummary]);
 
     const handleNewPlayer = () => {
         if (!sessionId) return;
@@ -428,6 +504,7 @@ export default function Dashboard() {
 
             {/* Centerpiece: the video */}
             <main className={`dashboard-v2__stage ${drawerOpen ? 'drawer-open' : ''}`}>
+              <div className="dashboard-v2__stage-inner">
                 <motion.div
                     className="hero-video-card"
                     initial={{ opacity: 0, scale: 0.97 }}
@@ -485,6 +562,8 @@ export default function Dashboard() {
                         )}
                     </div>
                 </motion.div>
+                <StepNav />
+              </div>
             </main>
 
             {/* Side drawer */}
@@ -498,59 +577,78 @@ export default function Dashboard() {
                         transition={{ type: 'tween', duration: 0.28, ease: 'easeOut' }}
                     >
                         <div className="drawer__list">
-                            {SECTIONS.map((s) => {
-                                const Icon = s.icon;
-                                const isMini = s.key === 'minimap';
-                                const isActive = isMini ? minimapOn : activeSection === s.key;
-                                return (
-                                    <div key={s.key} className={`drawer__item ${isActive ? 'is-active' : ''}`}>
-                                        <button className="drawer__item-head" onClick={() => openSection(s.key)}>
-                                            <Icon />
-                                            <span>{s.label}</span>
-                                            {isMini && (
-                                                <span className={`drawer__toggle ${minimapOn ? 'on' : ''}`}>
-                                                    {minimapOn ? 'ON' : 'OFF'}
-                                                </span>
-                                            )}
-                                            {!isMini && (
-                                                <span className="drawer__chev">{isActive ? '▾' : '▸'}</span>
-                                            )}
-                                        </button>
-                                        <AnimatePresence>
-                                            {!isMini && isActive && (
-                                                <motion.div
-                                                    className="drawer__panel"
-                                                    initial={{ height: 0, opacity: 0 }}
-                                                    animate={{ height: 'auto', opacity: 1 }}
-                                                    exit={{ height: 0, opacity: 0 }}
-                                                    transition={{ duration: 0.2 }}
-                                                >
-                                                    {s.key === 'data' && (
-                                                        <DataAnalysisPanel playerSummary={playerSummary} />
-                                                    )}
-                                                    {s.key === 'ai' && (
-                                                        aiMarkdown ? (
-                                                            <div
-                                                                className="markdown-body drawer__section-body"
-                                                                dangerouslySetInnerHTML={{ __html: aiMarkdown }}
-                                                            />
-                                                        ) : isDone ? (
-                                                            <p className="drawer__empty">AI summary is generating…</p>
-                                                        ) : (
-                                                            <p className="drawer__empty">Waiting for analysis to finish…</p>
-                                                        )
-                                                    )}
-                                                    {s.key === 'heatmap' && (
-                                                        <div className="drawer__section-body">
-                                                            <HeatmapCanvas dataUrl={heatmapDataUrl} />
-                                                        </div>
-                                                    )}
-                                                </motion.div>
-                                            )}
-                                        </AnimatePresence>
-                                    </div>
-                                );
-                            })}
+                            {/* Minimap toggle (stays as on/off switch) */}
+                            <div className={`drawer__item ${minimapOn ? 'is-active' : ''}`}>
+                                <button
+                                    className="drawer__item-head"
+                                    onClick={() => setMinimapOn((v) => !v)}
+                                >
+                                    <HiMapPin />
+                                    <span>Minimap Overlay</span>
+                                    <span className={`drawer__toggle ${minimapOn ? 'on' : ''}`}>
+                                        {minimapOn ? 'ON' : 'OFF'}
+                                    </span>
+                                </button>
+                            </div>
+
+                            {/* Data Analysis — always rendered */}
+                            <div className="drawer__item is-static">
+                                <div className="drawer__item-head drawer__item-head--static">
+                                    <HiChartBar />
+                                    <span>Data Analysis</span>
+                                </div>
+                                <DataAnalysisPanel playerSummary={playerSummary} />
+                            </div>
+
+                            {/* AI Analysis — generate-on-demand */}
+                            <div className="drawer__item is-static">
+                                <div className="drawer__item-head drawer__item-head--static">
+                                    <HiSparkles />
+                                    <span>AI Analysis</span>
+                                </div>
+                                <div className="drawer__section-body">
+                                    {aiMarkdown ? (
+                                        <div
+                                            className="markdown-body"
+                                            dangerouslySetInnerHTML={{ __html: aiMarkdown }}
+                                        />
+                                    ) : aiGenerating ? (
+                                        <div className="drawer__loading">
+                                            <div className="feature-card__spinner" />
+                                            <span>Generating AI summary… this takes ~1 minute</span>
+                                        </div>
+                                    ) : isDone ? (
+                                        <div className="drawer__empty-cta">
+                                            <p>Generate an AI tactical breakdown of this clip.</p>
+                                            <button className="btn btn-primary" onClick={handleGenerateAI}>
+                                                <HiSparkles /> Generate AI Summary
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <p className="drawer__empty">Waiting for analysis to finish…</p>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Heatmap */}
+                            <div className="drawer__item is-static">
+                                <div className="drawer__item-head drawer__item-head--static">
+                                    <HiFire />
+                                    <span>Heatmap</span>
+                                </div>
+                                <div className="drawer__section-body">
+                                    {heatmapDataUrl ? (
+                                        <HeatmapCanvas dataUrl={heatmapDataUrl} />
+                                    ) : isDone ? (
+                                        <p className="drawer__empty">
+                                            Heatmap data not exported for this session.
+                                            Re-run analysis on the latest backend to enable.
+                                        </p>
+                                    ) : (
+                                        <p className="drawer__empty">Waiting for analysis to finish…</p>
+                                    )}
+                                </div>
+                            </div>
                         </div>
 
                         <div className="drawer__footer">
@@ -564,8 +662,6 @@ export default function Dashboard() {
                     </motion.aside>
                 )}
             </AnimatePresence>
-
-            <StepNav />
         </div>
     );
 }
