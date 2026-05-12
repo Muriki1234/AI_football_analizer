@@ -81,15 +81,32 @@ export const uploadVideo = async (file, onProgress) => {
     return { session_id: sessionId, video_url: videoUrl };
 };
 
+// Flatten the `extra` JSONB column into the top-level session object so
+// downstream code can do `session.tracks_cache_path`, `session.minimap_data_url`,
+// etc. without poking into `.extra`. Mirrors the backend's get_session().
+const _flattenSession = (row) => {
+    if (!row) return row;
+    let extra = row.extra;
+    if (typeof extra === 'string') {
+        try { extra = JSON.parse(extra); } catch { extra = null; }
+    }
+    if (extra && typeof extra === 'object') {
+        for (const [k, v] of Object.entries(extra)) {
+            if (!(k in row)) row[k] = v;
+        }
+    }
+    return row;
+};
+
 export const getSession = async (sessionId) => {
     const { data, error } = await supabase
         .from('sessions')
         .select('*')
         .eq('id', sessionId)
         .single();
-    
+
     if (error) throw error;
-    return data;
+    return _flattenSession(data);
 };
 
 // ── Analysis (Vercel Proxy to RunPod) ───────────────────────────────────────
@@ -259,7 +276,7 @@ export const subscribeSession = (sessionId, handlers = {}) => {
             table: 'sessions',
             filter: `id=eq.${sessionId}`
         }, (payload) => {
-            if (handlers.onSession) handlers.onSession(payload.new);
+            if (handlers.onSession) handlers.onSession(_flattenSession(payload.new));
         })
         .on('postgres_changes', {
             event: '*',

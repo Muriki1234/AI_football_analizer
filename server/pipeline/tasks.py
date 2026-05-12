@@ -763,6 +763,19 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         except Exception as r2_exc:
             print(f"[WARN] tracks.pkl R2 upload failed (non-fatal): {r2_exc}")
 
+        # ── Export compact JSON for frontend canvas minimap + heatmap ────
+        # Lets the frontend draw the minimap as an overlay on the main video
+        # (perfectly synced via currentTime) instead of rendering a separate
+        # MP4 server-side. ~300-700KB per session, well worth the small CPU.
+        minimap_url, heatmap_url = None, None
+        try:
+            minimap_url, heatmap_url = _export_position_jsons(
+                session_id, tracks, tracked_bboxes, team_control,
+                team_assigner.team_colors, fps, total, output_dir,
+            )
+        except Exception as exc:
+            print(f"[WARN] position JSON export failed (non-fatal): {exc}")
+
         sm.update_status(
             session_id, "analysis_done",
             progress=100, stage="done",
@@ -770,6 +783,8 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             player_summary=player_summary,
             total_frames=total,
             segments=segments,
+            minimap_data_url=minimap_url,
+            heatmap_data_url=heatmap_url,
         )
 
     except Exception as exc:
@@ -915,6 +930,127 @@ def _compute_player_summary(tracks: dict, tracked_bboxes: dict,
 # ═══════════════════════════════════════════════════════════════════════
 
 # ── 3a. 热力图 ───────────────────────────────────────────────────────────────
+
+def _export_position_jsons(session_id: str, tracks: dict, tracked_bboxes: dict,
+                            team_control: list, team_colors: dict, fps: float,
+                            total: int, output_dir: Path) -> tuple[str | None, str | None]:
+    """
+    Export two compact JSON files for the frontend canvas overlays:
+
+      1. minimap_positions.json — per-frame pitch coords of all players + ball.
+         Frontend draws this as an overlay synced to video.currentTime, killing
+         the need for a server-side minimap_replay.mp4.
+
+      2. heatmap_positions.json — flat list of (x, y) for the tracked player.
+         Frontend draws a canvas-based KDE.
+
+    Both upload to R2 and return their public URLs (or None on failure).
+    """
+    import json
+
+    pitch_length = 12000  # cm — matches SoccerPitchConfiguration default
+    pitch_width  = 7000
+
+    minimap_frames: list[list[dict]] = []
+    ball_path: list = []
+    tracked_positions: list[list[float]] = []
+
+    for i in range(total):
+        # Players for this frame
+        players_this_frame = []
+        frame_players = tracks["players"][i] if i < len(tracks["players"]) else {}
+        for pid, info in (frame_players or {}).items():
+            pos = info.get("position_minimap") or info.get("position_transformed")
+            if pos is None:
+                continue
+            try:
+                x = float(pos[0]); y = float(pos[1])
+            except (TypeError, IndexError):
+                continue
+            team = int(info.get("team", 0)) if info.get("team") is not None else 0
+            entry = {
+                "id": int(pid),
+                "x": round(x, 1),
+                "y": round(y, 1),
+                "t": team,
+            }
+            if info.get("has_ball"):
+                entry["b"] = 1
+            players_this_frame.append(entry)
+
+        # Tracked player position (for heatmap)
+        if i in tracked_bboxes:
+            sx, sy, sw, sh = tracked_bboxes[i]
+            matched = _find_matched_player(frame_players or {}, (sx + sw / 2, sy + sh / 2))
+            if matched:
+                tpos = matched.get("position_minimap") or matched.get("position_transformed")
+                if tpos is not None:
+                    try:
+                        tracked_positions.append([round(float(tpos[0]), 1), round(float(tpos[1]), 1)])
+                    except (TypeError, IndexError):
+                        pass
+                # Mark in minimap data so frontend can highlight
+                for p in players_this_frame:
+                    p["tr"] = 1 if "tr" not in p and p["id"] in (frame_players or {}) else p.get("tr", 0)
+
+        minimap_frames.append(players_this_frame)
+
+        # Ball
+        bx_data = None
+        for _, b in (tracks["ball"][i] if i < len(tracks["ball"]) else {}).items():
+            if not b:
+                continue
+            bpos = b.get("position_transformed")
+            if bpos is None:
+                continue
+            try:
+                bx_data = [round(float(bpos[0]), 1), round(float(bpos[1]), 1)]
+            except (TypeError, IndexError):
+                pass
+            break
+        ball_path.append(bx_data)
+
+    team_colors_hex = {
+        str(k): bgr_to_hex(v) for k, v in team_colors.items()
+    } if team_colors else {}
+
+    minimap_payload = {
+        "pitch":         {"length": pitch_length, "width": pitch_width, "unit": "cm"},
+        "fps":           round(float(fps), 3),
+        "total_frames":  int(total),
+        "team_colors":   team_colors_hex,
+        "frames":        minimap_frames,
+        "ball":          ball_path,
+        "team_control":  [int(t) for t in (team_control or [])],
+    }
+
+    heatmap_payload = {
+        "pitch":     {"length": pitch_length, "width": pitch_width, "unit": "cm"},
+        "positions": tracked_positions,
+    }
+
+    # Write locally first
+    mm_local = output_dir / "minimap_positions.json"
+    hm_local = output_dir / "heatmap_positions.json"
+    mm_local.write_text(json.dumps(minimap_payload, separators=(",", ":")))
+    hm_local.write_text(json.dumps(heatmap_payload, separators=(",", ":")))
+
+    mm_size = mm_local.stat().st_size / 1024
+    hm_size = hm_local.stat().st_size / 1024
+    print(f"[INFO] Exported minimap_positions.json ({mm_size:.0f} KB), "
+          f"heatmap_positions.json ({hm_size:.0f} KB)")
+
+    # Upload to R2
+    mm_url = hm_url = None
+    try:
+        from ..storage.r2 import upload_to_r2
+        mm_url = upload_to_r2(mm_local, f"{session_id}/minimap_positions.json")
+        hm_url = upload_to_r2(hm_local, f"{session_id}/heatmap_positions.json")
+    except Exception as exc:
+        print(f"[WARN] position JSON R2 upload failed: {exc}")
+
+    return mm_url, hm_url
+
 
 def run_heatmap(session_id: str, session: dict, task_id: str, sm: SessionManager):
     """生成被追踪球员的热力图 PNG（基于 minimap 坐标）"""

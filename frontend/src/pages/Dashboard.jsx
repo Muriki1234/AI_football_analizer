@@ -1,16 +1,16 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
+import { marked } from 'marked';
 import toast from 'react-hot-toast';
 import {
-    HiHome, HiArrowPath, HiChartBar, HiBolt,
-    HiUserGroup, HiMapPin, HiCheckCircle, HiExclamationCircle,
-    HiArrowTrendingUp, HiPlayCircle, HiSparkles,
+    HiHome, HiArrowPath, HiBars3, HiXMark, HiExclamationCircle,
+    HiUserGroup, HiSparkles, HiChartBar, HiMapPin, HiFire,
+    HiArrowTrendingUp, HiPlayCircle, HiBolt,
 } from 'react-icons/hi2';
 import {
     startAnalysis,
     startTracking,
-    queueFeature,
     getSession,
     getSummary,
     listTasks,
@@ -20,18 +20,9 @@ import {
 import { absUrl, API_KEY } from '../services/config';
 import StepNav from '../components/StepNav';
 import VideoTimelineMarkers from '../components/VideoTimelineMarkers';
+import MinimapOverlay from '../components/MinimapOverlay';
+import HeatmapCanvas from '../components/HeatmapCanvas';
 import './Dashboard.css';
-
-const FEATURES = [
-    { key: 'heatmap', label: 'Heatmap', icon: HiMapPin, color: '#e74c3c', type: 'image' },
-    { key: 'speed_chart', label: 'Speed & Distance', icon: HiBolt, color: '#f39c12', type: 'image' },
-    { key: 'possession', label: 'Possession', icon: HiChartBar, color: '#3498db', type: 'image' },
-    { key: 'minimap_replay', label: 'Minimap Replay', icon: HiArrowTrendingUp, color: '#00e59b', type: 'video' },
-    { key: 'full_replay', label: 'Annotated Replay', icon: HiPlayCircle, color: '#6d28d9', type: 'video' },
-    { key: 'sprint_analysis', label: 'Sprint Bursts', icon: HiBolt, color: '#9b59b6', type: 'image', comingSoon: true },
-    { key: 'defensive_line', label: 'Defensive Line', icon: HiUserGroup, color: '#00bcd4', type: 'image', comingSoon: true },
-    { key: 'ai_summary', label: 'AI Summary', icon: HiSparkles, color: '#ec4899', type: 'text' },
-];
 
 const PHASE_LABELS = {
     uploaded: 'Ready to analyze.',
@@ -70,10 +61,6 @@ const STAGE_LABELS = {
     analysis_error: 'Analysis failed.',
 };
 
-const initialFeatures = Object.fromEntries(
-    FEATURES.map((f) => [f.key, { status: 'locked', taskId: null, url: null, result: null, progress: 0 }])
-);
-
 const taskResultUrl = (sessionId, rawUrl) => {
     if (!rawUrl) return null;
     if (/^https?:\/\//i.test(rawUrl)) return rawUrl;
@@ -90,6 +77,92 @@ const taskTextResult = (result) => {
     return result.report_markdown || result.summary || '';
 };
 
+// ── Helpers for the data-analysis panel ────────────────────────────────────
+const StatRow = ({ icon, label, value, sub }) => (
+    <div className="stat-row">
+        <span className="stat-row__icon">{icon}</span>
+        <div className="stat-row__main">
+            <div className="stat-row__value">{value}</div>
+            <div className="stat-row__label">{label}{sub ? <span className="stat-row__sub"> · {sub}</span> : null}</div>
+        </div>
+    </div>
+);
+
+const PossessionBar = ({ team1, team2 }) => {
+    const t1 = Math.max(0, Math.min(100, team1 ?? 0));
+    const t2 = Math.max(0, Math.min(100, team2 ?? 0));
+    return (
+        <div className="poss-bar">
+            <div className="poss-bar__header">
+                <span><span className="poss-dot poss-dot--t1" /> Team 1 · {t1.toFixed(1)}%</span>
+                <span><span className="poss-dot poss-dot--t2" /> Team 2 · {t2.toFixed(1)}%</span>
+            </div>
+            <div className="poss-bar__track">
+                <div className="poss-bar__fill poss-bar__fill--t1" style={{ width: `${t1}%` }} />
+                <div className="poss-bar__fill poss-bar__fill--t2" style={{ width: `${t2}%` }} />
+            </div>
+        </div>
+    );
+};
+
+const DataAnalysisPanel = ({ playerSummary }) => {
+    if (!playerSummary) {
+        return <p className="drawer__empty">Stats will appear once analysis finishes.</p>;
+    }
+    const overall = playerSummary.overall || playerSummary;
+    const segments = playerSummary.by_segment || [];
+
+    return (
+        <div className="drawer__section-body">
+            <div className="stat-grid">
+                <StatRow icon="⚡" label="Max Speed" value={`${overall.max_speed_kmh ?? '-'} km/h`} />
+                <StatRow icon="🏃" label="Avg Speed" value={`${overall.avg_speed_kmh ?? '-'} km/h`} />
+                <StatRow icon="📏" label="Distance" value={`${overall.total_distance_m ?? '-'} m`} />
+                <StatRow icon="⚽" label="Possession Time" value={`${overall.possession_seconds ?? '-'} s`} />
+                <StatRow icon="🔄" label="Possession Switches" value={overall.possession_switches ?? '-'} />
+            </div>
+
+            <h4 className="drawer__subhead">Team Possession</h4>
+            <PossessionBar team1={overall.team1_possession_pct} team2={overall.team2_possession_pct} />
+
+            {segments.length > 0 && (
+                <>
+                    <h4 className="drawer__subhead">By Period</h4>
+                    <table className="seg-table">
+                        <thead>
+                            <tr>
+                                <th>Period</th>
+                                <th>Distance</th>
+                                <th>Avg</th>
+                                <th>Max</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {segments.map((seg, i) => (
+                                <tr key={i}>
+                                    <td>{seg.segment_type?.replace('_', ' ') || `Seg ${i + 1}`}</td>
+                                    <td>{seg.total_distance_m ?? '-'} m</td>
+                                    <td>{seg.avg_speed_kmh ?? '-'} km/h</td>
+                                    <td>{seg.max_speed_kmh ?? '-'} km/h</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </>
+            )}
+        </div>
+    );
+};
+
+// ── Drawer section definition ─────────────────────────────────────────────
+const SECTIONS = [
+    { key: 'data',    label: 'Data Analysis',  icon: HiChartBar },
+    { key: 'ai',      label: 'AI Analysis',    icon: HiSparkles },
+    { key: 'minimap', label: 'Minimap Overlay', icon: HiMapPin },
+    { key: 'heatmap', label: 'Heatmap',         icon: HiFire },
+];
+
+
 export default function Dashboard() {
     const location = useLocation();
     const navigate = useNavigate();
@@ -105,9 +178,13 @@ export default function Dashboard() {
     );
 
     const [session, setSession] = useState(null);
-    const [summary, setSummary] = useState(null);
-    const [features, setFeatures] = useState(initialFeatures);
+    const [aiSummary, setAiSummary] = useState(null);
+    const [fullReplay, setFullReplay] = useState({ status: 'locked', url: null, progress: 0, error: null });
     const [error, setError] = useState(null);
+
+    const [drawerOpen, setDrawerOpen] = useState(false);
+    const [activeSection, setActiveSection] = useState(null);
+    const [minimapOn, setMinimapOn] = useState(false);
 
     const analysisKicked = useRef(false);
     const summaryFetched = useRef(false);
@@ -121,22 +198,13 @@ export default function Dashboard() {
     const isAnalyzing = ['queued', 'analyzing', 'tracking', 'tracking_done'].includes(phase);
     const isDone = phase === 'analysis_done';
     const isFailed = phase === 'analysis_failed' || phase === 'tracking_failed';
-    const hasGeneratingFeature = Object.values(features).some((f) => f.status === 'generating');
 
-    // Cold start window: serverless worker is booting, no real progress yet.
-    // We show a friendlier "Warming up GPU…" label so users don't think the
-    // page is broken during the 20-30s cold-start.
     const isColdStart = isAnalyzing && progress < 5 && !stage;
     const [coldStartSec, setColdStartSec] = useState(0);
     useEffect(() => {
-        if (!isColdStart) {
-            setColdStartSec(0);
-            return;
-        }
+        if (!isColdStart) { setColdStartSec(0); return; }
         const t0 = Date.now();
-        const id = setInterval(() => {
-            setColdStartSec(Math.floor((Date.now() - t0) / 1000));
-        }, 1000);
+        const id = setInterval(() => setColdStartSec(Math.floor((Date.now() - t0) / 1000)), 1000);
         return () => clearInterval(id);
     }, [isColdStart]);
 
@@ -145,52 +213,40 @@ export default function Dashboard() {
         : PHASE_LABELS[phase] || STAGE_LABELS[stage] || stage || phase;
     const stageLabel = STAGE_LABELS[stage] || stage;
 
-    // Smoothed progress: catches up fast when real progress jumps, then
-    // slowly creeps forward (max +5% above real) so the bar always feels
-    // alive between updates. Resets cleanly when phase exits analyzing.
+    // Smoothed progress
     const [smoothProgress, setSmoothProgress] = useState(0);
     useEffect(() => {
-        if (!isAnalyzing) {
-            setSmoothProgress(isDone ? 100 : 0);
-            return;
-        }
+        if (!isAnalyzing) { setSmoothProgress(isDone ? 100 : 0); return; }
         const id = setInterval(() => {
             setSmoothProgress((prev) => {
                 const target = progress;
                 const ceiling = Math.min(target + 5, 99);
-                if (prev < target) {
-                    return Math.min(target, prev + Math.max(1, (target - prev) * 0.3));
-                }
-                if (prev < ceiling) {
-                    return Math.min(ceiling, prev + 0.3);
-                }
+                if (prev < target) return Math.min(target, prev + Math.max(1, (target - prev) * 0.3));
+                if (prev < ceiling) return Math.min(ceiling, prev + 0.3);
                 return prev;
             });
         }, 200);
         return () => clearInterval(id);
     }, [isAnalyzing, isDone, progress]);
-
     const displayProgress = Math.round(smoothProgress);
 
+    // Reset on sessionId change
     useEffect(() => {
         setSession(null);
-        setSummary(null);
-        setFeatures(initialFeatures);
+        setAiSummary(null);
+        setFullReplay({ status: 'locked', url: null, progress: 0, error: null });
         setError(null);
+        setActiveSection(null);
+        setMinimapOn(false);
         analysisKicked.current = false;
         summaryFetched.current = false;
     }, [sessionId]);
 
-    // ── Kick off pipeline on mount ──────────────────────────────────────────
-    // If we have a bbox from the Configure page, run SAMURAI → analysis (server
-    // chains them). Otherwise fall back to plain global analysis (which will
-    // currently fail because run_global_analysis depends on samurai output —
-    // we surface the error so the user knows to pick a player).
+    // Kick off pipeline on mount
     useEffect(() => {
         if (!sessionId) return;
         if (analysisKicked.current) return;
         analysisKicked.current = true;
-
         (async () => {
             try {
                 if (selectedBbox && Array.isArray(selectedBbox) && selectedBbox.length === 4) {
@@ -202,186 +258,102 @@ export default function Dashboard() {
                 }
             } catch (e) {
                 const msg = e?.response?.data?.detail || e?.message || 'Failed to start analysis';
-                setError(msg);
-                toast.error(msg);
+                setError(msg); toast.error(msg);
             }
         })();
     }, [sessionId, selectedBbox, playerName, startWithoutSelection]);
 
-    // ── SSE stream for live session + task updates ──────────────────────────
+    // Subscribe to live updates + initial fetch + polling fallback
     useEffect(() => {
         if (!sessionId) return;
-
         let cancelled = false;
-        getSession(sessionId)
-            .then((s) => {
-                if (!cancelled) setSession(s);
-            })
-            .catch(() => { });
 
-        if (!isFreshAnalysis) {
-            listTasks(sessionId)
-                .then((tasks = []) => {
-                    if (cancelled) return;
-                    setFeatures((prev) => {
-                        const next = { ...prev };
-                        for (const t of tasks) {
-                            const key = t.task_type;
-                            if (!(key in next)) continue;
-                            next[key] = {
-                                ...next[key],
-                                taskId: t.task_id,
-                                status:
-                                    t.status === 'done' ? 'done' :
-                                        t.status === 'failed' ? 'error' :
-                                            t.status === 'running' || t.status === 'queued' ? 'generating' :
-                                                next[key].status,
-                                progress: t.progress || 0,
-                                url: t.url ? taskResultUrl(sessionId, t.url) : next[key].url,
-                                result: t.result ?? next[key].result,
-                                error: t.error ?? next[key].error,
-                            };
-                        }
-                        return next;
+        const applyTasks = (tasks = []) => {
+            for (const t of tasks) {
+                if (t.task_type === 'full_replay') {
+                    setFullReplay({
+                        status: t.status === 'done' ? 'done' : t.status === 'failed' ? 'error' : 'generating',
+                        url: t.url ? taskResultUrl(sessionId, t.url) : null,
+                        progress: t.progress || 0,
+                        error: t.error || null,
                     });
-                })
-                .catch(() => { });
+                }
+                if (t.task_type === 'ai_summary') {
+                    setAiSummary(t.result || null);
+                }
+            }
+        };
+
+        getSession(sessionId).then((s) => { if (!cancelled) setSession(s); }).catch(() => { });
+        if (!isFreshAnalysis) {
+            listTasks(sessionId).then(applyTasks).catch(() => { });
         }
 
-        // Polling fallback — runs every 2s but auto-disables once we've
-        // seen ≥2 Realtime events (proof that Realtime is actually working).
-        // If Realtime never fires, polling keeps going forever as a safety net.
         realtimeEvents.current = 0;
         const pollInterval = setInterval(() => {
-            if (realtimeEvents.current >= 2) {
-                clearInterval(pollInterval);
-                return;
-            }
-            getSession(sessionId)
-                .then((s) => {
-                    if (cancelled || !s) return;
-                    setSession(s);
-                    const terminal = ['analysis_done', 'analysis_failed', 'tracking_failed'];
-                    if (terminal.includes(s.status)) clearInterval(pollInterval);
-                })
-                .catch(() => { });
-            listTasks(sessionId)
-                .then((tasks = []) => {
-                    if (cancelled) return;
-                    setFeatures((prev) => {
-                        const next = { ...prev };
-                        for (const t of tasks) {
-                            const key = t.task_type;
-                            if (!(key in next)) continue;
-                            next[key] = {
-                                ...next[key],
-                                taskId: t.task_id,
-                                status:
-                                    t.status === 'done' ? 'done' :
-                                        t.status === 'failed' ? 'error' :
-                                            t.status === 'running' || t.status === 'queued' ? 'generating' :
-                                                next[key].status,
-                                progress: t.progress || 0,
-                                url: t.url ? taskResultUrl(sessionId, t.url) : next[key].url,
-                                result: t.result ?? next[key].result,
-                                error: t.error ?? next[key].error,
-                            };
-                        }
-                        return next;
-                    });
-                })
-                .catch(() => { });
+            if (realtimeEvents.current >= 2) { clearInterval(pollInterval); return; }
+            getSession(sessionId).then((s) => {
+                if (cancelled || !s) return;
+                setSession(s);
+                if (['analysis_done', 'analysis_failed', 'tracking_failed'].includes(s.status)) {
+                    clearInterval(pollInterval);
+                }
+            }).catch(() => { });
+            listTasks(sessionId).then(applyTasks).catch(() => { });
         }, 2000);
 
         const unsub = subscribeSession(sessionId, {
-            onSession: (s) => {
-                realtimeEvents.current += 1;
-                setSession((prev) => ({ ...prev, ...s }));
-            },
+            onSession: (s) => { realtimeEvents.current += 1; setSession((prev) => ({ ...prev, ...s })); },
             onTask: (t) => {
                 realtimeEvents.current += 1;
-                setFeatures((prev) => {
-                    const key = t.task_type;
-                    if (!(key in prev)) return prev;
-                    const next = { ...prev };
-                    next[key] = {
-                        ...next[key],
-                        taskId: t.task_id,
-                        status:
-                            t.status === 'done' ? 'done' :
-                                t.status === 'failed' ? 'error' :
-                                    t.status === 'running' ? 'generating' : 'generating',
+                if (t.task_type === 'full_replay') {
+                    setFullReplay({
+                        status: t.status === 'done' ? 'done' : t.status === 'failed' ? 'error' : 'generating',
+                        url: t.url ? taskResultUrl(sessionId, t.url) : null,
                         progress: t.progress || 0,
-                        url: t.url ? taskResultUrl(sessionId, t.url) : next[key].url,
-                        result: t.result ?? next[key].result,
-                        error: t.error ?? next[key].error,
-                    };
-                    return next;
-                });
-            },
-            onError: () => {
-                // EventSource auto-reconnects; we just log and let it recover.
-                console.warn('[SSE] disconnected, reconnecting…');
+                        error: t.error || null,
+                    });
+                }
+                if (t.task_type === 'ai_summary') setAiSummary(t.result || null);
             },
         });
-        return () => {
-            cancelled = true;
-            clearInterval(pollInterval);
-            unsub();
-        };
+
+        return () => { cancelled = true; clearInterval(pollInterval); unsub(); };
     }, [sessionId, isFreshAnalysis]);
 
-    // Unlock feature buttons once analysis_done fires.
+    // Fetch summary once analysis_done
     useEffect(() => {
-        if (!isDone) return;
-        setFeatures((prev) => {
-            const next = { ...prev };
-            for (const k of Object.keys(next)) {
-                if (next[k].status === 'locked') next[k] = { ...next[k], status: 'idle' };
-            }
-            return next;
-        });
-        if (!summaryFetched.current) {
-            summaryFetched.current = true;
-            getSummary(sessionId)
-                .then((s) => setSummary(s?.session || s))
-                .catch(() => { });
-        }
+        if (!isDone || summaryFetched.current) return;
+        summaryFetched.current = true;
+        getSummary(sessionId).then((s) => {
+            if (s) setAiSummary((prev) => prev || s);
+        }).catch(() => { });
     }, [isDone, sessionId]);
 
-    const handleGenerate = async (key) => {
-        setFeatures((prev) => ({
-            ...prev,
-            [key]: { ...prev[key], status: 'generating', progress: 0, error: null },
-        }));
-        try {
-            await queueFeature(sessionId, key);
-            // Live updates arrive via SSE; no polling needed.
-        } catch (e) {
-            const msg = e?.response?.data?.detail || e?.message || 'Request failed';
-            setFeatures((prev) => ({
-                ...prev,
-                [key]: { ...prev[key], status: 'error', error: msg },
-            }));
-            toast.error(`${key}: ${msg}`);
-        }
-    };
+    const minimapDataUrl = session?.minimap_data_url || null;
+    const heatmapDataUrl = session?.heatmap_data_url || null;
 
-    const handleDownload = (url, filename) => {
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = filename;
-        link.target = '_blank';
-        link.rel = 'noopener';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+    const playerSummary = session?.player_summary || null;
+
+    const aiMarkdown = useMemo(() => {
+        const txt = taskTextResult(aiSummary);
+        if (!txt) return '';
+        try { return marked.parse(txt); } catch { return txt; }
+    }, [aiSummary]);
+
+    const openSection = (key) => {
+        if (key === 'minimap') {
+            setMinimapOn((v) => !v);
+            return;
+        }
+        setActiveSection((prev) => (prev === key ? null : key));
+        setDrawerOpen(true);
     };
 
     const handleNewPlayer = () => {
         if (!sessionId) return;
-        if (isAnalyzing || hasGeneratingFeature) {
-            toast('Wait for the current analysis or replay generation to finish before choosing another player.');
+        if (isAnalyzing) {
+            toast('Wait for the current analysis to finish.');
             return;
         }
         navigate(`/configure?sessionId=${encodeURIComponent(sessionId)}`, {
@@ -389,52 +361,42 @@ export default function Dashboard() {
         });
     };
 
-    const summaryCards = useMemo(() => {
-        if (!summary) return [];
-        return [
-            summary.max_speed_kmh != null && { label: 'Max Speed', value: `${summary.max_speed_kmh} km/h`, icon: '⚡' },
-            summary.avg_speed_kmh != null && { label: 'Avg Speed', value: `${summary.avg_speed_kmh} km/h`, icon: '🏃' },
-            summary.total_distance_m != null && { label: 'Distance', value: `${summary.total_distance_m} m`, icon: '📏' },
-            summary.possession_seconds != null && { label: 'Possession', value: `${summary.possession_seconds}s`, icon: '⚽' },
-            summary.team1_possession_pct != null && { label: 'Team 1 %', value: `${summary.team1_possession_pct}%`, icon: '🔵' },
-            summary.team2_possession_pct != null && { label: 'Team 2 %', value: `${summary.team2_possession_pct}%`, icon: '🔴' },
-        ].filter(Boolean);
-    }, [summary]);
-
     if (!sessionId) {
         return (
-            <div className="dashboard">
+            <div className="dashboard dashboard--v2">
                 <div className="bg-grid" />
                 <StepNav />
-                <motion.div className="dashboard__error-banner" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                <div className="dashboard__error-banner">
                     <HiExclamationCircle /> No session. Upload a video first.
-                </motion.div>
-                <button className="btn btn-primary" onClick={() => navigate('/upload')}>
-                    Go to Upload
-                </button>
+                </div>
+                <button className="btn btn-primary" onClick={() => navigate('/upload')}>Go to Upload</button>
             </div>
         );
     }
 
     return (
-        <div className="dashboard">
+        <div className="dashboard dashboard--v2">
             <div className="bg-grid" />
-            <StepNav />
 
-            <motion.div className="dashboard__header" initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }}>
-                <div className="dashboard__header-left">
-                    <div>
-                        <h1 className="dashboard__title">Analysis Dashboard</h1>
-                        <p className="dashboard__subtitle">Session {sessionId}</p>
-                    </div>
+            {/* Top bar */}
+            <div className="dashboard-v2__topbar">
+                <button className="btn btn-ghost" onClick={() => navigate('/')}>
+                    <HiHome /> Home
+                </button>
+                <div className="dashboard-v2__title">
+                    <span className="dashboard-v2__title-main">Analysis</span>
+                    <span className="dashboard-v2__title-sub">Session {sessionId.slice(0, 8)}…</span>
                 </div>
-                <div className="dashboard__header-actions">
-                    <button className="btn btn-ghost" onClick={() => navigate('/')}>
-                        <HiHome /> Home
-                    </button>
-                </div>
-            </motion.div>
+                <button
+                    className={`dashboard-v2__hamburger ${drawerOpen ? 'is-active' : ''}`}
+                    onClick={() => setDrawerOpen((v) => !v)}
+                    aria-label="Toggle analysis panel"
+                >
+                    {drawerOpen ? <HiXMark /> : <HiBars3 />}
+                </button>
+            </div>
 
+            {/* Pipeline progress / errors */}
             <AnimatePresence>
                 {(isAnalyzing || !session) && !isFailed && (
                     <motion.div
@@ -457,16 +419,6 @@ export default function Dashboard() {
                         {stage && <p className="pipeline-status__stage">{stageLabel}</p>}
                     </motion.div>
                 )}
-
-                {session && phase === 'uploaded' && !isFreshAnalysis && !isAnalyzing && (
-                    <motion.div className="dashboard__error-banner" initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ background: 'rgba(59, 130, 246, 0.12)', borderColor: 'rgba(59, 130, 246, 0.4)', color: '#3b82f6' }}>
-                        <HiExclamationCircle /> Session uploaded but no player selected yet.
-                        <button className="btn btn-primary" style={{ marginLeft: 'auto', padding: '6px 12px', fontSize: '0.8rem' }} onClick={handleNewPlayer}>
-                            Select Player
-                        </button>
-                    </motion.div>
-                )}
-
                 {(isFailed || error) && (
                     <motion.div className="dashboard__error-banner" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
                         <HiExclamationCircle /> {error || session?.error || 'Pipeline failed. Check server logs.'}
@@ -474,247 +426,146 @@ export default function Dashboard() {
                 )}
             </AnimatePresence>
 
+            {/* Centerpiece: the video */}
+            <main className={`dashboard-v2__stage ${drawerOpen ? 'drawer-open' : ''}`}>
+                <motion.div
+                    className="hero-video-card"
+                    initial={{ opacity: 0, scale: 0.97 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ duration: 0.4 }}
+                >
+                    <div className="hero-video-card__header">
+                        <HiPlayCircle /> <span>Annotated Replay</span>
+                        {fullReplay.status === 'generating' && (
+                            <span className="hero-video-card__pill">Generating · {fullReplay.progress}%</span>
+                        )}
+                    </div>
+
+                    <div className="hero-video-card__body">
+                        {fullReplay.status === 'done' && fullReplay.url ? (
+                            <div className="hero-video-card__player-wrap">
+                                <video
+                                    ref={heroVideoRef}
+                                    src={fullReplay.url}
+                                    controls
+                                    autoPlay
+                                    muted
+                                    loop
+                                    className="hero-video-card__player"
+                                />
+                                <MinimapOverlay
+                                    dataUrl={minimapDataUrl}
+                                    videoRef={heroVideoRef}
+                                    visible={minimapOn}
+                                />
+                            </div>
+                        ) : fullReplay.status === 'generating' ? (
+                            <div className="hero-video-card__placeholder">
+                                <div className="feature-card__spinner" />
+                                <p>Rendering replay… {fullReplay.progress}%</p>
+                            </div>
+                        ) : fullReplay.status === 'error' ? (
+                            <div className="hero-video-card__placeholder">
+                                <p className="feature-card__error">❌ {fullReplay.error || 'Replay generation failed'}</p>
+                            </div>
+                        ) : (
+                            <div className="hero-video-card__placeholder">
+                                <HiPlayCircle style={{ fontSize: 48, opacity: 0.4 }} />
+                                <p>{isAnalyzing ? 'Replay will appear here once analysis finishes…' : 'No replay yet.'}</p>
+                            </div>
+                        )}
+
+                        {fullReplay.status === 'done' && (
+                            <VideoTimelineMarkers
+                                segments={session?.segments}
+                                fps={session?.video_fps}
+                                totalFrames={session?.total_frames}
+                                videoRef={heroVideoRef}
+                            />
+                        )}
+                    </div>
+                </motion.div>
+            </main>
+
+            {/* Side drawer */}
             <AnimatePresence>
-                {summaryCards.length > 0 && (
-                    <motion.div className="dashboard__summary-grid" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-                        {summaryCards.map((s, i) => (
-                            <motion.div
-                                key={s.label}
-                                className="summary-card"
-                                initial={{ opacity: 0, y: 10 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                transition={{ delay: i * 0.05 }}
-                            >
-                                <span className="summary-card__icon">{s.icon}</span>
-                                <div>
-                                    <p className="summary-card__value">{s.value}</p>
-                                    <p className="summary-card__label">{s.label}</p>
-                                </div>
-                            </motion.div>
-                        ))}
-                    </motion.div>
+                {drawerOpen && (
+                    <motion.aside
+                        className="dashboard-v2__drawer"
+                        initial={{ x: '100%' }}
+                        animate={{ x: 0 }}
+                        exit={{ x: '100%' }}
+                        transition={{ type: 'tween', duration: 0.28, ease: 'easeOut' }}
+                    >
+                        <div className="drawer__list">
+                            {SECTIONS.map((s) => {
+                                const Icon = s.icon;
+                                const isMini = s.key === 'minimap';
+                                const isActive = isMini ? minimapOn : activeSection === s.key;
+                                return (
+                                    <div key={s.key} className={`drawer__item ${isActive ? 'is-active' : ''}`}>
+                                        <button className="drawer__item-head" onClick={() => openSection(s.key)}>
+                                            <Icon />
+                                            <span>{s.label}</span>
+                                            {isMini && (
+                                                <span className={`drawer__toggle ${minimapOn ? 'on' : ''}`}>
+                                                    {minimapOn ? 'ON' : 'OFF'}
+                                                </span>
+                                            )}
+                                            {!isMini && (
+                                                <span className="drawer__chev">{isActive ? '▾' : '▸'}</span>
+                                            )}
+                                        </button>
+                                        <AnimatePresence>
+                                            {!isMini && isActive && (
+                                                <motion.div
+                                                    className="drawer__panel"
+                                                    initial={{ height: 0, opacity: 0 }}
+                                                    animate={{ height: 'auto', opacity: 1 }}
+                                                    exit={{ height: 0, opacity: 0 }}
+                                                    transition={{ duration: 0.2 }}
+                                                >
+                                                    {s.key === 'data' && (
+                                                        <DataAnalysisPanel playerSummary={playerSummary} />
+                                                    )}
+                                                    {s.key === 'ai' && (
+                                                        aiMarkdown ? (
+                                                            <div
+                                                                className="markdown-body drawer__section-body"
+                                                                dangerouslySetInnerHTML={{ __html: aiMarkdown }}
+                                                            />
+                                                        ) : isDone ? (
+                                                            <p className="drawer__empty">AI summary is generating…</p>
+                                                        ) : (
+                                                            <p className="drawer__empty">Waiting for analysis to finish…</p>
+                                                        )
+                                                    )}
+                                                    {s.key === 'heatmap' && (
+                                                        <div className="drawer__section-body">
+                                                            <HeatmapCanvas dataUrl={heatmapDataUrl} />
+                                                        </div>
+                                                    )}
+                                                </motion.div>
+                                            )}
+                                        </AnimatePresence>
+                                    </div>
+                                );
+                            })}
+                        </div>
+
+                        <div className="drawer__footer">
+                            <button className="btn btn-secondary" onClick={handleNewPlayer} disabled={isAnalyzing}>
+                                <HiUserGroup /> New Player
+                            </button>
+                            <button className="btn btn-primary" onClick={() => navigate('/upload')}>
+                                <HiArrowPath /> New Video
+                            </button>
+                        </div>
+                    </motion.aside>
                 )}
             </AnimatePresence>
 
-            {/* Hero card: Annotated Replay is the showcase output, give it the
-                full-width spot at the top of the dashboard. */}
-            {(() => {
-                const hero = FEATURES.find((f) => f.key === 'full_replay');
-                if (!hero) return null;
-                const state = features[hero.key];
-                const Icon = hero.icon;
-                return (
-                    <motion.div
-                        className="feature-card feature-card--hero"
-                        initial={{ opacity: 0, scale: 0.96 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                    >
-                        <div
-                            className="feature-card__header"
-                            style={{ borderColor: hero.color }}
-                        >
-                            <Icon style={{ color: hero.color }} />
-                            <span>{hero.label}</span>
-                            {state.status === 'done' && <HiCheckCircle className="feature-card__done-icon" />}
-                        </div>
-                        <div className="feature-card__body">
-                            {state.status === 'locked' && (
-                                <p className="feature-card__hint">Replay will generate automatically after analysis.</p>
-                            )}
-                            {state.status === 'idle' && (
-                                <p className="feature-card__hint">Replay is queued automatically and will appear here.</p>
-                            )}
-                            {state.status === 'generating' && (
-                                <div className="feature-card__loading">
-                                    <div className="feature-card__spinner" />
-                                    <span>Automatically generating replay… {state.progress || 0}%</span>
-                                </div>
-                            )}
-                            {state.status === 'done' && state.url && (
-                                <>
-                                    <video
-                                        ref={heroVideoRef}
-                                        src={state.url}
-                                        controls
-                                        autoPlay
-                                        muted
-                                        loop
-                                        className="feature-card__result-img feature-card__result-img--hero"
-                                    />
-                                    <VideoTimelineMarkers
-                                        segments={session?.segments}
-                                        fps={session?.video_fps}
-                                        totalFrames={session?.total_frames}
-                                        videoRef={heroVideoRef}
-                                    />
-                                </>
-                            )}
-                            {state.status === 'error' && (
-                                <div className="feature-card__error-block">
-                                    <p className="feature-card__error">❌ {state.error}</p>
-                                    <button
-                                        className="btn btn-primary feature-card__btn"
-                                        onClick={() => handleGenerate(hero.key)}
-                                    >
-                                        Retry {hero.label}
-                                    </button>
-                                </div>
-                            )}
-                        </div>
-                        {state.status === 'done' && state.url && (
-                            <button
-                                onClick={() => handleDownload(state.url, `${hero.key}_${sessionId}.mp4`)}
-                                className="btn btn-ghost feature-card__download"
-                                style={{ width: '100%', borderTop: '1px solid #333' }}
-                            >
-                                ↓ Download
-                            </button>
-                        )}
-                    </motion.div>
-                );
-            })()}
-
-            <div className="dashboard__features">
-                {FEATURES.filter((f) => f.key !== 'full_replay').map((feat) => {
-                    const state = features[feat.key];
-                    const Icon = feat.icon;
-                    return (
-                        <motion.div
-                            key={feat.key}
-                            className="feature-card"
-                            initial={{ opacity: 0, scale: 0.96 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                        >
-                            <div
-                                className="feature-card__header"
-                                style={{
-                                    borderColor: feat.color,
-                                    opacity: feat.comingSoon ? 0.55 : 1,
-                                }}
-                            >
-                                <Icon style={{ color: feat.color }} />
-                                <span>{feat.label}</span>
-                                {state.status === 'done' && <HiCheckCircle className="feature-card__done-icon" />}
-                            </div>
-                            <div className="feature-card__body">
-                                {feat.comingSoon ? (
-                                    <div
-                                        style={{
-                                            padding: '1.5rem 1rem',
-                                            textAlign: 'center',
-                                            color: '#94a3b8',
-                                            fontStyle: 'italic',
-                                            background: 'rgba(15,23,42,0.5)',
-                                            borderRadius: 8,
-                                            border: '1px dashed #334155',
-                                        }}
-                                    >
-                                        Feature in development
-                                    </div>
-                                ) : (
-                                    <>
-                                        {state.status === 'locked' && (
-                                            <p className="feature-card__hint">Waiting for analysis to finish…</p>
-                                        )}
-                                        {state.status === 'idle' && (
-                                            <button
-                                                className="btn btn-primary feature-card__btn"
-                                                onClick={() => handleGenerate(feat.key)}
-                                            >
-                                                Generate {feat.label}
-                                            </button>
-                                        )}
-                                        {state.status === 'generating' && (
-                                            <div className="feature-card__loading">
-                                                <div className="feature-card__spinner" />
-                                                <span>Generating… {state.progress || 0}%</span>
-                                            </div>
-                                        )}
-                                        {state.status === 'done' && feat.type === 'image' && state.url && (
-                                            <img src={state.url} alt={feat.label} className="feature-card__result-img" />
-                                        )}
-                                        {state.status === 'done' && feat.type === 'video' && state.url && (
-                                            <video
-                                                src={state.url}
-                                                controls
-                                                autoPlay
-                                                muted
-                                                loop
-                                                className="feature-card__result-img"
-                                            />
-                                        )}
-                                        {state.status === 'done' && feat.type === 'text' && state.result && (
-                                            <div
-                                                style={{
-                                                    padding: '1rem',
-                                                    background: '#0b1220',
-                                                    borderRadius: 8,
-                                                    border: '1px solid #1e293b',
-                                                    color: '#cbd5e1',
-                                                    whiteSpace: 'pre-wrap',
-                                                    fontSize: 14,
-                                                    lineHeight: 1.6,
-                                                    maxHeight: 320,
-                                                    overflow: 'auto',
-                                                }}
-                                            >
-                                                {taskTextResult(state.result) || JSON.stringify(state.result, null, 2)}
-                                            </div>
-                                        )}
-                                        {state.status === 'error' && (
-                                            <div className="feature-card__error-block">
-                                                <p className="feature-card__error">❌ {state.error || 'Generation failed'}</p>
-                                                <button
-                                                    className="btn btn-primary feature-card__btn"
-                                                    onClick={() => handleGenerate(feat.key)}
-                                                >
-                                                    <HiArrowPath /> Retry
-                                                </button>
-                                            </div>
-                                        )}
-                                    </>
-                                )}
-                            </div>
-
-                            {!feat.comingSoon && state.status === 'done' && state.url && feat.type !== 'text' && (
-                                <button
-                                    onClick={() =>
-                                        handleDownload(
-                                            state.url,
-                                            `${feat.key}_${sessionId}.${feat.type === 'video' ? 'mp4' : 'png'}`
-                                        )
-                                    }
-                                    className="btn btn-ghost feature-card__download"
-                                    style={{ width: '100%', borderTop: '1px solid #333', marginTop: '1rem', paddingTop: '1rem' }}
-                                >
-                                    ↓ Download
-                                </button>
-                            )}
-                        </motion.div>
-                    );
-                })}
-            </div>
-
-            <motion.div className="dashboard__actions-footer" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }}>
-                <button className="btn btn-secondary" onClick={() => navigate('/')}>
-                    <HiHome /> Back to Home
-                </button>
-                <button
-                    className="btn btn-secondary"
-                    onClick={handleNewPlayer}
-                    disabled={isAnalyzing || hasGeneratingFeature}
-                    title={
-                        isAnalyzing || hasGeneratingFeature
-                            ? 'Wait for the current analysis or replay generation to finish'
-                            : 'Choose another player from this video'
-                    }
-                >
-                    <HiUserGroup /> New Player
-                </button>
-                <button className="btn btn-primary" onClick={() => navigate('/upload')}>
-                    <HiArrowPath /> New Video
-                </button>
-            </motion.div>
+            <StepNav />
         </div>
     );
 }
