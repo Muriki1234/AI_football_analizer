@@ -1428,113 +1428,318 @@ def _render_minimap_frame_worker(args):
 
 # ── 3e. 全景图合并回放 (Full Replay) ──────────────────────────────────
 
+# Replay rendering tunables. Adjust if RunPod gives you a different CPU count.
+REPLAY_WORKERS = min(4, max(1, (os.cpu_count() or 4)))
+# Downscale anything taller than this before encoding (Plan C). 0 disables.
+REPLAY_MAX_HEIGHT = 1080
+# Below this frame count we skip the multi-process overhead and use the
+# old single-pass path (faster for short clips).
+REPLAY_PARALLEL_THRESHOLD = 240
+
+
+def _render_chunk_to_mp4(args):
+    """
+    Render a contiguous frame range to its own temp mp4. Runs in a worker
+    process so several chunks can be encoded in parallel.
+
+    All arguments are pickle-safe (paths + plain dicts/strings/numbers).
+    The worker reloads tracks.pkl itself to avoid serialising hundreds of MB
+    across the process boundary on every call.
+    """
+    import subprocess as sp_local
+    import pickle as pkl_local
+
+    (start, end, video_path, tracks_cache_path,
+     hex_t1, hex_t2, fps, w, h,
+     yolo_path, output_path, max_height) = args
+
+    # Reload analysis cache in this worker (workers run in parallel, so the
+    # 5-10s of pickle-load happens concurrently across all of them).
+    with open(tracks_cache_path, "rb") as f:
+        data = pkl_local.load(f)
+    tracks = data["tracks"]
+    tracked_bboxes = data["tracked_bboxes"]
+    team_control = data["team_control"]
+
+    tracker_obj = Tracker(yolo_path)
+    team_assigner = TeamAssigner()
+    team_assigner.team_colors = {
+        1: np.array([int(hex_t1[5:7], 16), int(hex_t1[3:5], 16), int(hex_t1[1:3], 16)]),
+        2: np.array([int(hex_t2[5:7], 16), int(hex_t2[3:5], 16), int(hex_t2[1:3], 16)]),
+    }
+    config = SoccerPitchConfiguration() if HAS_SPORTS else None
+
+    # Plan C: downscale if input is taller than max_height. We resize AFTER
+    # rendering at native res because the YOLO bboxes are stored in original
+    # coordinates; rescaling them everywhere would touch every drawing call.
+    # Encoding fewer pixels still helps (~20-30%).
+    out_w, out_h = w, h
+    if max_height and h > max_height:
+        scale = max_height / h
+        out_w = (int(w * scale) // 2) * 2   # libx264 needs even dims
+        out_h = (int(max_height) // 2) * 2
+    do_resize = (out_w, out_h) != (w, h)
+
+    ffmpeg_cmd = [
+        "ffmpeg", "-y",
+        "-f", "rawvideo", "-vcodec", "rawvideo",
+        "-s", f"{out_w}x{out_h}", "-pix_fmt", "bgr24",
+        "-r", str(fps), "-i", "pipe:",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-preset", "veryfast",  # 5-10% smaller speed boost vs the default
+        str(output_path),
+    ]
+
+    cap = cv2.VideoCapture(video_path)
+    if start > 0:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start)
+
+    proc = sp_local.Popen(ffmpeg_cmd, stdin=sp_local.PIPE,
+                           stdout=sp_local.DEVNULL, stderr=sp_local.DEVNULL)
+    rendered_frames = 0
+    try:
+        for i in range(start, end):
+            ret, frame = cap.read()
+            if not ret:
+                frame = np.zeros((h, w, 3), dtype=np.uint8)
+            rargs = (i, frame, tracks, tracked_bboxes, team_control,
+                     team_assigner, tracker_obj, config, hex_t1, hex_t2)
+            _, rendered = _render_single_frame_worker_full(rargs)
+            if do_resize:
+                rendered = cv2.resize(rendered, (out_w, out_h), interpolation=cv2.INTER_AREA)
+            try:
+                proc.stdin.write(rendered.tobytes())
+                rendered_frames += 1
+            except BrokenPipeError:
+                break
+    finally:
+        cap.release()
+        if proc.stdin:
+            try: proc.stdin.close()
+            except Exception: pass
+        proc.wait()
+
+    return {
+        "start": start,
+        "end": end,
+        "rendered": rendered_frames,
+        "path": str(output_path),
+        "rc": proc.returncode,
+        "out_w": out_w,
+        "out_h": out_h,
+    }
+
+
 def run_full_replay(session_id: str, session: dict, task_id: str, sm: SessionManager):
     """
-    生成带有 YOLO 检测框、球员 ID、球权三角、小地图Overlay的全景视频 MP4。
-    流式处理：逐帧读取 → 渲染 → 写入 ffmpeg pipe，内存占用恒定（~1帧）。
+    生成带有 YOLO 检测框、球员 ID、球权三角的全景视频 MP4。
+
+    多进程并行渲染（Plan A）+ 编码前 1080p 上限降采样（Plan C）。
+    用 REPLAY_WORKERS 个 worker 把帧均分成块，每块单独跑 ffmpeg → 临时 mp4，
+    最后 ffmpeg concat demuxer 拼成最终文件。短视频（< REPLAY_PARALLEL_THRESHOLD
+    帧）走老的单进程路径，省掉 worker 启动开销。
     """
     try:
+        import math
         import subprocess as sp
+        from concurrent.futures import ProcessPoolExecutor, as_completed
 
         sm.update_task(session_id, task_id, status="running", progress=5)
 
         data = _load_cache(session)
         tracks, tracked_bboxes = data["tracks"], data["tracked_bboxes"]
-        team_control  = data["team_control"]
-        hex_t1        = data["team_colors_hex"].get(1, "#3498db")
-        hex_t2        = data["team_colors_hex"].get(2, "#e74c3c")
+        hex_t1 = data["team_colors_hex"].get(1, "#3498db")
+        hex_t2 = data["team_colors_hex"].get(2, "#e74c3c")
 
         total_frames = len(tracks["players"])
-        tb_keys = sorted(tracked_bboxes.keys())
-        print(f"[DEBUG REPLAY] tracks_players_len={total_frames}")
-        print(f"[DEBUG REPLAY] tracked_bboxes: count={len(tracked_bboxes)}, range=[{tb_keys[0] if tb_keys else 'N/A'}..{tb_keys[-1] if tb_keys else 'N/A'}]")
+        print(f"[REPLAY] total_frames={total_frames}, "
+              f"tracked_bboxes={len(tracked_bboxes)}")
 
-        sm.update_task(session_id, task_id, progress=10)
-
-        # Prepare helpers (no frame data — lightweight)
-        tracker_obj = Tracker(get_yolo_model_path())
-        team_assigner = TeamAssigner()
-        team_colors = {
-            1: np.array([int(hex_t1[5:7], 16), int(hex_t1[3:5], 16), int(hex_t1[1:3], 16)]),
-            2: np.array([int(hex_t2[5:7], 16), int(hex_t2[3:5], 16), int(hex_t2[1:3], 16)])
-        }
-        team_assigner.team_colors = team_colors
-        config = SoccerPitchConfiguration() if HAS_SPORTS else None
-
-        # Open video for sequential reading (use context manager for safe cleanup)
         fps = float(session.get("video_fps") or 25.0)
-        _vw = int(session.get("video_width")  or 0)
+        _vw = int(session.get("video_width") or 0)
         _vh = int(session.get("video_height") or 0)
 
         with _video_capture(session["video_path"]) as cap:
             w = _vw or int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             h = _vh or int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-            output_path = sm.session_output_dir(session_id) / "full_replay.mp4"
+        output_dir = sm.session_output_dir(session_id)
+        output_path = output_dir / "full_replay.mp4"
 
-            # Start ffmpeg pipe
-            ffmpeg_cmd = [
-                "ffmpeg", "-y",
-                "-f", "rawvideo", "-vcodec", "rawvideo",
-                "-s", f"{w}x{h}", "-pix_fmt", "bgr24",
-                "-r", str(fps), "-i", "pipe:",
-                "-vcodec", "libx264", "-pix_fmt", "yuv420p",
-                "-movflags", "+faststart",   # moov -> 文件头，浏览器秒开
-                str(output_path)
-            ]
-            ff_log = sm.session_output_dir(session_id) / "full_replay_ffmpeg.log"
-            with open(ff_log, "wb") as _errf, \
-                 sp.Popen(ffmpeg_cmd, stdin=sp.PIPE,
-                          stdout=sp.DEVNULL, stderr=_errf) as proc:
-                try:
-                    sm.update_task(session_id, task_id, progress=15)
+        # Decide between single-process and chunked-parallel paths
+        n_workers = REPLAY_WORKERS
+        if total_frames < REPLAY_PARALLEL_THRESHOLD or n_workers <= 1:
+            print(f"[REPLAY] single-process path "
+                  f"(frames={total_frames}, workers_avail={n_workers})")
+            return _render_full_replay_single(
+                session_id, session, task_id, sm,
+                tracks, tracked_bboxes, data["team_control"],
+                hex_t1, hex_t2, fps, w, h, total_frames, output_path,
+            )
 
-                    # Stream: read frame → render → write → discard
-                    for i in range(total_frames):
-                        ret, frame = cap.read()
-                        if not ret:
-                            frame = np.zeros((h, w, 3), dtype=np.uint8)
+        print(f"[REPLAY] parallel rendering: {n_workers} workers × "
+              f"~{math.ceil(total_frames / n_workers)} frames each "
+              f"(downscale: {h}->{REPLAY_MAX_HEIGHT if h > REPLAY_MAX_HEIGHT else h})")
+        sm.update_task(session_id, task_id, progress=10)
 
-                        # Render single frame (same logic as _render_single_frame_worker_full)
-                        args = (i, frame, tracks, tracked_bboxes, team_control,
-                                team_assigner, tracker_obj, config, hex_t1, hex_t2)
-                        _, rendered = _render_single_frame_worker_full(args)
+        # Build chunk arg tuples
+        tracks_cache_path = session.get("tracks_cache_path") or str(output_dir / "tracks.pkl")
+        yolo_path = get_yolo_model_path()
+        chunk_size = math.ceil(total_frames / n_workers)
+        chunk_args = []
+        for ci in range(n_workers):
+            start = ci * chunk_size
+            end = min(start + chunk_size, total_frames)
+            if start >= end:
+                continue
+            chunk_path = output_dir / f"full_replay_chunk_{ci:03d}.mp4"
+            chunk_args.append((
+                start, end, session["video_path"], tracks_cache_path,
+                hex_t1, hex_t2, fps, w, h,
+                yolo_path, str(chunk_path), REPLAY_MAX_HEIGHT,
+            ))
 
-                        try:
-                            proc.stdin.write(rendered.tobytes())
-                        except BrokenPipeError:
-                            # ffmpeg died — stop writing and let the
-                            # post-loop validation surface the real stderr
-                            break
+        # Dispatch to worker pool
+        results = []
+        with ProcessPoolExecutor(max_workers=n_workers) as pool:
+            futures = {pool.submit(_render_chunk_to_mp4, c): c for c in chunk_args}
+            done = 0
+            for fut in as_completed(futures):
+                r = fut.result()
+                if r.get("rc", 0) != 0:
+                    raise RuntimeError(
+                        f"Chunk render failed (rc={r['rc']}, range={r['start']}..{r['end']})"
+                    )
+                results.append(r)
+                done += 1
+                pct = 10 + int(80 * done / len(chunk_args))
+                sm.update_task(session_id, task_id, progress=pct)
 
-                        if i % 60 == 0:
-                            pct = int(15 + (i / total_frames) * 80)
-                            sm.update_task(session_id, task_id, progress=pct)
-                finally:
-                    if proc.stdin:
-                        try: proc.stdin.close()
-                        except Exception: pass
+        # Sort by start frame so concat order is correct
+        results.sort(key=lambda r: r["start"])
 
-        # 校验编码结果：静默失败 (奇数尺寸 / 磁盘满 / 编解码器缺失) 一定要暴露给前端
-        if proc.returncode != 0 or (not output_path.exists()) or output_path.stat().st_size < 1024:
+        # Concat with the demuxer (-c copy is a stream copy, basically instant)
+        sm.update_task(session_id, task_id, progress=92, stage="concat")
+        concat_list = output_dir / "full_replay_concat.txt"
+        with open(concat_list, "w") as cf:
+            for r in results:
+                cf.write(f"file '{Path(r['path']).name}'\n")
+
+        concat_log = output_dir / "full_replay_concat.log"
+        concat_cmd = [
+            "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+            "-i", str(concat_list), "-c", "copy",
+            "-movflags", "+faststart", str(output_path),
+        ]
+        with open(concat_log, "wb") as _errf:
+            crc = sp.run(concat_cmd, cwd=str(output_dir),
+                         stdout=sp.DEVNULL, stderr=_errf).returncode
+        if crc != 0 or not output_path.exists() or output_path.stat().st_size < 1024:
             tail = ""
             try:
-                with open(ff_log, "rb") as _rf:
-                    tail = _rf.read()[-2000:].decode("utf-8", errors="replace")
+                tail = concat_log.read_bytes()[-2000:].decode("utf-8", errors="replace")
             except Exception:
                 pass
             raise RuntimeError(
-                f"FFmpeg full_replay encode failed (rc={proc.returncode}, "
+                f"ffmpeg concat failed (rc={crc}, "
                 f"size={output_path.stat().st_size if output_path.exists() else 0}B). "
                 f"stderr tail:\n{tail}"
             )
 
-        print(f"[MEM] Full replay done — streamed {total_frames} frames, no bulk load")
+        # Clean up intermediate chunk files
+        for r in results:
+            try: Path(r["path"]).unlink()
+            except Exception: pass
+        for p in (concat_list, concat_log):
+            try: p.unlink()
+            except Exception: pass
+
+        rendered_total = sum(r["rendered"] for r in results)
+        print(f"[REPLAY] done — {rendered_total}/{total_frames} frames across "
+              f"{len(results)} chunks, output={output_path.stat().st_size // 1024} KB")
+
+        sm.update_task(session_id, task_id, progress=100)
         _finish_task(sm, session_id, task_id, output_path)
 
     except Exception as exc:
         sm.update_task(session_id, task_id, status="failed", error=str(exc))
         _log_error("full_replay", session_id, exc)
+
+
+def _render_full_replay_single(session_id, session, task_id, sm,
+                                tracks, tracked_bboxes, team_control,
+                                hex_t1, hex_t2, fps, w, h, total_frames, output_path):
+    """Original single-process path. Used for short clips."""
+    import subprocess as sp
+
+    tracker_obj = Tracker(get_yolo_model_path())
+    team_assigner = TeamAssigner()
+    team_assigner.team_colors = {
+        1: np.array([int(hex_t1[5:7], 16), int(hex_t1[3:5], 16), int(hex_t1[1:3], 16)]),
+        2: np.array([int(hex_t2[5:7], 16), int(hex_t2[3:5], 16), int(hex_t2[1:3], 16)]),
+    }
+    config = SoccerPitchConfiguration() if HAS_SPORTS else None
+
+    # Downscale path (Plan C) — even on single-process we benefit from smaller encode
+    out_w, out_h = w, h
+    if REPLAY_MAX_HEIGHT and h > REPLAY_MAX_HEIGHT:
+        scale = REPLAY_MAX_HEIGHT / h
+        out_w = (int(w * scale) // 2) * 2
+        out_h = (int(REPLAY_MAX_HEIGHT) // 2) * 2
+    do_resize = (out_w, out_h) != (w, h)
+
+    with _video_capture(session["video_path"]) as cap:
+        ffmpeg_cmd = [
+            "ffmpeg", "-y",
+            "-f", "rawvideo", "-vcodec", "rawvideo",
+            "-s", f"{out_w}x{out_h}", "-pix_fmt", "bgr24",
+            "-r", str(fps), "-i", "pipe:",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-preset", "veryfast",
+            "-movflags", "+faststart",
+            str(output_path),
+        ]
+        ff_log = sm.session_output_dir(session_id) / "full_replay_ffmpeg.log"
+        with open(ff_log, "wb") as _errf, \
+             sp.Popen(ffmpeg_cmd, stdin=sp.PIPE,
+                      stdout=sp.DEVNULL, stderr=_errf) as proc:
+            try:
+                sm.update_task(session_id, task_id, progress=15)
+                for i in range(total_frames):
+                    ret, frame = cap.read()
+                    if not ret:
+                        frame = np.zeros((h, w, 3), dtype=np.uint8)
+                    args = (i, frame, tracks, tracked_bboxes, team_control,
+                            team_assigner, tracker_obj, config, hex_t1, hex_t2)
+                    _, rendered = _render_single_frame_worker_full(args)
+                    if do_resize:
+                        rendered = cv2.resize(rendered, (out_w, out_h), interpolation=cv2.INTER_AREA)
+                    try:
+                        proc.stdin.write(rendered.tobytes())
+                    except BrokenPipeError:
+                        break
+                    if i % 60 == 0:
+                        pct = int(15 + (i / total_frames) * 80)
+                        sm.update_task(session_id, task_id, progress=pct)
+            finally:
+                if proc.stdin:
+                    try: proc.stdin.close()
+                    except Exception: pass
+
+    if proc.returncode != 0 or not output_path.exists() or output_path.stat().st_size < 1024:
+        tail = ""
+        try:
+            with open(ff_log, "rb") as _rf:
+                tail = _rf.read()[-2000:].decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        raise RuntimeError(
+            f"FFmpeg full_replay encode failed (rc={proc.returncode}, "
+            f"size={output_path.stat().st_size if output_path.exists() else 0}B). "
+            f"stderr tail:\n{tail}"
+        )
+
+    _finish_task(sm, session_id, task_id, output_path)
 
 
 def _draw_ball_marker(frame, ball_cx: int, ball_top_y: int, color):
