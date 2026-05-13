@@ -54,37 +54,41 @@ export default async function handler(req, res) {
 
         const data = await rfRes.json();
 
-        // Roboflow returns boxes in xywh (center). We translate to xyxy (corners)
-        // because that's what the existing Configuration UI expects.
-        const players = (data.predictions || [])
-            .filter((p) => (p.class || '').toLowerCase().includes('player') || (p.class || '').toLowerCase() === '')
-            .map((p, i) => ({
-                id: i + 1,
-                bbox: [
-                    p.x - p.width / 2,
-                    p.y - p.height / 2,
-                    p.x + p.width / 2,
-                    p.y + p.height / 2,
-                ],
-                confidence: p.confidence,
-                class: p.class,
-            }));
+        // The public model emits four classes: player / goalkeeper / referee / ball.
+        // We only want the two outfield-player classes — the referee causes
+        // confusion in the picker, and the ball isn't selectable.
+        const ALLOWED_CLASSES = new Set(['player', 'goalkeeper']);
+        const EXCLUDED_CLASSES = new Set(['referee', 'ball']);
 
-        // If the class filter wiped everything (some model variants don't tag
-        // class names), fall back to all predictions.
-        const result = players.length > 0
-            ? players
-            : (data.predictions || []).map((p, i) => ({
-                id: i + 1,
-                bbox: [
-                    p.x - p.width / 2,
-                    p.y - p.height / 2,
-                    p.x + p.width / 2,
-                    p.y + p.height / 2,
-                ],
-                confidence: p.confidence,
-                class: p.class,
-            }));
+        const toBbox = (p, i) => ({
+            id: i + 1,
+            bbox: [
+                p.x - p.width / 2,
+                p.y - p.height / 2,
+                p.x + p.width / 2,
+                p.y + p.height / 2,
+            ],
+            confidence: p.confidence,
+            class: p.class,
+        });
+
+        const allPreds = data.predictions || [];
+
+        // Primary path: keep only player + goalkeeper.
+        let result = allPreds
+            .filter((p) => ALLOWED_CLASSES.has((p.class || '').toLowerCase()))
+            .map(toBbox);
+
+        // Fallback: if the model variant doesn't tag classes at all, accept the
+        // raw boxes (still rejecting anything explicitly tagged referee/ball).
+        if (result.length === 0) {
+            result = allPreds
+                .filter((p) => !EXCLUDED_CLASSES.has((p.class || '').toLowerCase()))
+                .map(toBbox);
+        }
+
+        // Re-index ids 1..N after filtering
+        result = result.map((p, i) => ({ ...p, id: i + 1 }));
 
         return res.status(200).json({
             players: result,

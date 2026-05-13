@@ -426,6 +426,15 @@ export default function Dashboard() {
         if (aiSummary) setAiGenerating(false);
     }, [aiSummary]);
 
+    // Lock body scroll while the drawer is open so the mouse wheel scrolls
+    // the drawer contents (charts + heatmap), not the page behind it.
+    useEffect(() => {
+        if (!drawerOpen) return;
+        const prev = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        return () => { document.body.style.overflow = prev; };
+    }, [drawerOpen]);
+
     const handleNewPlayer = () => {
         if (!sessionId) return;
         if (isAnalyzing) {

@@ -6,11 +6,16 @@ import { useEffect, useRef, useState } from 'react';
  * Uses an offscreen "intensity" canvas where each position bumps an alpha
  * channel via radial gradients, then maps the intensity to a colour ramp.
  * Pure browser, no external lib.
+ *
+ * Width is taken from the parent container so it never overflows the
+ * (narrow) drawer. Height is derived from the pitch aspect ratio.
  */
-export default function HeatmapCanvas({ dataUrl, width = 520, height = 320 }) {
+export default function HeatmapCanvas({ dataUrl }) {
+    const wrapRef = useRef(null);
     const canvasRef = useRef(null);
     const [data, setData] = useState(null);
     const [err, setErr] = useState(null);
+    const [size, setSize] = useState({ w: 0, h: 0 });
 
     useEffect(() => {
         if (!dataUrl) return;
@@ -22,11 +27,30 @@ export default function HeatmapCanvas({ dataUrl, width = 520, height = 320 }) {
         return () => { cancelled = true; };
     }, [dataUrl]);
 
+    // Observe wrapper size so the canvas matches the drawer width
     useEffect(() => {
-        if (!data || !canvasRef.current) return;
+        if (!wrapRef.current) return;
+        const el = wrapRef.current;
+        const pitchLen = data?.pitch?.length || 12000;
+        const pitchWid = data?.pitch?.width || 7000;
+        const aspect = pitchWid / pitchLen;
+        const ro = new ResizeObserver(([entry]) => {
+            const w = Math.floor(entry.contentRect.width);
+            if (!w) return;
+            const h = Math.floor(w * aspect);
+            setSize({ w, h });
+        });
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, [data]);
+
+    useEffect(() => {
+        if (!data || !canvasRef.current || !size.w) return;
         const canvas = canvasRef.current;
         const ctx = canvas.getContext('2d');
         const dpr = window.devicePixelRatio || 1;
+        const width = size.w;
+        const height = size.h;
         canvas.width = width * dpr;
         canvas.height = height * dpr;
         canvas.style.width = `${width}px`;
@@ -107,9 +131,13 @@ export default function HeatmapCanvas({ dataUrl, width = 520, height = 320 }) {
             px[i + 3] = Math.min(220, a * 1.8);
         }
         ctx.putImageData(img, 0, 0);
-    }, [data, width, height]);
+    }, [data, size]);
 
     if (err) return <div className="heatmap-error">Failed to load heatmap: {err}</div>;
     if (!dataUrl) return <div className="heatmap-error">Heatmap data not yet available.</div>;
-    return <canvas ref={canvasRef} className="heatmap-canvas" />;
+    return (
+        <div ref={wrapRef} className="heatmap-wrap">
+            <canvas ref={canvasRef} className="heatmap-canvas" />
+        </div>
+    );
 }

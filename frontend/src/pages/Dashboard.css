@@ -1091,3 +1091,15 @@
 .dashboard-v2__stage-inner .step-nav {
     margin-bottom: 0;
 }
+
+.heatmap-wrap {
+    width: 100%;
+    display: block;
+}
+.heatmap-canvas {
+    width: 100%;
+    height: auto;
+    display: block;
+    border-radius: 8px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
