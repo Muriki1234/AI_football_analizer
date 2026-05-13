@@ -1342,7 +1342,7 @@ def run_minimap_replay(session_id: str, session: dict, task_id: str, sm: Session
             "-f", "rawvideo", "-vcodec", "rawvideo",
             "-s", f"{mw}x{mh}", "-pix_fmt", "bgr24",
             "-r", str(fps), "-i", "pipe:",
-            "-vcodec", "libx264", "-pix_fmt", "yuv420p",
+            *_h264_encode_args(),
             # +faststart: moov atom 搬到文件头 → 浏览器 <video> 秒开，
             # 不用等整个文件下载完才能寻址。对 tunnel 场景尤其重要。
             "-movflags", "+faststart",
@@ -1437,6 +1437,46 @@ REPLAY_MAX_HEIGHT = 1080
 REPLAY_PARALLEL_THRESHOLD = 240
 
 
+# Plan F: GPU-accelerated h264 encoding via NVENC. Detected once at module
+# import. If the ffmpeg binary wasn't built with nvenc, or there's no NVIDIA
+# GPU visible, we silently fall back to libx264 (CPU).
+def _probe_nvenc() -> bool:
+    try:
+        r = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5,
+        )
+        return b"h264_nvenc" in (r.stdout or b"")
+    except Exception:
+        return False
+
+
+_NVENC_AVAILABLE = _probe_nvenc()
+
+
+def _h264_encode_args() -> list[str]:
+    """ffmpeg encoder flags. GPU (NVENC) if available, else CPU (libx264)."""
+    if _NVENC_AVAILABLE:
+        return [
+            "-c:v", "h264_nvenc",
+            "-preset", "p4",   # p1..p7 = fastest..slowest; p4 = balanced
+            "-tune", "hq",
+            "-rc", "vbr",
+            "-cq", "23",       # constant quality target (≈ libx264 crf 23)
+            "-b:v", "0",       # let -cq drive bitrate
+            "-pix_fmt", "yuv420p",
+        ]
+    return [
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-pix_fmt", "yuv420p",
+    ]
+
+
+print(f"[REPLAY] h264 encoder: "
+      f"{'h264_nvenc (GPU)' if _NVENC_AVAILABLE else 'libx264 (CPU)'}")
+
+
 def _render_chunk_to_mp4(args):
     """
     Render a contiguous frame range to its own temp mp4. Runs in a worker
@@ -1485,8 +1525,7 @@ def _render_chunk_to_mp4(args):
         "-f", "rawvideo", "-vcodec", "rawvideo",
         "-s", f"{out_w}x{out_h}", "-pix_fmt", "bgr24",
         "-r", str(fps), "-i", "pipe:",
-        "-c:v", "libx264", "-pix_fmt", "yuv420p",
-        "-preset", "veryfast",  # 5-10% smaller speed boost vs the default
+        *_h264_encode_args(),
         str(output_path),
     ]
 
@@ -1694,8 +1733,7 @@ def _render_full_replay_single(session_id, session, task_id, sm,
             "-f", "rawvideo", "-vcodec", "rawvideo",
             "-s", f"{out_w}x{out_h}", "-pix_fmt", "bgr24",
             "-r", str(fps), "-i", "pipe:",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p",
-            "-preset", "veryfast",
+            *_h264_encode_args(),
             "-movflags", "+faststart",
             str(output_path),
         ]
