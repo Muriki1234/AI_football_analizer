@@ -807,12 +807,15 @@
 
 .dashboard-v2__drawer {
     position: fixed;
-    top: 0;
+    /* Sit flush below the 72px topbar instead of starting from top:0 with
+       padding-top: that combination + default content-box pushes the
+       footer past the viewport bottom and breaks scrolling. */
+    top: 72px;
     right: 0;
+    bottom: 0;
     width: 33%;
     min-width: 360px;
     max-width: 520px;
-    height: 100vh;
     background: rgba(8, 14, 28, 0.96);
     backdrop-filter: blur(14px);
     border-left: 1px solid rgba(255, 255, 255, 0.08);
@@ -820,7 +823,8 @@
     z-index: 40;
     display: flex;
     flex-direction: column;
-    padding-top: 72px; /* leave room for topbar */
+    box-sizing: border-box;
+    overscroll-behavior: contain;   /* don't bubble wheel to body */
 }
 
 .drawer__list {
