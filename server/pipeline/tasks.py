@@ -546,45 +546,74 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         print(f"[INFO] Streaming pipeline ({total} frames) — RAM-bounded mode")
         _t = _time.perf_counter()
 
-        # 进度回调：YOLO 阶段占 10%→35%（25 个百分点）
-        _yolo_p0, _yolo_range = 10, 25
+        # 进度回调：合并 pass 占 10%→55%（45 个百分点，因为现在涵盖 YOLO+光流+关键点）
+        _merge_p0, _merge_range = 10, 45
 
-        def _yolo_progress(ratio, frames_done, frames_total, eta_sec):
-            pct = int(_yolo_p0 + ratio * _yolo_range)
+        def _merge_progress(ratio, frames_done, frames_total, eta_sec):
+            pct = int(_merge_p0 + ratio * _merge_range)
             eta_str = (f"{int(eta_sec // 60)}m{int(eta_sec % 60):02d}s"
                        if eta_sec > 0 else "?")
             sm.update_status(
                 session_id, "analyzing", progress=pct,
-                stage=f"yolo_detection ({frames_done}/{frames_total} frames, ETA {eta_str})"
+                stage=f"streaming_analysis ({frames_done}/{frames_total} frames, ETA {eta_str})"
             )
 
-        tracks = tracker.get_object_tracks_streamed(
-            video_path, total, progress_callback=_yolo_progress,
-            sample_frame_indices=team_sample_indices,
-            sampled_frames_out=team_sample_frames)
-        tracks["ball"] = tracker.interpolate_ball_positions(tracks["ball"])
-        tracker.add_position_to_tracks(tracks)
-        _bench("yolo_detection", _t)
-        print(f"[INFO] Captured {len(team_sample_frames)}/{len(team_sample_indices)} "
-              "team sample frames during YOLO")
-        _check_memory_and_gc()
+        # Merged streaming pipeline: 1 video read instead of 3, CUDA streams
+        # parallelize YOLO/keypoint, optical flow runs concurrently on CPU.
+        # Set MERGED_STREAMING=0 to fall back to the legacy 3-pass path if a
+        # regression turns up.
+        use_merged = os.environ.get("MERGED_STREAMING", "1") != "0"
 
-        sm.update_status(session_id, "analyzing", progress=35, stage="camera_motion")
-        _t = _time.perf_counter()
-        cam     = CameraMovementEstimator.from_video_path(video_path)
-        cam_mov = cam.get_camera_movement_streamed(video_path, total)
-        cam.add_adjust_positions_to_tracks(tracks, cam_mov)
-        _bench("camera_motion", _t)
-        _check_memory_and_gc()
+        if use_merged:
+            from .analysis_core import run_merged_streaming_pipeline
+            kp = KeypointDetector(kpt_path)
+            cam = CameraMovementEstimator.from_video_path(video_path)
 
-        sm.update_status(session_id, "analyzing", progress=50, stage="keypoint_detection")
-        _t = _time.perf_counter()
-        kp  = KeypointDetector(kpt_path)
-        vt  = ViewTransformer()
-        kps = kp.predict_streamed(video_path, total, cam_movement=cam_mov)
-        vt.add_transformed_position_to_tracks(tracks, kps)
-        vt.interpolate_2d_positions(tracks)
-        _bench("keypoint_detection", _t)
+            tracks, cam_mov, kps = run_merged_streaming_pipeline(
+                video_path, total,
+                tracker=tracker, kpt_detector=kp, cam_estimator=cam,
+                progress_callback=_merge_progress,
+                sample_frame_indices=team_sample_indices,
+                sampled_frames_out=team_sample_frames,
+            )
+            tracks["ball"] = tracker.interpolate_ball_positions(tracks["ball"])
+            tracker.add_position_to_tracks(tracks)
+            cam.add_adjust_positions_to_tracks(tracks, cam_mov)
+            vt = ViewTransformer()
+            vt.add_transformed_position_to_tracks(tracks, kps)
+            vt.interpolate_2d_positions(tracks)
+            _bench("merged_streaming", _t)
+            print(f"[INFO] Captured {len(team_sample_frames)}/{len(team_sample_indices)} "
+                  "team sample frames during merged pipeline")
+        else:
+            print("[INFO] MERGED_STREAMING=0 — using legacy 3-pass pipeline")
+            tracks = tracker.get_object_tracks_streamed(
+                video_path, total, progress_callback=_merge_progress,
+                sample_frame_indices=team_sample_indices,
+                sampled_frames_out=team_sample_frames)
+            tracks["ball"] = tracker.interpolate_ball_positions(tracks["ball"])
+            tracker.add_position_to_tracks(tracks)
+            _bench("yolo_detection", _t)
+            print(f"[INFO] Captured {len(team_sample_frames)}/{len(team_sample_indices)} "
+                  "team sample frames during YOLO")
+            _check_memory_and_gc()
+
+            sm.update_status(session_id, "analyzing", progress=35, stage="camera_motion")
+            _t = _time.perf_counter()
+            cam     = CameraMovementEstimator.from_video_path(video_path)
+            cam_mov = cam.get_camera_movement_streamed(video_path, total)
+            cam.add_adjust_positions_to_tracks(tracks, cam_mov)
+            _bench("camera_motion", _t)
+            _check_memory_and_gc()
+
+            sm.update_status(session_id, "analyzing", progress=50, stage="keypoint_detection")
+            _t = _time.perf_counter()
+            kp  = KeypointDetector(kpt_path)
+            vt  = ViewTransformer()
+            kps = kp.predict_streamed(video_path, total, cam_movement=cam_mov)
+            vt.add_transformed_position_to_tracks(tracks, kps)
+            vt.interpolate_2d_positions(tracks)
+            _bench("keypoint_detection", _t)
         _check_memory_and_gc()
 
         # ── 5. 速度 & 距离 ───────────────────────────────────────────

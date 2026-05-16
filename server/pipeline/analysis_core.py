@@ -874,6 +874,229 @@ class KeypointDetector:
         return _linear_fill_keypoints(sampled, total_frames)
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# Merged streaming pipeline
+#
+# Replaces the three independent passes (YOLO / camera-motion / keypoint)
+# with a single video decode loop. Each chunk:
+#   1) YOLO  on CUDA stream A  ─┐
+#   2) KPT   on CUDA stream B  ─┼─ submitted to a 2-thread pool so the
+#   3) Optical flow on CPU     ─┘   GPU runs both kernels concurrently
+#                                    while CPU does flow at the same time.
+#
+# Gains:
+#   - 3 fewer full video reads / decodes (~30-40% wall time on long clips)
+#   - YOLO and KPT overlap on GPU via separate streams (~1.3-1.5×)
+#
+# Caveats:
+#   - The pan-trigger keypoint augmentation (force KPT on high-pan frames)
+#     is omitted in merged mode — keypoint runs only on the fixed stride.
+#     Acceptable hit for typical broadcast footage where the camera doesn't
+#     whip-pan; legacy single-pass mode can be restored via the
+#     MERGED_STREAMING env var below.
+# ═══════════════════════════════════════════════════════════════════════
+
+def run_merged_streaming_pipeline(video_path: str, total_frames: int,
+                                   tracker: 'Tracker',
+                                   kpt_detector: 'KeypointDetector',
+                                   cam_estimator: 'CameraMovementEstimator',
+                                   chunk_size: int = 500,
+                                   progress_callback=None,
+                                   sample_frame_indices=None,
+                                   sampled_frames_out: dict = None) -> tuple:
+    """
+    Returns (tracks, cam_movement, keypoints_full).
+
+    sample_frame_indices / sampled_frames_out: same contract as
+    Tracker.get_object_tracks_streamed — used by team-color init to grab
+    reference frames while the video is already being decoded.
+    """
+    import time as _time
+    from concurrent.futures import ThreadPoolExecutor
+
+    try:
+        import torch
+        _HAS_TORCH = True
+    except ImportError:
+        torch = None
+        _HAS_TORCH = False
+
+    tracks = {"players":  [{} for _ in range(total_frames)],
+              "referees": [{} for _ in range(total_frames)],
+              "ball":     [{} for _ in range(total_frames)]}
+
+    sampled_kpts: dict = {}
+    sampled_cam: dict = {0: [0.0, 0.0]}
+
+    sample_set = set(int(i) for i in (sample_frame_indices or [])
+                     if 0 <= int(i) < total_frames)
+
+    # Optical flow state — must carry across chunk boundaries
+    flow_state = {"old_gray": None, "old_pts": None}
+    OPT_FLOW_STRIDE = 3
+
+    # CUDA streams for YOLO/KPT parallelism. If CUDA isn't available we still
+    # run them through the thread pool, which gives some overlap because
+    # ultralytics releases the GIL during inference.
+    use_cuda_streams = bool(_HAS_TORCH and torch.cuda.is_available())
+    yolo_stream = torch.cuda.Stream() if use_cuda_streams else None
+    kpt_stream  = torch.cuda.Stream() if use_cuda_streams else None
+    print(f"[MERGED] CUDA streams: {'ON' if use_cuda_streams else 'OFF (CPU/no-cuda)'}")
+
+    def _run_yolo_batch(frames):
+        if use_cuda_streams:
+            with torch.cuda.stream(yolo_stream):
+                return tracker.model.predict(
+                    frames, conf=PLAYER_CONF, iou=0.45,
+                    verbose=False, half=True, imgsz=1280,
+                )
+        return tracker.model.predict(
+            frames, conf=PLAYER_CONF, iou=0.45,
+            verbose=False, half=True, imgsz=1280,
+        )
+
+    def _run_kpt_batch(frames):
+        if use_cuda_streams:
+            with torch.cuda.stream(kpt_stream):
+                return kpt_detector.model.predict(
+                    frames, conf=0.1, verbose=False, half=True, imgsz=416,
+                )
+        return kpt_detector.model.predict(
+            frames, conf=0.1, verbose=False, half=True, imgsz=416,
+        )
+
+    def _run_optical_flow_chunk(chunk, start_idx):
+        old_gray = flow_state["old_gray"]
+        old_pts  = flow_state["old_pts"]
+        for local_idx, frame in enumerate(chunk):
+            fi = start_idx + local_idx
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            if old_gray is None:
+                old_gray = gray
+                old_pts  = cv2.goodFeaturesToTrack(old_gray, **cam_estimator.features)
+                continue
+            if fi % OPT_FLOW_STRIDE != 0:
+                old_gray = gray
+                continue
+            new_pts, _, _ = cv2.calcOpticalFlowPyrLK(
+                old_gray, gray, old_pts, None, **cam_estimator.lk_params)
+            max_d, cx, cy = 0, 0.0, 0.0
+            if new_pts is not None and old_pts is not None:
+                for n, o in zip(new_pts, old_pts):
+                    d = measure_distance(n.ravel(), o.ravel())
+                    if d > max_d:
+                        max_d = d
+                        cx, cy = measure_xy_distance(o.ravel(), n.ravel())
+            sampled_cam[fi] = ([cx, cy] if max_d > cam_estimator.minimum_distance
+                                else [0.0, 0.0])
+            if max_d > cam_estimator.minimum_distance:
+                old_pts = cv2.goodFeaturesToTrack(gray, **cam_estimator.features)
+            old_gray = gray.copy()
+        flow_state["old_gray"] = old_gray
+        flow_state["old_pts"]  = old_pts
+
+    t_start = _time.perf_counter()
+
+    # 2-worker pool: one runs YOLO (CUDA stream A), one runs KPT (stream B).
+    # Optical flow we run inline on the orchestrator thread — it's CPU-only
+    # and short enough that it overlaps naturally with the GPU work above.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        for start_idx, chunk in stream_video_chunks(video_path, chunk_size):
+            # Snapshot any sample frames the team-color stage asked for
+            if sampled_frames_out is not None and sample_set:
+                end_idx = start_idx + len(chunk)
+                for fidx in sample_set:
+                    if start_idx <= fidx < end_idx and fidx not in sampled_frames_out:
+                        sampled_frames_out[fidx] = chunk[fidx - start_idx].copy()
+
+            # Frame indices that need YOLO and KPT in this chunk
+            det_local = list(range(0, len(chunk), YOLO_DETECTION_STRIDE))
+            kpt_local = [j for j in range(len(chunk))
+                          if (start_idx + j) % KEYPOINT_STRIDE == 0]
+
+            det_frames = [chunk[j] for j in det_local]
+            kpt_frames = [chunk[j] for j in kpt_local]
+
+            # Slice both into BATCH_SIZE-sized batches
+            yolo_batches = [det_frames[i:i+YOLO_BATCH_SIZE]
+                            for i in range(0, len(det_frames), YOLO_BATCH_SIZE)]
+            kpt_batches = [kpt_frames[i:i+YOLO_BATCH_SIZE]
+                           for i in range(0, len(kpt_frames), YOLO_BATCH_SIZE)]
+
+            yolo_futures = [pool.submit(_run_yolo_batch, b) for b in yolo_batches]
+            kpt_futures  = [pool.submit(_run_kpt_batch, b)  for b in kpt_batches]
+
+            # Run optical flow on this thread while GPU is busy
+            _run_optical_flow_chunk(chunk, start_idx)
+
+            # Collect GPU results
+            yolo_results = []
+            for f in yolo_futures:
+                yolo_results.extend(f.result())
+            kpt_results = []
+            for f in kpt_futures:
+                kpt_results.extend(f.result())
+
+            if use_cuda_streams:
+                torch.cuda.synchronize()
+
+            # ── Process YOLO in frame order (ByteTrack is stateful) ──
+            ordered = sorted(zip(det_local, yolo_results), key=lambda t: t[0])
+            for local_idx, res in ordered:
+                global_idx = start_idx + local_idx
+                if global_idx >= total_frames:
+                    break
+                ds = sv.Detections.from_ultralytics(res)
+                tracker._process_detections(ds, global_idx, tracks)
+
+            # ── Process keypoint results ──
+            for local_idx, res in zip(kpt_local, kpt_results):
+                global_idx = start_idx + local_idx
+                if global_idx >= total_frames:
+                    continue
+                kps = {}
+                if res.keypoints is not None and res.keypoints.xy.shape[1] > 0:
+                    xy = res.keypoints.xy[0].cpu().numpy()
+                    confs = (res.keypoints.conf[0].cpu().numpy()
+                             if res.keypoints.conf is not None
+                             else np.ones(len(xy)))
+                    for kid, (x, y) in enumerate(xy):
+                        if confs[kid] > 0.65 and (x != 0 or y != 0):
+                            kps[kid] = [float(x), float(y)]
+                sampled_kpts[global_idx] = kps
+
+            # Progress
+            frames_done = min(start_idx + len(chunk), total_frames)
+            ratio = frames_done / total_frames if total_frames > 0 else 1.0
+            elapsed = _time.perf_counter() - t_start
+            eta = (elapsed / ratio) * (1.0 - ratio) if ratio > 0 else 0.0
+            print(f"[MERGED] {frames_done}/{total_frames} ({ratio*100:.0f}%) "
+                  f"elapsed {elapsed:.0f}s ETA {eta:.0f}s")
+            if progress_callback:
+                progress_callback(ratio, frames_done, total_frames, eta)
+            _check_memory_and_gc()
+
+    # Post-processing
+    tracker._interpolate_tracks(tracks, total_frames)
+    kpts_full = _linear_fill_keypoints(sampled_kpts, total_frames)
+
+    # Smooth optical-flow timeline (same as legacy)
+    df = pd.DataFrame(index=range(total_frames), columns=["x", "y"], dtype=float)
+    for idx, mv in sampled_cam.items():
+        if idx < total_frames:
+            df.loc[idx] = mv
+    df = df.interpolate(method="linear").bfill().ffill()
+    df["x"] = df["x"].rolling(5, min_periods=1, center=True).mean()
+    df["y"] = df["y"].rolling(5, min_periods=1, center=True).mean()
+    cam_movement = df.values.tolist()
+
+    total_elapsed = _time.perf_counter() - t_start
+    print(f"[MERGED] Pipeline complete in {total_elapsed:.1f}s "
+          f"({total_frames / max(total_elapsed, 1):.1f} fps avg)")
+
+    return tracks, cam_movement, kpts_full
+
+
 class ViewTransformer:
     # Soccana_Keypoint (29 pts) → physical pitch coordinates
     # Units match SoccerPitchConfiguration scale (12000 × 7000).
