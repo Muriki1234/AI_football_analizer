@@ -938,10 +938,16 @@ def run_merged_streaming_pipeline(video_path: str, total_frames: int,
     # CUDA streams for YOLO/KPT parallelism. If CUDA isn't available we still
     # run them through the thread pool, which gives some overlap because
     # ultralytics releases the GIL during inference.
-    use_cuda_streams = bool(_HAS_TORCH and torch.cuda.is_available())
+    # Set DISABLE_CUDA_STREAMS=1 to disable — useful if a future ultralytics
+    # release ever breaks custom-stream support and we need a quick fallback
+    # without rebuilding the image.
+    streams_disabled = os.environ.get("DISABLE_CUDA_STREAMS", "0") == "1"
+    use_cuda_streams = (bool(_HAS_TORCH and torch.cuda.is_available())
+                        and not streams_disabled)
     yolo_stream = torch.cuda.Stream() if use_cuda_streams else None
     kpt_stream  = torch.cuda.Stream() if use_cuda_streams else None
-    print(f"[MERGED] CUDA streams: {'ON' if use_cuda_streams else 'OFF (CPU/no-cuda)'}")
+    print(f"[MERGED] CUDA streams: "
+          f"{'ON' if use_cuda_streams else ('OFF (disabled by env)' if streams_disabled else 'OFF (CPU/no-cuda)')}")
 
     def _run_yolo_batch(frames):
         if use_cuda_streams:

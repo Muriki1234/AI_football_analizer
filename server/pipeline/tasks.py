@@ -564,29 +564,47 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         # regression turns up.
         use_merged = os.environ.get("MERGED_STREAMING", "1") != "0"
 
+        # Merged path may fail (e.g. ultralytics+CUDA-streams compat). On any
+        # exception, log the traceback so we can debug, then fall back to the
+        # legacy 3-pass path so the user's analysis still completes.
+        merged_ok = False
         if use_merged:
             from .analysis_core import run_merged_streaming_pipeline
-            kp = KeypointDetector(kpt_path)
-            cam = CameraMovementEstimator.from_video_path(video_path)
+            try:
+                kp = KeypointDetector(kpt_path)
+                cam = CameraMovementEstimator.from_video_path(video_path)
 
-            tracks, cam_mov, kps = run_merged_streaming_pipeline(
-                video_path, total,
-                tracker=tracker, kpt_detector=kp, cam_estimator=cam,
-                progress_callback=_merge_progress,
-                sample_frame_indices=team_sample_indices,
-                sampled_frames_out=team_sample_frames,
-            )
-            tracks["ball"] = tracker.interpolate_ball_positions(tracks["ball"])
-            tracker.add_position_to_tracks(tracks)
-            cam.add_adjust_positions_to_tracks(tracks, cam_mov)
-            vt = ViewTransformer()
-            vt.add_transformed_position_to_tracks(tracks, kps)
-            vt.interpolate_2d_positions(tracks)
-            _bench("merged_streaming", _t)
-            print(f"[INFO] Captured {len(team_sample_frames)}/{len(team_sample_indices)} "
-                  "team sample frames during merged pipeline")
-        else:
-            print("[INFO] MERGED_STREAMING=0 — using legacy 3-pass pipeline")
+                tracks, cam_mov, kps = run_merged_streaming_pipeline(
+                    video_path, total,
+                    tracker=tracker, kpt_detector=kp, cam_estimator=cam,
+                    progress_callback=_merge_progress,
+                    sample_frame_indices=team_sample_indices,
+                    sampled_frames_out=team_sample_frames,
+                )
+                tracks["ball"] = tracker.interpolate_ball_positions(tracks["ball"])
+                tracker.add_position_to_tracks(tracks)
+                cam.add_adjust_positions_to_tracks(tracks, cam_mov)
+                vt = ViewTransformer()
+                vt.add_transformed_position_to_tracks(tracks, kps)
+                vt.interpolate_2d_positions(tracks)
+                _bench("merged_streaming", _t)
+                print(f"[INFO] Captured {len(team_sample_frames)}/{len(team_sample_indices)} "
+                      "team sample frames during merged pipeline")
+                merged_ok = True
+            except Exception as merged_exc:
+                import sys
+                print(f"[MERGED] pipeline crashed: {merged_exc!r}", flush=True)
+                traceback.print_exc(file=sys.stderr)
+                sys.stderr.flush()
+                print("[MERGED] falling back to legacy 3-pass path", flush=True)
+                # Reset team-color sample dict — the merged path may have
+                # partially filled it before crashing
+                team_sample_frames.clear()
+                _t = _time.perf_counter()
+
+        if not use_merged or not merged_ok:
+            reason = "MERGED_STREAMING=0" if not use_merged else "merged path failed"
+            print(f"[INFO] Using legacy 3-pass pipeline ({reason})")
             tracks = tracker.get_object_tracks_streamed(
                 video_path, total, progress_callback=_merge_progress,
                 sample_frame_indices=team_sample_indices,
