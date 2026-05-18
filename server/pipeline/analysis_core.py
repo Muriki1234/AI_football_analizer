@@ -887,13 +887,13 @@ class KeypointDetector:
 # Gains:
 #   - 3 fewer full video reads / decodes (~30-40% wall time on long clips)
 #   - YOLO and KPT overlap on GPU via separate streams (~1.3-1.5×)
+#   - Pan-trigger keypoint augmentation preserved (parity with legacy):
+#     after each chunk's optical flow finishes, any sampled frame with
+#     motion > _PAN_TRIGGER_PX gets an extra keypoint detection.
 #
-# Caveats:
-#   - The pan-trigger keypoint augmentation (force KPT on high-pan frames)
-#     is omitted in merged mode — keypoint runs only on the fixed stride.
-#     Acceptable hit for typical broadcast footage where the camera doesn't
-#     whip-pan; legacy single-pass mode can be restored via the
-#     MERGED_STREAMING env var below.
+# Knobs:
+#   - MERGED_STREAMING=0 falls back to the legacy 3-pass path if a
+#     regression is observed.
 # ═══════════════════════════════════════════════════════════════════════
 
 def run_merged_streaming_pipeline(video_path: str, total_frames: int,
@@ -1009,25 +1009,39 @@ def run_merged_streaming_pipeline(video_path: str, total_frames: int,
                     if start_idx <= fidx < end_idx and fidx not in sampled_frames_out:
                         sampled_frames_out[fidx] = chunk[fidx - start_idx].copy()
 
-            # Frame indices that need YOLO and KPT in this chunk
+            # YOLO frame indices (stride 3) — submit first, GPU starts working
+            # while we compute optical flow on CPU.
             det_local = list(range(0, len(chunk), YOLO_DETECTION_STRIDE))
-            kpt_local = [j for j in range(len(chunk))
-                          if (start_idx + j) % KEYPOINT_STRIDE == 0]
-
             det_frames = [chunk[j] for j in det_local]
-            kpt_frames = [chunk[j] for j in kpt_local]
-
-            # Slice both into BATCH_SIZE-sized batches
             yolo_batches = [det_frames[i:i+YOLO_BATCH_SIZE]
                             for i in range(0, len(det_frames), YOLO_BATCH_SIZE)]
+            yolo_futures = [pool.submit(_run_yolo_batch, b) for b in yolo_batches]
+
+            # Run optical flow on this thread while GPU is busy with YOLO.
+            # We need flow results to decide pan-trigger keypoint frames, so
+            # KPT submission has to wait for flow to finish — but flow is CPU,
+            # so it overlaps with YOLO's GPU time and adds little wall-clock.
+            _run_optical_flow_chunk(chunk, start_idx)
+
+            # Pan-trigger augmentation (parity with legacy single-pass path):
+            # any sampled-flow frame whose motion magnitude exceeds the
+            # pan threshold gets an extra keypoint detection, even if it's
+            # off the regular KEYPOINT_STRIDE schedule. Prevents homography
+            # drift during whip-pans.
+            kpt_local_set = {j for j in range(len(chunk))
+                              if (start_idx + j) % KEYPOINT_STRIDE == 0}
+            pan_thresh_sq = kpt_detector._PAN_TRIGGER_PX ** 2
+            for j in range(len(chunk)):
+                fi = start_idx + j
+                mv = sampled_cam.get(fi)
+                if mv and (mv[0] * mv[0] + mv[1] * mv[1]) > pan_thresh_sq:
+                    kpt_local_set.add(j)
+
+            kpt_local = sorted(kpt_local_set)
+            kpt_frames = [chunk[j] for j in kpt_local]
             kpt_batches = [kpt_frames[i:i+YOLO_BATCH_SIZE]
                            for i in range(0, len(kpt_frames), YOLO_BATCH_SIZE)]
-
-            yolo_futures = [pool.submit(_run_yolo_batch, b) for b in yolo_batches]
-            kpt_futures  = [pool.submit(_run_kpt_batch, b)  for b in kpt_batches]
-
-            # Run optical flow on this thread while GPU is busy
-            _run_optical_flow_chunk(chunk, start_idx)
+            kpt_futures = [pool.submit(_run_kpt_batch, b) for b in kpt_batches]
 
             # Collect GPU results
             yolo_results = []

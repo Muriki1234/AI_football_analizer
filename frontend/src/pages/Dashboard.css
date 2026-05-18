@@ -829,7 +829,12 @@
 
 .drawer__list {
     flex: 1 1 auto;
+    /* min-height:0 is the classic flexbox-overflow gotcha — without it the
+       flex child grows to fit its content and overflow:auto never engages,
+       so the scrollbar never appears. */
+    min-height: 0;
     overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
     padding: 1rem 0.9rem;
     display: flex;
     flex-direction: column;
