@@ -825,6 +825,20 @@
     flex-direction: column;
     box-sizing: border-box;
     overscroll-behavior: contain;   /* don't bubble wheel to body */
+    /* Force a fresh stacking context + GPU layer for the drawer. Without
+       this, some ancestor's filter/transform can promote the drawer to
+       an absolute (rather than viewport-fixed) position, which we observed
+       as "drawer looks frozen / unclickable" on certain pages. */
+    will-change: transform;
+    pointer-events: auto;
+    contain: layout;
+}
+
+/* Scroll container inside the drawer must explicitly receive wheel/touch
+   events. Without pointer-events:auto here, framer-motion's transformed
+   parent has been observed to swallow scroll input on Chrome. */
+.drawer__list {
+    pointer-events: auto;
 }
 
 .drawer__list {

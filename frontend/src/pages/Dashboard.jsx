@@ -426,14 +426,10 @@ export default function Dashboard() {
         if (aiSummary) setAiGenerating(false);
     }, [aiSummary]);
 
-    // Lock body scroll while the drawer is open so the mouse wheel scrolls
-    // the drawer contents (charts + heatmap), not the page behind it.
-    useEffect(() => {
-        if (!drawerOpen) return;
-        const prev = document.body.style.overflow;
-        document.body.style.overflow = 'hidden';
-        return () => { document.body.style.overflow = prev; };
-    }, [drawerOpen]);
+    // (We used to lock body scroll while the drawer was open — turns out
+    // that caused the drawer itself to feel frozen in some browser combos.
+    // The drawer now uses overscroll-behavior: contain + its own scroll
+    // container, which is enough to keep the wheel inside the drawer.)
 
     const handleNewPlayer = () => {
         if (!sessionId) return;
