@@ -949,6 +949,25 @@ def run_merged_streaming_pipeline(video_path: str, total_frames: int,
     print(f"[MERGED] CUDA streams: "
           f"{'ON' if use_cuda_streams else ('OFF (disabled by env)' if streams_disabled else 'OFF (CPU/no-cuda)')}")
 
+    # ── Warm up both models on the main thread BEFORE the thread pool ───
+    # Ultralytics does lazy init on first predict(): it fuses Conv+BN by
+    # calling delattr(module, "bn"). If two threads hit this lazy path
+    # concurrently, the second one crashes with `AttributeError: bn` (the
+    # first thread already deleted the attribute). Forcing one predict()
+    # on each model up front makes the model "warm" (fused, allocated),
+    # so the pool can safely call .predict from multiple threads after.
+    print("[MERGED] Warming up YOLO + keypoint models (avoids fuse() race)...")
+    _warmup = np.zeros((480, 640, 3), dtype=np.uint8)
+    try:
+        tracker.model.predict([_warmup], conf=PLAYER_CONF, iou=0.45,
+                              verbose=False, half=True, imgsz=1280)
+        kpt_detector.model.predict([_warmup], conf=0.1,
+                                    verbose=False, half=True, imgsz=416)
+    except Exception as _exc:
+        # If warmup itself fails, fall through — the chunk loop will surface
+        # the real error with a proper traceback via tasks.py's wrapper.
+        print(f"[MERGED] warmup raised {_exc!r} — continuing anyway")
+
     def _run_yolo_batch(frames):
         if use_cuda_streams:
             with torch.cuda.stream(yolo_stream):
