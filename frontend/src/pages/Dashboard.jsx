@@ -15,6 +15,7 @@ import {
 import {
     startAnalysis,
     startTracking,
+    startTrackingMulti,
     queueFeature,
     getSession,
     getSummary,
@@ -238,10 +239,12 @@ export default function Dashboard() {
     const query = new URLSearchParams(location.search);
     const sessionId = location.state?.sessionId || location.state?.videoId || query.get('sessionId');
     const selectedBbox = location.state?.selectedBbox || null;
+    const multiSegments = location.state?.multiSegments || null;
     const playerName = location.state?.playerName || null;
     const startWithoutSelection = location.state?.startAnalysis === true;
     const isFreshAnalysis = Boolean(
         (selectedBbox && Array.isArray(selectedBbox) && selectedBbox.length === 4) ||
+        (multiSegments && multiSegments.length > 0) ||
         startWithoutSelection
     );
 
@@ -317,7 +320,15 @@ export default function Dashboard() {
         analysisKicked.current = true;
         (async () => {
             try {
-                if (selectedBbox && Array.isArray(selectedBbox) && selectedBbox.length === 4) {
+                if (multiSegments && multiSegments.length > 0) {
+                    // Multi-segment path: bboxes already in {x1,y1,x2,y2} form
+                    const segments = multiSegments.map((seg) => ({
+                        frame: seg.frame,
+                        bbox: seg.bbox,
+                    }));
+                    await startTrackingMulti(sessionId, segments);
+                    toast.success(`Tracking across ${segments.length} segments in parallel…`);
+                } else if (selectedBbox && Array.isArray(selectedBbox) && selectedBbox.length === 4) {
                     const [x1, y1, x2, y2] = selectedBbox;
                     await startTracking(sessionId, { x1, y1, x2, y2 }, 0);
                     if (playerName) toast.success(`Tracking ${playerName}…`);
@@ -329,7 +340,7 @@ export default function Dashboard() {
                 setError(msg); toast.error(msg);
             }
         })();
-    }, [sessionId, selectedBbox, playerName, startWithoutSelection]);
+    }, [sessionId, selectedBbox, multiSegments, playerName, startWithoutSelection]);
 
     // Subscribe to live updates + initial fetch + polling fallback
     useEffect(() => {

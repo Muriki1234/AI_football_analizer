@@ -165,38 +165,124 @@ def _action_detect_frame(session_id: str, s: dict, payload: dict, sm: SessionMan
     }
 
 
-def _action_track(session_id: str, s: dict, payload: dict, sm: SessionManager) -> dict:
-    """SAMURAI tracking → full analysis → auto-generate replay."""
+def _parse_segments(payload: dict, total_frames_hint: int = 1500) -> list[dict]:
+    """
+    Normalize either:
+      - single bbox (legacy): payload["bbox"] = {x1,y1,x2,y2} or [...]
+      - segments array (new): payload["segments"] = [{frame, bbox}, ...]
+    into the segments list shape that run_samurai_tracking_multi expects:
+      [{"start_frame": int, "end_frame": int, "bbox": {x,y,w,h}}, ...]
+    """
+    segments_in = payload.get("segments")
+    if segments_in:
+        out = []
+        for seg in segments_in:
+            bb = seg.get("bbox", {})
+            if isinstance(bb, dict):
+                x1 = float(bb.get("x1", bb.get("x", 0)))
+                y1 = float(bb.get("y1", bb.get("y", 0)))
+                x2 = float(bb.get("x2", bb.get("x", 0) + bb.get("w", 0)))
+                y2 = float(bb.get("y2", bb.get("y", 0) + bb.get("h", 0)))
+            elif isinstance(bb, (list, tuple)) and len(bb) == 4:
+                x1, y1, x2, y2 = [float(v) for v in bb]
+            else:
+                continue
+            out.append({
+                "start_frame": int(seg.get("frame", 0)),
+                "bbox": {"x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1},
+            })
+        out.sort(key=lambda s_: s_["start_frame"])
+        # Fill in end_frame from the next segment's start, last one ends at video end
+        for i, s_ in enumerate(out):
+            s_["end_frame"] = (out[i + 1]["start_frame"]
+                                if i + 1 < len(out) else total_frames_hint)
+        return out
+
+    # Legacy single-bbox path
     bbox_raw = payload.get("bbox", {})
     frame = int(payload.get("frame", 0))
-
     if isinstance(bbox_raw, dict):
-        x1 = float(bbox_raw.get("x1", 0))
-        y1 = float(bbox_raw.get("y1", 0))
-        x2 = float(bbox_raw.get("x2", 0))
-        y2 = float(bbox_raw.get("y2", 0))
+        x1 = float(bbox_raw.get("x1", 0)); y1 = float(bbox_raw.get("y1", 0))
+        x2 = float(bbox_raw.get("x2", 0)); y2 = float(bbox_raw.get("y2", 0))
     elif isinstance(bbox_raw, (list, tuple)) and len(bbox_raw) == 4:
         x1, y1, x2, y2 = [float(v) for v in bbox_raw]
     else:
-        return {"error": "bbox must be {x1,y1,x2,y2} or [x1,y1,x2,y2]"}
-
-    player_bbox = {
-        "x": x1, "y": y1,
-        "w": x2 - x1, "h": y2 - y1,
-        "frame": frame,
-    }
-    s_merged = {
-        **s,
-        "selected_bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
+        return []
+    return [{
         "start_frame": frame,
-    }
+        "end_frame": total_frames_hint,
+        "bbox": {"x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1},
+    }]
 
-    pipeline_tasks.run_samurai_tracking(session_id, s_merged, player_bbox, sm)
-    s_after = sm.get_session(session_id) or {}
-    if s_after.get("status") != "tracking_done":
-        return {"error": f"Tracking failed: {s_after.get('error', 'unknown')}"}
 
-    pipeline_tasks.run_global_analysis(session_id, s_after, sm)
+def _action_track(session_id: str, s: dict, payload: dict, sm: SessionManager) -> dict:
+    """
+    SAMURAI tracking (multi-segment, parallel) + global analysis (concurrent
+    on main thread) → auto-generate replay.
+
+    The two GPU jobs run in parallel — SAMURAI on extracted JPGs via
+    subprocesses, the analysis on the original video via the main process.
+    They only sync up right before _compute_player_summary (which needs both).
+    """
+    import threading
+
+    # Try to probe total_frames so we can default the last segment's end_frame.
+    total_frames_hint = 1500
+    video_path_local = s.get("video_path") or ""
+    if video_path_local:
+        try:
+            import cv2 as _cv2  # noqa: WPS433 (local import for cold-start speed)
+            cap = _cv2.VideoCapture(video_path_local)
+            t = int(cap.get(_cv2.CAP_PROP_FRAME_COUNT))
+            cap.release()
+            if t > 0:
+                total_frames_hint = t
+        except Exception:
+            pass
+
+    segments = _parse_segments(payload, total_frames_hint=total_frames_hint)
+    if not segments:
+        return {"error": "Provide either bbox+frame or segments=[{frame,bbox},...]"}
+
+    s_merged = {**s, "start_frame": segments[0]["start_frame"]}
+    # Pre-write the expected samurai cache path so run_global_analysis can
+    # find it later (it polls for the file's existence).
+    samurai_cache_path = str(sm.session_output_dir(session_id) / "samurai_tracking.pkl")
+    sm.update_status(session_id, "tracking", progress=1,
+                     stage="samurai_multi_pending",
+                     samurai_cache_path=samurai_cache_path)
+
+    # Refresh session so it includes samurai_cache_path
+    s_merged = sm.get_session(session_id) or s_merged
+
+    print(f"[TRACK] launching SAMURAI ({len(segments)} segment(s)) || "
+          f"merged analysis in parallel")
+
+    samurai_err: dict = {}
+    def _samurai_worker():
+        try:
+            pipeline_tasks.run_samurai_tracking_multi(
+                session_id, s_merged, segments, sm
+            )
+        except Exception as e:
+            samurai_err["exc"] = e
+            log.exception("SAMURAI multi-segment failed")
+
+    samurai_thread = threading.Thread(target=_samurai_worker, daemon=True)
+    samurai_thread.start()
+
+    # Run analysis on this thread, concurrently with SAMURAI subprocesses.
+    # run_global_analysis polls for samurai_tracking.pkl right before the
+    # summary step, so we don't need to coordinate further here.
+    try:
+        pipeline_tasks.run_global_analysis(session_id, s_merged, sm)
+    finally:
+        # Ensure SAMURAI has finished one way or another before we return
+        samurai_thread.join(timeout=900)  # 15 min upper bound
+
+    if samurai_err:
+        return {"error": f"SAMURAI failed: {samurai_err['exc']}"}
+
     _run_auto_full_replay(session_id, sm)
     return {"ok": True, "session": sm.get_session(session_id)}
 

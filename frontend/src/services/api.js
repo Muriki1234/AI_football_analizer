@@ -167,6 +167,37 @@ export const startTracking = async (sessionId, bbox, frame = 0) => {
 };
 
 /**
+ * Multi-segment tracking: user picks the same player at N keyframes spaced
+ * across the video. Backend spawns N parallel SAMURAI subprocesses (sharing
+ * the GPU) and runs the merged streaming analysis concurrently — for an
+ * hour-long match this turns a ~40 min sequential pipeline into ~10 min.
+ *
+ * segments: [{ frame: number, bbox: {x1,y1,x2,y2} }, ...]
+ */
+export const startTrackingMulti = async (sessionId, segments) => {
+    const session = await getSession(sessionId);
+
+    const res = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            input: {
+                action: 'track',
+                session_id: sessionId,
+                video_url: session.video_url,
+                segments,
+            },
+        }),
+    });
+
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to start multi-segment tracking');
+
+    await supabase.from('sessions').update({ status: 'tracking' }).eq('id', sessionId);
+    return data;
+};
+
+/**
  * Detect players on a specific frame entirely client-side:
  *   1. Pull the frame out of the video in the browser (canvas)
  *   2. POST it to /api/detect_frame which calls the Roboflow hosted API
@@ -308,6 +339,7 @@ export default {
     getSession,
     startAnalysis,
     startTracking,
+    startTrackingMulti,
     analyzeFrame,
     queueFeature,
     listTasks,

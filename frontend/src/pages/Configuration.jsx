@@ -94,13 +94,25 @@ export default function Configuration() {
                 animate={{ opacity: 1, x: 0 }}
                 style={{ padding: '16px 24px' }}
             >
-                <button
-                    className="btn btn-ghost"
-                    onClick={() => navigate('/upload')}
-                    disabled={analyzing}
-                >
-                    <HiArrowLeft /> Back
-                </button>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <button
+                        className="btn btn-ghost"
+                        onClick={() => navigate('/upload')}
+                        disabled={analyzing}
+                    >
+                        <HiArrowLeft /> Back
+                    </button>
+                    <button
+                        className="btn btn-ghost"
+                        onClick={() => navigate(`/configure-multi?sessionId=${encodeURIComponent(videoId)}`, {
+                            state: { sessionId: videoId, videoId },
+                        })}
+                        disabled={analyzing}
+                        title="Better for long videos — pick the player at 4 points across the match"
+                    >
+                        Multi-segment ↗
+                    </button>
+                </div>
             </motion.div>
 
             <StepNav />
