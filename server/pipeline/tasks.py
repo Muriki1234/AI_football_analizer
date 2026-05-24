@@ -627,6 +627,16 @@ def run_samurai_tracking_multi(session_id: str, session: dict,
         for s_ in segs_sorted:
             s_["start_frame"] = max(0, int(s_["start_frame"]))
             s_["end_frame"]   = min(total_orig_frames, int(s_["end_frame"]))
+        # Drop empty / inverted ranges before dispatch — an empty ffmpeg
+        # select=... command silently produces zero frames, which then makes
+        # SAMURAI exit with a confusing "no frames" error.
+        segs_sorted = [s_ for s_ in segs_sorted
+                       if s_["end_frame"] > s_["start_frame"] + 1]
+        if not segs_sorted:
+            raise ValueError(
+                "All segments collapsed after validation. Check start/end "
+                "frames against video length."
+            )
 
         # Resolve sam paths + samurai_root once
         samurai_script = get_samurai_script()
@@ -759,7 +769,11 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             return elapsed
 
         video_path   = session["video_path"]
-        samurai_pkl  = session["samurai_cache_path"]
+        # samurai_cache_path may not be set yet on the concurrent path
+        # (handler pre-writes it but a refresh race could miss it). The
+        # deferred-load block below polls for the file with a 10-min cap,
+        # so we just need to not crash here.
+        samurai_pkl  = session.get("samurai_cache_path")
         output_dir   = sm.session_output_dir(session_id)
         tracks_cache = output_dir / "tracks.pkl"
 

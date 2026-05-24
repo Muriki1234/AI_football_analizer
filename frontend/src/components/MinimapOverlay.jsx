@@ -81,6 +81,30 @@ export default function MinimapOverlay({ dataUrl, videoRef, visible }) {
         setDragging(true);
     };
 
+    // Re-clamp the saved position whenever the video wrapper resizes.
+    // Without this, dragging the minimap to the bottom-right corner and
+    // then shrinking the window leaves the minimap stranded outside the
+    // visible area.
+    useEffect(() => {
+        if (!visible || !pos) return;
+        const el = canvasRef.current;
+        if (!el?.parentElement) return;
+        const parent = el.parentElement;
+        const ro = new ResizeObserver(() => {
+            const r = parent.getBoundingClientRect();
+            const maxX = Math.max(0, r.width - 270);
+            const maxY = Math.max(0, r.height - 165);
+            if (pos.x > maxX || pos.y > maxY) {
+                setPos({
+                    x: Math.min(pos.x, maxX),
+                    y: Math.min(pos.y, maxY),
+                });
+            }
+        });
+        ro.observe(parent);
+        return () => ro.disconnect();
+    }, [visible, pos]);
+
     // ── rAF loop: read video.currentTime → draw frame ────────────────────
     useEffect(() => {
         if (!visible || !data || !canvasRef.current) return;
