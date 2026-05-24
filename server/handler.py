@@ -352,7 +352,12 @@ def _action_track(session_id: str, s: dict, payload: dict, sm: SessionManager) -
     try:
         pipeline_tasks.run_global_analysis(session_id, s_merged, sm)
     finally:
-        samurai_thread.join(timeout=900)
+        # Scale the thread.join() cap with video length too — 900s (15 min)
+        # was fine for 30-min clips but broke 1.5h+ matches. Use 2× video
+        # duration with a 15-min floor, computed from the same total_frames
+        # we probed earlier.
+        join_timeout = max(900.0, 2.0 * (total_frames_hint / 25.0))
+        samurai_thread.join(timeout=join_timeout)
 
     if samurai_err:
         return {"error": f"SAMURAI failed: {samurai_err['exc']}"}

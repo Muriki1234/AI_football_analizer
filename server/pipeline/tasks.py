@@ -936,33 +936,38 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
               f"(durations: {[round(s['duration_sec']) for s in segments]}s)")
 
         # ── Wait for SAMURAI here if it was running concurrently. ─────────
-        # Two paths:
-        #   1. Same-process (current handler.py setup): caller hands us a
-        #      threading.Event via session["_samurai_done_event"]. event.wait()
-        #      is zero-CPU, instant wake — no busy poll, no wasted RunPod
-        #      seconds.
-        #   2. Multi-worker fallback: if there's no event (e.g. a different
-        #      worker started analysis after SAMURAI), we poll the cache
-        #      file existence at a much lower frequency (every 5s, not 1s).
+        # Timeout scales with video length: SAMURAI walltime is roughly
+        # 0.5× video duration for the multi-segment-parallel path (4 chunks
+        # share the GPU). We use 2× video duration as the cap, floored at
+        # 10 min so a 30s clip still gets a sane cushion. This prevents
+        # the 10-min hardcoded timeout from firing on 1h+ videos.
+        video_duration_sec = total / max(fps, 1.0)
+        samurai_timeout_sec = max(600.0, 2.0 * video_duration_sec)
+
         if not tracked_bboxes:
             samurai_event = session.get("_samurai_done_event")
             samurai_pkl = (sm.get_session(session_id) or {}).get("samurai_cache_path")
             sm.update_status(session_id, "analyzing", progress=91,
                              stage="waiting_for_samurai")
+            print(f"[ANALYSIS] waiting for SAMURAI (timeout = "
+                  f"{samurai_timeout_sec/60:.1f} min for a "
+                  f"{video_duration_sec/60:.1f} min clip)")
 
             if samurai_event is not None:
                 # Path 1: Event-based — block here until SAMURAI thread sets it.
-                got = samurai_event.wait(timeout=600.0)
+                got = samurai_event.wait(timeout=samurai_timeout_sec)
                 if not got:
-                    print("[WARN] SAMURAI event not set after 10min — "
-                          "continuing without tracked_bboxes")
+                    print(f"[WARN] SAMURAI event not set after "
+                          f"{samurai_timeout_sec/60:.1f} min — "
+                          f"continuing without tracked_bboxes")
             elif samurai_pkl:
                 # Path 2: cross-worker fallback — file-existence poll.
-                wait_deadline = _time.perf_counter() + 600.0
+                wait_deadline = _time.perf_counter() + samurai_timeout_sec
                 while not Path(samurai_pkl).exists():
                     if _time.perf_counter() > wait_deadline:
-                        print("[WARN] SAMURAI pkl not present after 10min — "
-                              "continuing without tracked_bboxes")
+                        print(f"[WARN] SAMURAI pkl not present after "
+                              f"{samurai_timeout_sec/60:.1f} min — "
+                              f"continuing without tracked_bboxes")
                         break
                     _time.sleep(5.0)
 
@@ -1290,6 +1295,15 @@ def _export_position_jsons(session_id: str, tracks: dict, tracked_bboxes: dict,
         str(k): bgr_to_hex(v) for k, v in team_colors.items()
     } if team_colors else {}
 
+    # Downsample team_control to match the minimap sample rate. The full
+    # array is one int per frame — for a 3h match that's 270K ints, ~800KB
+    # of JSON the frontend never actually indexes per-frame anyway.
+    team_control_sampled = [
+        int((team_control or [0] * (i + 1))[i]) if i < len(team_control or [])
+        else 0
+        for i in minimap_sampled_indices
+    ] if team_control else []
+
     minimap_payload = {
         "pitch":         {"length": pitch_length, "width": pitch_width, "unit": "cm"},
         "fps":           round(float(fps), 3),
@@ -1301,7 +1315,9 @@ def _export_position_jsons(session_id: str, tracks: dict, tracked_bboxes: dict,
         "team_colors":   team_colors_hex,
         "frames":        minimap_frames,
         "ball":          ball_path,
-        "team_control":  [int(t) for t in (team_control or [])],
+        # team_control is now aligned 1:1 with `frames` / `sample_indices`,
+        # not with the original frame range.
+        "team_control":  team_control_sampled,
     }
 
     heatmap_payload = {
