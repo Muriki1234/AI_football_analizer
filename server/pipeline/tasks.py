@@ -1345,12 +1345,14 @@ def _export_position_jsons(session_id: str, tracks: dict, tracked_bboxes: dict,
 
         minimap_frames.append(players_this_frame)
 
-        # Ball
+        # Ball — same key-lookup order as players (position_minimap first,
+        # then position_transformed) so frames where one is missing but the
+        # other isn't still produce a ball dot.
         bx_data = None
         for _, b in (tracks["ball"][i] if i < len(tracks["ball"]) else {}).items():
             if not b:
                 continue
-            bpos = b.get("position_transformed")
+            bpos = b.get("position_minimap") or b.get("position_transformed")
             if bpos is None:
                 continue
             try:

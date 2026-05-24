@@ -98,11 +98,19 @@ export default function HeatmapCanvas({ dataUrl }) {
             return;
         }
 
-        // 1. Build alpha intensity on an offscreen canvas
+        // 1. Build alpha intensity on a DPR-scaled offscreen canvas.
+        //
+        // BUG WE'RE FIXING: previously the offscreen was sized at (width,
+        // height) while the main canvas was DPR-scaled (width*dpr × height*dpr).
+        // putImageData ignores transforms and uses raw pixel coords — so the
+        // smaller image only filled the top-left quadrant of the main canvas
+        // (the rest was leftover pitch-background pixels). Match both
+        // canvases at physical-pixel size and the heatmap covers the full pitch.
         const off = document.createElement('canvas');
-        off.width = width;
-        off.height = height;
+        off.width = width * dpr;
+        off.height = height * dpr;
         const octx = off.getContext('2d');
+        octx.scale(dpr, dpr);
         const radius = Math.max(18, Math.min(drawW, drawH) * 0.06);
         octx.globalCompositeOperation = 'lighter';
         for (const [x, y] of positions) {
@@ -114,8 +122,10 @@ export default function HeatmapCanvas({ dataUrl }) {
             octx.fillRect(px - radius, py - radius, radius * 2, radius * 2);
         }
 
-        // 2. Read pixels, map intensity → heat colour
-        const img = octx.getImageData(0, 0, width, height);
+        // 2. Read pixels (in physical-pixel size) and remap intensity → heat colour
+        const physW = width * dpr;
+        const physH = height * dpr;
+        const img = octx.getImageData(0, 0, physW, physH);
         const px = img.data;
         for (let i = 0; i < px.length; i += 4) {
             const a = px[i + 3];

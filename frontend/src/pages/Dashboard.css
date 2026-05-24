@@ -790,7 +790,9 @@
     border: 1px dashed rgba(255, 255, 255, 0.08);
 }
 
-/* Minimap overlay on the video — bottom-right corner */
+/* Minimap overlay on the video — default bottom-right corner.
+   Draggable: cursor flips to "grab"/"grabbing", position is set via inline
+   style once the user drags. */
 .minimap-overlay {
     position: absolute;
     right: 12px;
@@ -798,7 +800,15 @@
     border-radius: 8px;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
     border: 1px solid rgba(255, 255, 255, 0.15);
-    pointer-events: none;
+    cursor: grab;
+    user-select: none;
+    -webkit-user-drag: none;
+    /* Drag input must reach the canvas, so no pointer-events:none */
+}
+.minimap-overlay.is-dragging {
+    cursor: grabbing;
+    box-shadow: 0 8px 32px rgba(168, 85, 247, 0.45);
+    border-color: rgba(168, 85, 247, 0.6);
 }
 
 /* ============================================================ */
