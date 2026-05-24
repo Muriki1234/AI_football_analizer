@@ -76,13 +76,61 @@ def _supabase_storage_key_from_url(url: str) -> str | None:
         return None
 
 
+_DOWNLOAD_RETRIES = 4
+_DOWNLOAD_BACKOFF_BASE = 2.0   # 2s, 4s, 8s, 16s
+
+
 def _download_video(url: str, dest: Path) -> None:
     """
     Download a video from Supabase Storage to local disk using the service-role
     SDK. This works whether the bucket is public or private — the service key
     bypasses RLS. Falls back to raw HTTP only if the URL isn't a recognizable
     Supabase Storage URL.
+
+    Retries on any error with exponential backoff (4 attempts: 2/4/8/16 s).
+    For large videos over flaky RunPod networking this is essential — a
+    single TCP reset previously failed the whole pipeline.
     """
+    import time as _time
+
+    last_exc: Exception | None = None
+    for attempt in range(_DOWNLOAD_RETRIES):
+        try:
+            _download_video_once(url, dest)
+            # Sanity check: empty / truncated file should also retry
+            size = dest.stat().st_size if dest.exists() else 0
+            if size < 1024:
+                raise RuntimeError(f"downloaded file too small ({size} B)")
+            if attempt > 0:
+                log.info("Video download succeeded on attempt %d", attempt + 1)
+            return
+        except Exception as exc:
+            last_exc = exc
+            if attempt < _DOWNLOAD_RETRIES - 1:
+                wait = _DOWNLOAD_BACKOFF_BASE * (2 ** attempt)
+                log.warning(
+                    "Video download attempt %d/%d failed: %s — retrying in %.0fs",
+                    attempt + 1, _DOWNLOAD_RETRIES, exc, wait,
+                )
+                _time.sleep(wait)
+                # Wipe partial file before retry to avoid corrupted state
+                try:
+                    if dest.exists():
+                        dest.unlink()
+                except Exception:
+                    pass
+            else:
+                log.error(
+                    "Video download exhausted all %d attempts: %s",
+                    _DOWNLOAD_RETRIES, exc,
+                )
+    raise RuntimeError(
+        f"Failed to download {url[:80]}… after {_DOWNLOAD_RETRIES} attempts: {last_exc}"
+    )
+
+
+def _download_video_once(url: str, dest: Path) -> None:
+    """Single download attempt — the retry loop is in _download_video()."""
     storage_key = _supabase_storage_key_from_url(url)
     if storage_key and settings.SUPABASE_URL and settings.SUPABASE_SERVICE_KEY:
         supa = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
@@ -258,7 +306,13 @@ def _action_track(session_id: str, s: dict, payload: dict, sm: SessionManager) -
     print(f"[TRACK] launching SAMURAI ({len(segments)} segment(s)) || "
           f"merged analysis in parallel")
 
+    # Event-based handoff between SAMURAI thread and analysis thread.
+    # Replaces the old filesystem busy-poll (sleep 1s in a loop): zero CPU
+    # while waiting, instant wake when SAMURAI finishes, and no RunPod
+    # seconds wasted spinning.
+    samurai_done = threading.Event()
     samurai_err: dict = {}
+
     def _samurai_worker():
         try:
             pipeline_tasks.run_samurai_tracking_multi(
@@ -267,18 +321,20 @@ def _action_track(session_id: str, s: dict, payload: dict, sm: SessionManager) -
         except Exception as e:
             samurai_err["exc"] = e
             log.exception("SAMURAI multi-segment failed")
+        finally:
+            samurai_done.set()
 
     samurai_thread = threading.Thread(target=_samurai_worker, daemon=True)
     samurai_thread.start()
 
     # Run analysis on this thread, concurrently with SAMURAI subprocesses.
-    # run_global_analysis polls for samurai_tracking.pkl right before the
-    # summary step, so we don't need to coordinate further here.
+    # run_global_analysis blocks on `samurai_done` (passed via attribute on
+    # session dict) right before the summary step.
+    s_merged["_samurai_done_event"] = samurai_done
     try:
         pipeline_tasks.run_global_analysis(session_id, s_merged, sm)
     finally:
-        # Ensure SAMURAI has finished one way or another before we return
-        samurai_thread.join(timeout=900)  # 15 min upper bound
+        samurai_thread.join(timeout=900)
 
     if samurai_err:
         return {"error": f"SAMURAI failed: {samurai_err['exc']}"}

@@ -153,17 +153,46 @@ export default function MinimapOverlay({ dataUrl, videoRef, visible }) {
             ctx.strokeRect(PAD + drawW - pbW, pbY, pbW, pbH);
         };
 
+        // The exported JSON is downsampled (stride ~fps/5). data.sample_indices
+        // (if present) maps array index → original video frame, so we
+        // binary-search by frame to find the nearest sample.
+        const stride = data.sample_stride || 1;
+        const sampleIndices = data.sample_indices;
+        const pickSample = (targetFrame) => {
+            if (!sampleIndices || sampleIndices.length === 0) {
+                return Math.min(Math.max(0, targetFrame), data.frames.length - 1);
+            }
+            // sample_indices is sorted ascending; use stride to estimate position
+            const approx = Math.min(
+                Math.max(0, Math.floor(targetFrame / stride)),
+                sampleIndices.length - 1,
+            );
+            // The estimate is usually correct, but stride may not be uniform
+            // at the very end. Do a tiny linear scan to fine-tune.
+            let best = approx;
+            let bestDelta = Math.abs(sampleIndices[approx] - targetFrame);
+            for (const step of [-1, 1]) {
+                const j = approx + step;
+                if (j >= 0 && j < sampleIndices.length) {
+                    const d = Math.abs(sampleIndices[j] - targetFrame);
+                    if (d < bestDelta) { best = j; bestDelta = d; }
+                }
+            }
+            return best;
+        };
+
         let raf;
         const tick = () => {
             const v = videoRef?.current;
             if (!v) { raf = requestAnimationFrame(tick); return; }
             const fps = data.fps || 25;
-            const frameIdx = Math.min(
+            const targetFrame = Math.min(
                 Math.max(0, Math.floor(v.currentTime * fps)),
-                (data.total_frames || data.frames.length) - 1,
+                (data.total_frames || (data.frames.length * stride)) - 1,
             );
-            const frame = data.frames[frameIdx] || [];
-            const ball = data.ball?.[frameIdx];
+            const sampleIdx = pickSample(targetFrame);
+            const frame = data.frames[sampleIdx] || [];
+            const ball = data.ball?.[sampleIdx];
             const teamColors = data.team_colors || {};
 
             ctx.clearRect(0, 0, W, H);

@@ -105,18 +105,22 @@ export default function MultiSegmentConfig() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [sessionId, segmentCountOverride]);
 
-    // 2. Lazy-load detection for the active segment on first visit
+    // 2. Lazy-load detection for the active segment. Re-runs whenever the
+    // active segment's frame value changes (e.g. from a nudge button).
+    // Use a per-(idx, frame) detection key so each unique frame is fetched
+    // exactly once even with React StrictMode double-invoke.
+    const activeSegFrame = segments[activeIdx]?.frame;
     useEffect(() => {
-        if (segments.length === 0) return;
-        if (detectedSegs.current.has(activeIdx)) return;
-        detectedSegs.current.add(activeIdx);
+        if (segments.length === 0 || activeSegFrame == null) return;
+        const detectKey = `${activeIdx}:${activeSegFrame}`;
+        if (detectedSegs.current.has(detectKey)) return;
+        detectedSegs.current.add(detectKey);
 
-        const frameIdx = frameIndices[activeIdx];
         setSegments((prev) => prev.map((s, i) =>
             i === activeIdx ? { ...s, detecting: true, error: null } : s
         ));
 
-        analyzeFrame(sessionId, frameIdx)
+        analyzeFrame(sessionId, activeSegFrame)
             .then((data) => {
                 const players = (data.players_data || []).map((p, i) => ({
                     id: p.id || i + 1,
@@ -131,21 +135,21 @@ export default function MultiSegmentConfig() {
                             frameUrl: data.annotated_frame_url,
                             imgDims: data.image_dimensions,
                             error: players.length === 0
-                                ? 'No players detected here — try a different frame'
+                                ? 'No players detected here — nudge to a different frame'
                                 : null,
                           }
                         : s
                 ));
             })
             .catch((e) => {
-                detectedSegs.current.delete(activeIdx);  // allow retry
+                detectedSegs.current.delete(detectKey);  // allow retry
                 setSegments((prev) => prev.map((s, i) =>
                     i === activeIdx
                         ? { ...s, detecting: false, error: e.message || 'Detection failed' }
                         : s
                 ));
             });
-    }, [activeIdx, segments.length, frameIndices, sessionId]);
+    }, [activeIdx, activeSegFrame, segments.length, sessionId]);
 
     /**
      * Add or remove segments interactively. We preserve existing picks
@@ -181,6 +185,35 @@ export default function MultiSegmentConfig() {
         }));
         setSegmentCount(n);
         if (activeIdx >= n) setActiveIdx(n - 1);
+    };
+
+    /**
+     * Shift one segment's keyframe by ±N frames. Useful when the auto-split
+     * lands on the player out-of-frame / occluded — user nudges a few frames
+     * forward, hits Retry-detect (auto-triggered by frame change), picks again.
+     */
+    const nudgeFrame = (idx, delta) => {
+        setSegments((prev) => prev.map((s, i) => {
+            if (i !== idx) return s;
+            const newFrame = Math.max(0, Math.min(
+                Math.max(0, totalFrames - 1),
+                (s.frame || 0) + delta,
+            ));
+            if (newFrame === s.frame) return s;
+            // The detect effect keys on `${idx}:${frame}` so simply changing
+            // frame here is enough to trigger a fresh Roboflow call.
+            return {
+                ...s,
+                frame: newFrame,
+                detecting: false,
+                error: null,
+                players: [],
+                frameUrl: null,
+                imgDims: null,
+                selectedBbox: null,
+                selectedPlayerId: null,
+            };
+        }));
     };
 
     const setSelectedFor = (idx, bbox, playerId) => {
@@ -366,11 +399,43 @@ export default function MultiSegmentConfig() {
                 <div className="config-sidebar">
                     <div className="mseg__sidebar-status">
                         <strong>Segment {activeIdx + 1} of {segmentCount}</strong>
-                        <p style={{ color: '#94a3b8', margin: '0.4rem 0 1rem' }}>
-                            Frame {active?.frame || 0}
+                        <div className="mseg__frame-nudge">
+                            <button
+                                type="button"
+                                className="mseg__nudge-btn"
+                                onClick={() => nudgeFrame(activeIdx, -30)}
+                                disabled={!active || active.frame < 30}
+                                title="Step back 30 frames"
+                            >−30</button>
+                            <button
+                                type="button"
+                                className="mseg__nudge-btn"
+                                onClick={() => nudgeFrame(activeIdx, -5)}
+                                disabled={!active || active.frame < 5}
+                                title="Step back 5 frames"
+                            >−5</button>
+                            <span className="mseg__frame-display">
+                                Frame {active?.frame ?? 0}
+                            </span>
+                            <button
+                                type="button"
+                                className="mseg__nudge-btn"
+                                onClick={() => nudgeFrame(activeIdx, 5)}
+                                disabled={!active || active.frame + 5 >= totalFrames}
+                                title="Step forward 5 frames"
+                            >+5</button>
+                            <button
+                                type="button"
+                                className="mseg__nudge-btn"
+                                onClick={() => nudgeFrame(activeIdx, 30)}
+                                disabled={!active || active.frame + 30 >= totalFrames}
+                                title="Step forward 30 frames"
+                            >+30</button>
+                        </div>
+                        <p style={{ color: '#94a3b8', margin: '0.4rem 0 1rem', fontSize: '0.85rem' }}>
                             {active?.selectedBbox
-                                ? ' — ✓ Player chosen'
-                                : ' — click a box on the left'}
+                                ? '✓ Player chosen'
+                                : 'Click a box on the left, or nudge frame above'}
                         </p>
                     </div>
 

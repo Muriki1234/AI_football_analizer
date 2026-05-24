@@ -84,19 +84,61 @@ class SessionManager:
         error: str | None = None,
         **extra: Any,
     ) -> None:
-        updates: dict[str, Any] = {
+        """
+        Atomic single-round-trip update.
+
+        If `extra` kwargs are supplied, we call the Postgres function
+        `merge_session_extra` which does `extra = extra || new_extra` inside
+        the database — no SELECT-then-UPDATE, no race window between
+        concurrent workers. Falls back to the legacy two-step path if the
+        RPC isn't deployed yet (so existing instances keep working).
+        """
+        # Build the JSONB extra payload (None values explicitly delete keys
+        # via the merge function — '{"key": null}' || existing produces null).
+        extra_payload: dict[str, Any] = {}
+        for k, v in extra.items():
+            extra_payload[k] = v
+
+        updates_payload = {"status": status}
+        if progress is not None:
+            updates_payload["progress"] = progress
+        if stage is not None:
+            updates_payload["stage"] = stage
+        if error is not None:
+            updates_payload["error"] = error
+
+        # Fast path: one RPC call. Tries the SQL function added in
+        # 20260525_jsonb_merge_rpc.sql.
+        try:
+            self.client.rpc(
+                "merge_session_extra",
+                {
+                    "p_session_id": session_id,
+                    "p_extra":      json.loads(json.dumps(extra_payload, default=str)),
+                    "p_updates":    updates_payload,
+                },
+            ).execute()
+            return
+        except Exception as rpc_exc:
+            # Likely the RPC wasn't deployed yet — fall through to legacy path.
+            # Log once per cold start, not every call.
+            if not getattr(self.__class__, "_rpc_warned", False):
+                print(f"[db] merge_session_extra RPC unavailable ({rpc_exc!r}); "
+                      f"falling back to two-step update")
+                self.__class__._rpc_warned = True
+
+        # ── Legacy fallback: SELECT-merge-UPDATE ─────────────────────────
+        legacy_updates: dict[str, Any] = {
             "status": status,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         if progress is not None:
-            updates["progress"] = progress
+            legacy_updates["progress"] = progress
         if stage is not None:
-            updates["stage"] = stage
+            legacy_updates["stage"] = stage
         if error is not None:
-            updates["error"] = error
+            legacy_updates["error"] = error
 
-        # Merge extra kwargs into the JSONB 'extra' column.
-        # We read the current value first so we don't clobber existing keys.
         if extra:
             current = self.client.table("sessions").select("extra").eq("id", session_id).execute()
             current_extra = {}
@@ -111,13 +153,12 @@ class SessionManager:
                     elif isinstance(raw, dict):
                         current_extra = raw
             current_extra.update({k: v for k, v in extra.items() if v is not None})
-            # Also allow explicitly setting a key to None (e.g. clearing cache path)
             for k, v in extra.items():
                 if v is None and k in current_extra:
                     current_extra[k] = None
-            updates["extra"] = json.dumps(current_extra, default=str)
+            legacy_updates["extra"] = json.dumps(current_extra, default=str)
 
-        self.client.table("sessions").update(updates).eq("id", session_id).execute()
+        self.client.table("sessions").update(legacy_updates).eq("id", session_id).execute()
 
     # ── Task CRUD ─────────────────────────────────────────────────────────────
 

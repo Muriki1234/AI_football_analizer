@@ -935,28 +935,44 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         print(f"[INFO] Scene segments: {seg_types} "
               f"(durations: {[round(s['duration_sec']) for s in segments]}s)")
 
-        # ── Wait for SAMURAI here if it was running concurrently. The cache
-        # path is set on the session by run_samurai_tracking_multi as soon
-        # as it finishes. We poll up to 10 minutes which is enough for the
-        # multi-segment parallel path even on a 1-hour clip.
+        # ── Wait for SAMURAI here if it was running concurrently. ─────────
+        # Two paths:
+        #   1. Same-process (current handler.py setup): caller hands us a
+        #      threading.Event via session["_samurai_done_event"]. event.wait()
+        #      is zero-CPU, instant wake — no busy poll, no wasted RunPod
+        #      seconds.
+        #   2. Multi-worker fallback: if there's no event (e.g. a different
+        #      worker started analysis after SAMURAI), we poll the cache
+        #      file existence at a much lower frequency (every 5s, not 1s).
         if not tracked_bboxes:
+            samurai_event = session.get("_samurai_done_event")
             samurai_pkl = (sm.get_session(session_id) or {}).get("samurai_cache_path")
-            if samurai_pkl:
-                sm.update_status(session_id, "analyzing", progress=91,
-                                 stage="waiting_for_samurai")
-                wait_deadline = _time.perf_counter() + 600.0  # 10 min cap
+            sm.update_status(session_id, "analyzing", progress=91,
+                             stage="waiting_for_samurai")
+
+            if samurai_event is not None:
+                # Path 1: Event-based — block here until SAMURAI thread sets it.
+                got = samurai_event.wait(timeout=600.0)
+                if not got:
+                    print("[WARN] SAMURAI event not set after 10min — "
+                          "continuing without tracked_bboxes")
+            elif samurai_pkl:
+                # Path 2: cross-worker fallback — file-existence poll.
+                wait_deadline = _time.perf_counter() + 600.0
                 while not Path(samurai_pkl).exists():
                     if _time.perf_counter() > wait_deadline:
-                        print(f"[WARN] SAMURAI not done after 10min — "
-                              f"continuing without tracked_bboxes")
+                        print("[WARN] SAMURAI pkl not present after 10min — "
+                              "continuing without tracked_bboxes")
                         break
-                    _time.sleep(1.0)
-                if Path(samurai_pkl).exists():
-                    with open(samurai_pkl, "rb") as f:
-                        samurai_data = pickle.load(f)
-                    tracked_bboxes = samurai_data.get("bboxes", {})
-                    print(f"[INFO] SAMURAI bboxes loaded (post-analysis): "
-                          f"{len(tracked_bboxes)} frames")
+                    _time.sleep(5.0)
+
+            # Either path: try to load the bboxes if the file is now there
+            if samurai_pkl and Path(samurai_pkl).exists():
+                with open(samurai_pkl, "rb") as f:
+                    samurai_data = pickle.load(f)
+                tracked_bboxes = samurai_data.get("bboxes", {})
+                print(f"[INFO] SAMURAI bboxes loaded (post-analysis): "
+                      f"{len(tracked_bboxes)} frames")
 
         sm.update_status(session_id, "analyzing", progress=92, stage="computing_summary")
         print(f"[INFO] Computing summary for session {session_id}…")
@@ -1167,12 +1183,14 @@ def _export_position_jsons(session_id: str, tracks: dict, tracked_bboxes: dict,
     """
     Export two compact JSON files for the frontend canvas overlays:
 
-      1. minimap_positions.json — per-frame pitch coords of all players + ball.
-         Frontend draws this as an overlay synced to video.currentTime, killing
-         the need for a server-side minimap_replay.mp4.
+      1. minimap_positions.json — pitch coords of all players + ball,
+         sampled at MINIMAP_SAMPLE_FPS (≈ every Nth video frame). The
+         frontend interpolates / nearest-frame-picks between samples.
+         For a 90-min match this caps the JSON at ~2 MB instead of 15+
+         MB if we kept every frame.
 
-      2. heatmap_positions.json — flat list of (x, y) for the tracked player.
-         Frontend draws a canvas-based KDE.
+      2. heatmap_positions.json — sampled flat list of (x, y) for the
+         tracked player. Same downsampling — 1 Hz is plenty for a KDE.
 
     Both upload to R2 and return their public URLs (or None on failure).
     """
@@ -1181,11 +1199,28 @@ def _export_position_jsons(session_id: str, tracks: dict, tracked_bboxes: dict,
     pitch_length = 12000  # cm — matches SoccerPitchConfiguration default
     pitch_width  = 7000
 
+    # Sample at ~5 Hz for the minimap (smooth enough for canvas overlay),
+    # ~1 Hz for the heatmap (KDE doesn't need sub-second precision).
+    # These caps keep JSON size linear in video duration, not in frame
+    # count, so a 4K-60fps 1-hour clip is no worse than a 720p-25fps one.
+    MINIMAP_SAMPLE_HZ = 5.0
+    HEATMAP_SAMPLE_HZ = 1.0
+    minimap_stride = max(1, int(round(fps / MINIMAP_SAMPLE_HZ)))
+    heatmap_stride = max(1, int(round(fps / HEATMAP_SAMPLE_HZ)))
+
     minimap_frames: list[list[dict]] = []
     ball_path: list = []
+    minimap_sampled_indices: list[int] = []   # original frame index for each sample
     tracked_positions: list[list[float]] = []
 
     for i in range(total):
+        # Skip frames that don't land on our sample boundaries — the
+        # frontend interpolates between the kept ones.
+        emit_minimap = (i % minimap_stride == 0) or (i == total - 1)
+        emit_heatmap = (i % heatmap_stride == 0)
+        if not (emit_minimap or emit_heatmap):
+            continue
+
         # Players for this frame
         players_this_frame = []
         frame_players = tracks["players"][i] if i < len(tracks["players"]) else {}
@@ -1208,8 +1243,8 @@ def _export_position_jsons(session_id: str, tracks: dict, tracked_bboxes: dict,
                 entry["b"] = 1
             players_this_frame.append(entry)
 
-        # Tracked player position (for heatmap)
-        if i in tracked_bboxes:
+        # Tracked player position (for heatmap) — only on heatmap-stride frames
+        if emit_heatmap and i in tracked_bboxes:
             sx, sy, sw, sh = tracked_bboxes[i]
             matched = _find_matched_player(frame_players or {}, (sx + sw / 2, sy + sh / 2))
             if matched:
@@ -1219,28 +1254,37 @@ def _export_position_jsons(session_id: str, tracks: dict, tracked_bboxes: dict,
                         tracked_positions.append([round(float(tpos[0]), 1), round(float(tpos[1]), 1)])
                     except (TypeError, IndexError):
                         pass
-                # Mark in minimap data so frontend can highlight
-                for p in players_this_frame:
-                    p["tr"] = 1 if "tr" not in p and p["id"] in (frame_players or {}) else p.get("tr", 0)
 
-        minimap_frames.append(players_this_frame)
+        # Per-minimap-sample bookkeeping
+        if emit_minimap:
+            # Mark the tracked player in this sample so frontend can highlight
+            if i in tracked_bboxes:
+                sx, sy, sw, sh = tracked_bboxes[i]
+                matched = _find_matched_player(
+                    frame_players or {}, (sx + sw / 2, sy + sh / 2)
+                )
+                if matched:
+                    for p in players_this_frame:
+                        if p["id"] in (frame_players or {}):
+                            p["tr"] = 1
 
-        # Ball — same key-lookup order as players (position_minimap first,
-        # then position_transformed) so frames where one is missing but the
-        # other isn't still produce a ball dot.
-        bx_data = None
-        for _, b in (tracks["ball"][i] if i < len(tracks["ball"]) else {}).items():
-            if not b:
-                continue
-            bpos = b.get("position_minimap") or b.get("position_transformed")
-            if bpos is None:
-                continue
-            try:
-                bx_data = [round(float(bpos[0]), 1), round(float(bpos[1]), 1)]
-            except (TypeError, IndexError):
-                pass
-            break
-        ball_path.append(bx_data)
+            minimap_frames.append(players_this_frame)
+            minimap_sampled_indices.append(i)
+
+            # Ball — same key-lookup order as players
+            bx_data = None
+            for _, b in (tracks["ball"][i] if i < len(tracks["ball"]) else {}).items():
+                if not b:
+                    continue
+                bpos = b.get("position_minimap") or b.get("position_transformed")
+                if bpos is None:
+                    continue
+                try:
+                    bx_data = [round(float(bpos[0]), 1), round(float(bpos[1]), 1)]
+                except (TypeError, IndexError):
+                    pass
+                break
+            ball_path.append(bx_data)
 
     team_colors_hex = {
         str(k): bgr_to_hex(v) for k, v in team_colors.items()
@@ -1250,6 +1294,10 @@ def _export_position_jsons(session_id: str, tracks: dict, tracked_bboxes: dict,
         "pitch":         {"length": pitch_length, "width": pitch_width, "unit": "cm"},
         "fps":           round(float(fps), 3),
         "total_frames":  int(total),
+        # Frames are sampled — frontend should pick nearest-by-time, not
+        # treat array index as frame index.
+        "sample_stride": minimap_stride,
+        "sample_indices": minimap_sampled_indices,
         "team_colors":   team_colors_hex,
         "frames":        minimap_frames,
         "ball":          ball_path,

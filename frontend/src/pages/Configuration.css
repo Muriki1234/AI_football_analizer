@@ -398,3 +398,43 @@
     opacity: 0.35;
     cursor: not-allowed;
 }
+
+/* Frame nudge controls inside the active-segment sidebar */
+.mseg__frame-nudge {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin: 0.75rem 0 0.4rem;
+    padding: 0.4rem;
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+}
+.mseg__nudge-btn {
+    flex: 1;
+    padding: 0.35rem 0.4rem;
+    background: rgba(30, 41, 59, 0.7);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    color: #e2e8f0;
+    font-size: 0.78rem;
+    font-weight: 600;
+    border-radius: 6px;
+    cursor: pointer;
+    font-variant-numeric: tabular-nums;
+    transition: background 0.15s, border-color 0.15s;
+}
+.mseg__nudge-btn:hover:not(:disabled) {
+    background: rgba(96, 165, 250, 0.18);
+    border-color: rgba(96, 165, 250, 0.5);
+}
+.mseg__nudge-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+.mseg__frame-display {
+    flex: 2;
+    text-align: center;
+    color: #cbd5e1;
+    font-size: 0.85rem;
+    font-variant-numeric: tabular-nums;
+}
