@@ -447,13 +447,16 @@ export default function Dashboard() {
     // by switching the drawer to plain CSS, so the lock is safe again.)
     useEffect(() => {
         if (!drawerOpen) return;
+        // Lock body only — not <html>. Some Chrome combos treat html as the
+        // root scroll container even when something inside is a fixed
+        // position drawer with its own overflow:auto; html overflow:hidden
+        // then interferes with that inner scroll. Locking body alone stops
+        // the page-behind-drawer scroll without touching the drawer's own
+        // scroll container.
         const prevBody = document.body.style.overflow;
-        const prevHtml = document.documentElement.style.overflow;
         document.body.style.overflow = 'hidden';
-        document.documentElement.style.overflow = 'hidden';
         return () => {
             document.body.style.overflow = prevBody;
-            document.documentElement.style.overflow = prevHtml;
         };
     }, [drawerOpen]);
 

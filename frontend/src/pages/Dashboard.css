@@ -809,7 +809,10 @@
     position: fixed;
     top: 72px;
     right: 0;
-    bottom: 0;
+    /* Explicit height (not top+bottom) — some browsers don't compute the
+       flex-child scroll container correctly when only top+bottom give the
+       height, and the inner list ends up un-scrollable even with min-height:0. */
+    height: calc(100vh - 72px);
     width: 33%;
     min-width: 360px;
     max-width: 520px;
@@ -821,6 +824,9 @@
     display: flex;
     flex-direction: column;
     box-sizing: border-box;
+    /* Hide overflow on the drawer itself so .drawer__list is unambiguously
+       the only scroll context inside the drawer. */
+    overflow: hidden;
     overscroll-behavior: contain;
 
     /* Slide animation lives on this element via plain CSS transition.
@@ -862,7 +868,11 @@
     background: rgba(15, 23, 42, 0.7);
     border: 1px solid rgba(255, 255, 255, 0.06);
     border-radius: 12px;
-    overflow: hidden;
+    /* No overflow:hidden — when a child (chart svg, canvas) is taller than
+       this card, Chrome can quietly absorb wheel events here instead of
+       letting them bubble to .drawer__list. Use overflow:clip when we
+       actually need border-radius clipping. */
+    overflow: clip;
     transition: border-color 0.15s, background 0.15s;
 }
 .drawer__item:hover { border-color: rgba(96, 165, 250, 0.3); }
