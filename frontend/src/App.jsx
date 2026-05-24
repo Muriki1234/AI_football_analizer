@@ -5,6 +5,7 @@ import Welcome from './pages/Welcome';
 import Upload from './pages/Upload';
 import Configuration from './pages/Configuration';
 import MultiSegmentConfig from './pages/MultiSegmentConfig';
+import Sessions from './pages/Sessions';
 import Dashboard from './pages/Dashboard';
 import PlayerLibrary from './pages/PlayerLibrary';
 import PlayerProfile from './pages/PlayerProfile';
@@ -27,6 +28,7 @@ function AnimatedRoutes() {
                 <Route path="/upload" element={<PageWrap><Upload /></PageWrap>} />
                 <Route path="/configure" element={<PageWrap><Configuration /></PageWrap>} />
                 <Route path="/configure-multi" element={<PageWrap><MultiSegmentConfig /></PageWrap>} />
+                <Route path="/sessions" element={<PageWrap><Sessions /></PageWrap>} />
                 <Route path="/dashboard" element={<PageWrap><Dashboard /></PageWrap>} />
                 <Route path="/players" element={<PageWrap><PlayerLibrary /></PageWrap>} />
                 <Route path="/players/:id" element={<PageWrap><PlayerProfile /></PageWrap>} />

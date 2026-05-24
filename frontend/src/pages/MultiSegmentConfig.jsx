@@ -35,6 +35,8 @@ export default function MultiSegmentConfig() {
 
     // Frame indices for the N segments (filled once session is loaded)
     const [frameIndices, setFrameIndices] = useState([]);
+    // Cached video total — needed to recompute indices when user +/- segments
+    const [totalFrames, setTotalFrames] = useState(0);
     // Per-segment state: { detecting, error, players, frameUrl, imgDims, selectedBbox }
     const [segments, setSegments] = useState([]);
     const [activeIdx, setActiveIdx] = useState(0);
@@ -79,6 +81,7 @@ export default function MultiSegmentConfig() {
                     ? Math.min(8, segmentCountOverride)
                     : suggestedSegmentCount(durationSec);
                 if (finalCount !== segmentCount) setSegmentCount(finalCount);
+                setTotalFrames(total);
 
                 // Evenly-spaced keyframes: e.g. for N=4 → 0%, 25%, 50%, 75%
                 const indices = Array.from({ length: finalCount }, (_, i) =>
@@ -143,6 +146,42 @@ export default function MultiSegmentConfig() {
                 ));
             });
     }, [activeIdx, segments.length, frameIndices, sessionId]);
+
+    /**
+     * Add or remove segments interactively. We preserve existing picks
+     * where the segment index still exists; new segments come in empty
+     * and get re-detected on first visit.
+     */
+    const adjustSegmentCount = (next) => {
+        const n = Math.max(1, Math.min(8, next));
+        if (n === segmentCount || !totalFrames) return;
+        const newIndices = Array.from({ length: n }, (_, i) =>
+            Math.floor((i / n) * totalFrames)
+        );
+        // Reset detection cache for indices that changed — frames at new
+        // positions need fresh Roboflow calls.
+        detectedSegs.current = new Set();
+        setFrameIndices(newIndices);
+        setSegments(newIndices.map((f, i) => {
+            // Reuse old pick if it's still at the same frame position
+            const old = segments[i];
+            if (old && old.frame === f && old.selectedBbox) {
+                detectedSegs.current.add(i);
+                return old;
+            }
+            return {
+                frame: f,
+                detecting: false,
+                error: null,
+                players: [],
+                frameUrl: null,
+                imgDims: null,
+                selectedBbox: null,
+            };
+        }));
+        setSegmentCount(n);
+        if (activeIdx >= n) setActiveIdx(n - 1);
+    };
 
     const setSelectedFor = (idx, bbox, playerId) => {
         setSegments((prev) => prev.map((s, i) =>
@@ -221,8 +260,15 @@ export default function MultiSegmentConfig() {
                 </p>
             </motion.div>
 
-            {/* Segment progress dots */}
+            {/* Segment progress dots — with +/- to tune count manually */}
             <div className="mseg__dots">
+                <button
+                    type="button"
+                    className="mseg__pm"
+                    onClick={() => adjustSegmentCount(segmentCount - 1)}
+                    disabled={segmentCount <= 1 || starting}
+                    title="Remove one segment"
+                >−</button>
                 {segments.map((s, i) => {
                     const done = !!s.selectedBbox;
                     const isActive = i === activeIdx;
@@ -238,6 +284,13 @@ export default function MultiSegmentConfig() {
                         </button>
                     );
                 })}
+                <button
+                    type="button"
+                    className="mseg__pm"
+                    onClick={() => adjustSegmentCount(segmentCount + 1)}
+                    disabled={segmentCount >= 8 || starting}
+                    title="Add one more segment"
+                >+</button>
             </div>
 
             <div className="config-split-view">

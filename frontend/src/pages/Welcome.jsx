@@ -148,7 +148,13 @@ export default function Welcome() {
                             transition={{ delay: 1.5 }}
                         >
                             <div className="welcome__recents-header">
-                                <HiClock /> Recent uploads
+                                <span><HiClock /> Recent uploads</span>
+                                <button
+                                    className="welcome__recents-view-all"
+                                    onClick={() => navigate('/sessions')}
+                                >
+                                    View all →
+                                </button>
                             </div>
                             <ul className="welcome__recents-list">
                                 {recents.map((r) => (

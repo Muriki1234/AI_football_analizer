@@ -215,11 +215,27 @@ export const analyzeFrame = async (sessionId, frameIndex = 0) => {
             session.video_url, frameIndex, fps
         );
 
-        const res = await fetch('/api/detect_frame', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image_base64: base64 }),
-        });
+        // 15-second timeout — Roboflow is normally < 2s but on a cold
+        // edge it can hang. Without a timeout the user sees an infinite
+        // spinner with no way out.
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000);
+        let res;
+        try {
+            res = await fetch('/api/detect_frame', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image_base64: base64 }),
+                signal: controller.signal,
+            });
+        } catch (e) {
+            if (e.name === 'AbortError') {
+                throw new Error('Roboflow timed out after 15s. Try again.');
+            }
+            throw e;
+        } finally {
+            clearTimeout(timeoutId);
+        }
 
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
@@ -282,6 +298,37 @@ export const queueFeature = async (sessionId, feature) => {
 };
 
 // ── Tasks & Real-time ────────────────────────────────────────────────────────
+
+/**
+ * Fetch the current user's sessions, newest first. Used by the Sessions
+ * library page so users can find old analyses without relying on the
+ * 5-item localStorage "Recent" list.
+ *
+ * Returns: [{id, status, created_at, fileName?, ...}, ...]
+ * fileName is parsed out of video_url's path when present.
+ */
+export const listMySessions = async ({ limit = 50, query: q = '' } = {}) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return [];
+    let req = supabase
+        .from('sessions')
+        .select('id, status, created_at, updated_at, video_url, progress, stage, error')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+    if (q) {
+        // ilike on video_url catches filenames the user typed into search
+        req = req.ilike('video_url', `%${q}%`);
+    }
+    const { data, error } = await req;
+    if (error) throw error;
+    return (data || []).map((row) => ({
+        ...row,
+        fileName: decodeURIComponent(
+            (row.video_url || '').split('/').pop()?.split('?')[0] || row.id.slice(0, 8)
+        ),
+    }));
+};
 
 export const listTasks = async (sessionId) => {
     const { data, error } = await supabase

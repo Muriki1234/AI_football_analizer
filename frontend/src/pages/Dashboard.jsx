@@ -6,7 +6,7 @@ import toast from 'react-hot-toast';
 import {
     HiHome, HiArrowPath, HiBars3, HiXMark, HiExclamationCircle,
     HiUserGroup, HiSparkles, HiChartBar, HiMapPin, HiFire,
-    HiPlayCircle,
+    HiPlayCircle, HiArrowDownTray,
 } from 'react-icons/hi2';
 import {
     BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -250,6 +250,7 @@ export default function Dashboard() {
 
     const [session, setSession] = useState(null);
     const [aiSummary, setAiSummary] = useState(null);
+    const [aiProgress, setAiProgress] = useState(0);   // 0-100, mirrors the ai_summary task row
     const [fullReplay, setFullReplay] = useState({ status: 'locked', url: null, progress: 0, error: null });
     const [error, setError] = useState(null);
 
@@ -359,6 +360,7 @@ export default function Dashboard() {
                 }
                 if (t.task_type === 'ai_summary') {
                     setAiSummary(t.result || null);
+                    setAiProgress(Math.max(0, Math.min(100, Number(t.progress) || 0)));
                 }
             }
         };
@@ -393,7 +395,10 @@ export default function Dashboard() {
                         error: t.error || null,
                     });
                 }
-                if (t.task_type === 'ai_summary') setAiSummary(t.result || null);
+                if (t.task_type === 'ai_summary') {
+                    setAiSummary(t.result || null);
+                    setAiProgress(Math.max(0, Math.min(100, Number(t.progress) || 0)));
+                }
             },
         });
 
@@ -550,6 +555,18 @@ export default function Dashboard() {
                         {fullReplay.status === 'generating' && (
                             <span className="hero-video-card__pill">Generating · {fullReplay.progress}%</span>
                         )}
+                        {fullReplay.status === 'done' && fullReplay.url && (
+                            <a
+                                href={fullReplay.url}
+                                download={`pitchlogic_${sessionId?.slice(0, 8) || 'replay'}.mp4`}
+                                target="_blank"
+                                rel="noopener"
+                                className="hero-video-card__download"
+                                title="Download annotated replay mp4"
+                            >
+                                <HiArrowDownTray /> Download
+                            </a>
+                        )}
                     </div>
 
                     <div className="hero-video-card__body">
@@ -648,7 +665,28 @@ export default function Dashboard() {
                                     ) : aiGenerating ? (
                                         <div className="drawer__loading">
                                             <div className="feature-card__spinner" />
-                                            <span>Generating AI summary… this takes ~1 minute</span>
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                                <div style={{
+                                                    display: 'flex',
+                                                    justifyContent: 'space-between',
+                                                    fontSize: 13,
+                                                    marginBottom: 6,
+                                                }}>
+                                                    <span>Generating AI summary…</span>
+                                                    <span style={{ color: '#a78bfa', fontVariantNumeric: 'tabular-nums' }}>
+                                                        {aiProgress}%
+                                                    </span>
+                                                </div>
+                                                <div className="pipeline-status__bar-track" style={{ marginBottom: 0 }}>
+                                                    <div
+                                                        className="pipeline-status__bar-fill"
+                                                        style={{
+                                                            width: `${aiProgress}%`,
+                                                            transition: 'width 0.3s ease-out',
+                                                        }}
+                                                    />
+                                                </div>
+                                            </div>
                                         </div>
                                     ) : isDone ? (
                                         <div className="drawer__empty-cta">

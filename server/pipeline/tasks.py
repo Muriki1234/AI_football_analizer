@@ -403,184 +403,27 @@ def _run_samurai_segment(seg_idx: int, session_id: str, output_dir: Path,
 
 def run_samurai_tracking(session_id: str, session: dict,
                          player_bbox: dict, sm: SessionManager):
+    """Thin wrapper kept for the legacy single-bbox call site in
+    routes/analysis.py. The real implementation now lives in
+    run_samurai_tracking_multi() — this just packs the one bbox
+    into a single-element segments list and forwards.
+
+    player_bbox shape: {"x", "y", "w", "h", "frame": int (optional)}
     """
-    调用 SAMURAI 脚本追踪前端选定的球员，结果存为 samurai_tracking.pkl。
-    加速版：使用 FFmpeg 降分辨率（0.5）和跳帧（stride=5，目前设保守点，能快5x），
-    提升追踪速度（实测提速10x-20x），然后插值还原。
-    """
-    try:
-        import pandas as pd
-        video_path   = session["video_path"]
-        output_dir   = sm.session_output_dir(session_id)
-        cache_path   = output_dir / "samurai_tracking.pkl"
-
-        sm.update_status(session_id, "tracking", progress=10, stage="samurai_running")
-
-        start_index = int(player_bbox.get("frame", 0))
-        frames_dir = output_dir / "samurai_frames"
-        frames_dir.mkdir(parents=True, exist_ok=True)
-
-        try:
-            sm.update_status(session_id, "tracking", progress=15, stage="extracting_frames")
-            if cv2 is None:
-                raise ImportError("cv2 is required for frame extraction")
-
-            # ── 高清变极速抽取：缩放0.5 & 第10帧抽1帧 ──
-            RESIZE_FACTOR = 0.5
-            SKIP_STEP = 10
-
-            with _video_capture(video_path) as cap:
-                orig_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                orig_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                total_orig_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            if total_orig_frames <= 0:
-                total_orig_frames = 1500
-
-            new_w, new_h = int(orig_w * RESIZE_FACTOR), int(orig_h * RESIZE_FACTOR)
-
-            # 参数合法性检查（防止 FFmpeg 报难以理解的 filter 错误）
-            if SKIP_STEP < 1:
-                raise ValueError(f"SKIP_STEP must be ≥1, got {SKIP_STEP}")
-            if start_index < 0:
-                raise ValueError(f"start_index must be ≥0, got {start_index}")
-            if new_w <= 0 or new_h <= 0:
-                raise ValueError(f"Scaled dims invalid: {new_w}x{new_h} (orig {orig_w}x{orig_h})")
-            if start_index >= total_orig_frames:
-                raise ValueError(
-                    f"start_index {start_index} exceeds video length {total_orig_frames}"
-                )
-
-            # e.g select='gte(n, 120)*not(mod(n-120, 5))'
-            vf = f"select='gte(n\\,{start_index})*not(mod(n-{start_index}\\,{SKIP_STEP}))',scale={new_w}:{new_h}"
-            cmd_ext = [
-                "ffmpeg", "-i", video_path, "-y",
-                "-vf", vf, "-vsync", "0", "-q:v", "2",
-                str(frames_dir / "%05d.jpg")
-            ]
-            res = subprocess.run(cmd_ext, capture_output=True, text=True)
-            if res.returncode != 0:
-                raise RuntimeError(f"FFmpeg extract failed: {res.stderr}")
-
-            sam_total_frames = len(list(frames_dir.glob("*.jpg")))
-            if sam_total_frames == 0:
-                raise RuntimeError("No frames extracted by FFmpeg")
-
-            # Create temporary txt for demo.py, scale bbox
-            # 边界裁剪：前端 canvas 坐标可能溢出，超出会让 SAMURAI 追黑边或 crash
-            bx = max(0.0, min(player_bbox['x'] * RESIZE_FACTOR, new_w - 2.0))
-            by = max(0.0, min(player_bbox['y'] * RESIZE_FACTOR, new_h - 2.0))
-            bw = max(1.0, min(player_bbox['w'] * RESIZE_FACTOR, new_w - bx))
-            bh = max(1.0, min(player_bbox['h'] * RESIZE_FACTOR, new_h - by))
-            if bw < 8 or bh < 8:
-                raise ValueError(
-                    f"Player bbox too small after scaling: {bw:.1f}x{bh:.1f}. "
-                    f"Original bbox may be out of frame or degenerate."
-                )
-            init_txt = output_dir / "input_bbox.txt"
-            with open(init_txt, "w") as f:
-                f.write(f"{bx},{by},{bw},{bh}\n")
-
-            temp_video = output_dir / "samurai_temp.mp4"
-
-            samurai_script = get_samurai_script()
-            _require_file(samurai_script, "SAMURAI demo script")
-            sam2_model_path = os.environ.get(
-                "SAM2_MODEL_PATH",
-                "/workspace/weights/sam2.1_hiera_base_plus.pt",
-            )
-            _require_file(sam2_model_path, "SAM2 checkpoint")
-
-            cmd = [
-                "python", samurai_script,
-                "--video_path",  str(frames_dir),
-                "--txt_path",    str(init_txt),
-                "--video_output_path", str(temp_video),
-                "--model_path",  sam2_model_path,
-            ]
-            # samurai_root must be the directory that *contains* the sam2/
-            # package — demo.py does `sys.path.append("./sam2")`, so cwd has
-            # to be /app/samurai (not /app). Compute it from the demo.py path:
-            #   .../samurai/scripts/demo.py → parents[1] = .../samurai
-            samurai_root = str(Path(samurai_script).resolve().parents[1])
-            env = os.environ.copy()
-            env["PYTHONPATH"] = (
-                f"{samurai_root}:{samurai_root}/sam2:" + env.get("PYTHONPATH", "")
-            )
-            env["HYDRA_FULL_ERROR"] = "1"
-
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=None, env=env, cwd=samurai_root
-            )
-
-            if result.returncode != 0:
-                full_error_log = result.stderr if len(result.stderr) < 3000 else result.stderr[-3000:]
-                raise RuntimeError(f"SAMURAI exited {result.returncode}:\n{full_error_log}")
-
-            res_txt = output_dir / "samurai_temp_bboxes.txt"
-            if not res_txt.exists():
-                raise FileNotFoundError(f"SAMURAI did not produce output bboxes at {res_txt}")
-
-            # 解析并插值
-            scale_back = 1.0 / RESIZE_FACTOR
-            sparse_bboxes = {}
-            with open(res_txt, "r") as f:
-                for line in f:
-                    parts = line.strip().split(',')
-                    if len(parts) >= 6:
-                        fid = int(parts[0])
-                        original_fid = start_index + (fid * SKIP_STEP)
-                        x, y, w, h = float(parts[2]), float(parts[3]), float(parts[4]), float(parts[5])
-                        if w > 0 and h > 0:
-                            sparse_bboxes[original_fid] = [x * scale_back, y * scale_back, w * scale_back, h * scale_back]
-
-            if not sparse_bboxes:
-                total_lines = sum(1 for _ in open(res_txt))
-                raise RuntimeError(
-                    f"SAMURAI output unparseable — {res_txt} has {total_lines} lines "
-                    f"but no valid bbox rows (expected ≥6 comma-separated fields per line). "
-                    f"Check SAMURAI script output format."
-                )
-
-            end_index = max(sparse_bboxes.keys()) if sparse_bboxes else start_index
-            df = pd.DataFrame(index=range(start_index, end_index + 1), columns=['x', 'y', 'w', 'h'])
-            for f_idx, box in sparse_bboxes.items():
-                if f_idx <= end_index:
-                    df.loc[f_idx] = box
-
-            # 只在短缺口内线性插值；长缺口（>MAX_INTERP_GAP_FRAMES）保留 NaN，
-            # 下游 `if i not in bboxes_dict: continue` 自动跳过，避免"幻觉轨迹"
-            df = df.astype(float).interpolate(
-                method='linear',
-                limit=MAX_INTERP_GAP_FRAMES,
-                limit_direction='both',
-            )
-
-            bboxes_dict = {}
-            for f_idx, row in df.iterrows():
-                if pd.isna(row['x']) or pd.isna(row['y']):
-                    continue
-                bboxes_dict[f_idx] = (row['x'], row['y'], row['w'], row['h'])
-
-            # 原子写：tmp → fsync → rename，避免 partial pickle 被下游读到
-            _atomic_pickle_dump({"bboxes": bboxes_dict}, cache_path)
-
-            sm.update_status(
-                session_id, "tracking_done",
-                progress=100, stage="samurai_done",
-                samurai_cache_path=str(cache_path),
-                samurai_tracked_frames=len(bboxes_dict),
-            )
-        finally:
-            # 始终清理中间帧目录（12,960 jpg ≈ 650MB），无论成功失败，
-            # 否则 Colab /content 会因重试累积至磁盘满
-            import shutil
-            shutil.rmtree(frames_dir, ignore_errors=True)
-            print(f"[INFO] Cleaned up samurai_frames dir: {frames_dir}")
-
-    except Exception as exc:
-        sm.update_status(session_id, "tracking_failed",
-                         error=str(exc), stage="samurai_error")
-        _log_error("SAMURAI tracking", session_id, exc)
+    start_frame = int(player_bbox.get("frame", 0))
+    # The multi path uses [start, end) ranges. We default the end to a
+    # big sentinel — it gets clamped to total_orig_frames inside multi.
+    segments = [{
+        "start_frame": start_frame,
+        "end_frame":   10 ** 9,  # clamped to video length inside
+        "bbox": {
+            "x": float(player_bbox["x"]),
+            "y": float(player_bbox["y"]),
+            "w": float(player_bbox["w"]),
+            "h": float(player_bbox["h"]),
+        },
+    }]
+    return run_samurai_tracking_multi(session_id, session, segments, sm)
 
 
 def run_samurai_tracking_multi(session_id: str, session: dict,
@@ -656,37 +499,60 @@ def run_samurai_tracking_multi(session_id: str, session: dict,
 
         # Dispatch all segments to the thread pool. Each thread blocks on
         # subprocess.run, so the OS scheduler interleaves them on the GPU.
+        # Each segment gets one automatic retry if its first run fails —
+        # SAMURAI is mostly deterministic, but cold-start CUDA OOM or a
+        # transient subprocess hiccup is recoverable on a fresh attempt.
+        def _submit_segment(pool, i, seg):
+            return pool.submit(
+                _run_samurai_segment,
+                i, session_id, output_dir, video_path, seg,
+                orig_w, orig_h, total_orig_frames,
+                RESIZE_FACTOR, SKIP_STEP,
+                samurai_script, sam2_model_path, samurai_root,
+            )
+
         results = []
+        seg_attempts: dict[int, int] = {}   # seg_idx -> attempt count (1 or 2)
         with ThreadPoolExecutor(max_workers=n_segments) as pool:
             futures = {
-                pool.submit(
-                    _run_samurai_segment,
-                    i, session_id, output_dir, video_path, seg,
-                    orig_w, orig_h, total_orig_frames,
-                    RESIZE_FACTOR, SKIP_STEP,
-                    samurai_script, sam2_model_path, samurai_root,
-                ): i
+                _submit_segment(pool, i, seg): i
                 for i, seg in enumerate(segs_sorted)
             }
+            for i in futures.values():
+                seg_attempts[i] = 1
+
+            pending = set(futures.keys())
             done = 0
-            for fut in as_completed(futures):
-                try:
-                    r = fut.result()
-                    results.append(r)
-                    done += 1
-                    pct = 5 + int(80 * done / n_segments)
-                    sm.update_status(
-                        session_id, "tracking", progress=pct,
-                        stage=f"samurai_multi ({done}/{n_segments} segments)"
-                    )
-                    print(f"[SAMURAI-MULTI] seg {r['seg_idx']} done "
-                          f"({r['frames_emitted']} sparse frames, "
-                          f"range {r['start']}..{r['end']})")
-                except Exception as seg_exc:
+            while pending:
+                for fut in list(as_completed(pending)):
+                    pending.discard(fut)
                     seg_idx = futures[fut]
-                    print(f"[SAMURAI-MULTI] seg {seg_idx} FAILED: {seg_exc}")
-                    # Don't cancel remaining segments — we'll interpolate over
-                    # any gap a failing segment leaves.
+                    try:
+                        r = fut.result()
+                        results.append(r)
+                        done += 1
+                        pct = 5 + int(80 * done / n_segments)
+                        sm.update_status(
+                            session_id, "tracking", progress=pct,
+                            stage=f"samurai_multi ({done}/{n_segments} segments)"
+                        )
+                        print(f"[SAMURAI-MULTI] seg {r['seg_idx']} done "
+                              f"({r['frames_emitted']} sparse frames, "
+                              f"range {r['start']}..{r['end']})")
+                    except Exception as seg_exc:
+                        attempt = seg_attempts[seg_idx]
+                        if attempt < 2:
+                            seg_attempts[seg_idx] += 1
+                            print(f"[SAMURAI-MULTI] seg {seg_idx} attempt "
+                                  f"{attempt} failed: {seg_exc} — retrying")
+                            retry_fut = _submit_segment(pool, seg_idx,
+                                                        segs_sorted[seg_idx])
+                            futures[retry_fut] = seg_idx
+                            pending.add(retry_fut)
+                        else:
+                            print(f"[SAMURAI-MULTI] seg {seg_idx} failed "
+                                  f"after {attempt} attempts: {seg_exc} — "
+                                  "interpolation will cover the gap")
 
         if not results:
             raise RuntimeError(
