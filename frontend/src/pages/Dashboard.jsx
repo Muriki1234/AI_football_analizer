@@ -437,10 +437,25 @@ export default function Dashboard() {
         if (aiSummary) setAiGenerating(false);
     }, [aiSummary]);
 
-    // (We used to lock body scroll while the drawer was open — turns out
-    // that caused the drawer itself to feel frozen in some browser combos.
-    // The drawer now uses overscroll-behavior: contain + its own scroll
-    // container, which is enough to keep the wheel inside the drawer.)
+    // Body scroll lock while the drawer is open. Without it, scrolling
+    // anywhere over the drawer that *isn't* a deep overflow:auto container
+    // (e.g. between cards, on the heatmap canvas, on charts) bubbles back
+    // to the page behind and the video moves instead of the drawer.
+    //
+    // (The earlier "drawer feels frozen" complaint was actually caused by
+    // framer-motion's stacking context, not this lock — that's been fixed
+    // by switching the drawer to plain CSS, so the lock is safe again.)
+    useEffect(() => {
+        if (!drawerOpen) return;
+        const prevBody = document.body.style.overflow;
+        const prevHtml = document.documentElement.style.overflow;
+        document.body.style.overflow = 'hidden';
+        document.documentElement.style.overflow = 'hidden';
+        return () => {
+            document.body.style.overflow = prevBody;
+            document.documentElement.style.overflow = prevHtml;
+        };
+    }, [drawerOpen]);
 
     const handleNewPlayer = () => {
         if (!sessionId) return;
