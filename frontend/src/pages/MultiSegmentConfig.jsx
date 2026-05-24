@@ -9,15 +9,14 @@ import './Configuration.css';
 
 // Auto-suggest how many segments to use based on the clip's length. The
 // trade-off: each segment costs a CUDA-context (~700MB GPU) + 1 click for
-// the user. For short clips a single SAMURAI run is already fast, so multi
-// just adds friction. For long matches we want as many segments as the
-// 16GB GPU can comfortably parallelize.
+// the user. For very short clips a single SAMURAI run is already fast,
+// so multi just adds friction. For everything else we go straight to 4
+// segments (the safe ceiling on a 16GB GPU) so multi-segment parallelism
+// always kicks in during testing.
 function suggestedSegmentCount(durationSec) {
     if (!Number.isFinite(durationSec) || durationSec <= 0) return 4;
-    if (durationSec < 60)   return 1;   // < 1 min  → single pick
-    if (durationSec < 180)  return 2;   // 1-3 min  → 2-way split
-    if (durationSec < 600)  return 3;   // 3-10 min → 3-way split
-    return 4;                            // 10 min+  → 4-way split (max)
+    if (durationSec < 10) return 1;   // < 10s: single pick (test clips, etc.)
+    return 4;                          // everything else: 4-way split
 }
 
 export default function MultiSegmentConfig() {
