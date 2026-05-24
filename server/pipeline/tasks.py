@@ -598,6 +598,8 @@ def run_samurai_tracking_multi(session_id: str, session: dict,
                   dropped if the gap exceeds MAX_INTERP_GAP_FRAMES).
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
+    import pandas as pd   # ← the legacy single-segment fn imports this locally;
+                          #   matching that here so the gap-interpolation works.
     try:
         video_path  = session["video_path"]
         output_dir  = sm.session_output_dir(session_id)
