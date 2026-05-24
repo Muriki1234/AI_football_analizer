@@ -72,7 +72,10 @@ export default function Upload() {
 
     const goToTrim = () => {
         if (!uploadSuccess || !uploadedVideoId) return;
-        navigate(`/configure?sessionId=${encodeURIComponent(uploadedVideoId)}`, {
+        // Default flow goes to multi-segment (4 picks across the video).
+        // The single-pick page is still reachable via the "Single-pick mode"
+        // button on the multi-segment page.
+        navigate(`/configure-multi?sessionId=${encodeURIComponent(uploadedVideoId)}`, {
             state: { videoId: uploadedVideoId, sessionId: uploadedVideoId },
         });
     };

@@ -11,7 +11,10 @@ const STEPS = [
 export default function StepNav() {
     const { pathname } = useLocation();
     const navigate = useNavigate();
-    const currentIdx = STEPS.findIndex((s) => s.path === pathname);
+    // /configure-multi is a variant of step 2 — match it to "Configure"
+    // so the breadcrumb dot lights up there too.
+    const normalizedPath = pathname.startsWith('/configure') ? '/configure' : pathname;
+    const currentIdx = STEPS.findIndex((s) => s.path === normalizedPath);
 
     if (currentIdx < 0) return null;
 

@@ -448,7 +448,7 @@ export default function Dashboard() {
             toast('Wait for the current analysis to finish.');
             return;
         }
-        navigate(`/configure?sessionId=${encodeURIComponent(sessionId)}`, {
+        navigate(`/configure-multi?sessionId=${encodeURIComponent(sessionId)}`, {
             state: { videoId: sessionId, sessionId },
         });
     };
