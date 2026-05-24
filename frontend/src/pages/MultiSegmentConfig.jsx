@@ -7,7 +7,18 @@ import { analyzeFrame, getSession } from '../services/api';
 import StepNav from '../components/StepNav';
 import './Configuration.css';
 
-const DEFAULT_SEGMENTS = 4;
+// Auto-suggest how many segments to use based on the clip's length. The
+// trade-off: each segment costs a CUDA-context (~700MB GPU) + 1 click for
+// the user. For short clips a single SAMURAI run is already fast, so multi
+// just adds friction. For long matches we want as many segments as the
+// 16GB GPU can comfortably parallelize.
+function suggestedSegmentCount(durationSec) {
+    if (!Number.isFinite(durationSec) || durationSec <= 0) return 4;
+    if (durationSec < 60)   return 1;   // < 1 min  → single pick
+    if (durationSec < 180)  return 2;   // 1-3 min  → 2-way split
+    if (durationSec < 600)  return 3;   // 3-10 min → 3-way split
+    return 4;                            // 10 min+  → 4-way split (max)
+}
 
 export default function MultiSegmentConfig() {
     const navigate = useNavigate();
@@ -16,10 +27,11 @@ export default function MultiSegmentConfig() {
     const sessionId =
         location.state?.sessionId || location.state?.videoId || query.get('sessionId');
 
-    // segmentCount may be overridden by query param; default 4
-    const segmentCount = Math.max(
-        1,
-        Math.min(8, Number(query.get('segments') || DEFAULT_SEGMENTS))
+    // segmentCount is decided after we know the video duration. Query param
+    // overrides the auto-suggestion (e.g. ?segments=8 for power users).
+    const segmentCountOverride = Number(query.get('segments') || 0);
+    const [segmentCount, setSegmentCount] = useState(
+        segmentCountOverride > 0 ? Math.min(8, segmentCountOverride) : 4
     );
 
     // Frame indices for the N segments (filled once session is loaded)
@@ -30,7 +42,7 @@ export default function MultiSegmentConfig() {
     const [starting, setStarting] = useState(false);
     const detectedSegs = useRef(new Set());
 
-    // 1. Compute keyframe indices from session metadata
+    // 1. Compute keyframe indices from session metadata + auto-pick segment count
     useEffect(() => {
         if (!sessionId) return;
         (async () => {
@@ -38,27 +50,40 @@ export default function MultiSegmentConfig() {
                 const s = await getSession(sessionId);
                 const fps = Number(s?.video_fps) || 25;
                 let total = Number(s?.total_frames) || 0;
+                let durationSec = total > 0 ? total / fps : 0;
 
-                // Fallback: probe the <video> element ourselves
+                // Fallback: probe the <video> element ourselves (faster than
+                // waiting for the analysis pipeline to fill video_fps)
                 if (!total && s?.video_url) {
-                    total = await new Promise((resolve) => {
+                    const probed = await new Promise((resolve) => {
                         const v = document.createElement('video');
                         v.preload = 'metadata';
                         v.src = s.video_url;
                         v.addEventListener('loadedmetadata', () => {
-                            const t = Math.floor((v.duration || 0) * fps);
+                            const d = v.duration || 0;
                             v.removeAttribute('src');
                             v.load();
-                            resolve(t);
+                            resolve(d);
                         }, { once: true });
                         v.addEventListener('error', () => resolve(0), { once: true });
                     });
+                    durationSec = probed;
+                    total = Math.floor(probed * fps);
                 }
-                if (!total) total = 1500; // last-resort fallback
+                if (!total) {
+                    total = 1500;
+                    durationSec = 60;
+                }
 
-                // Evenly-spaced keyframes: 0%, 25%, 50%, 75% (for segmentCount=4)
-                const indices = Array.from({ length: segmentCount }, (_, i) =>
-                    Math.floor((i / segmentCount) * total)
+                // Decide final segment count — unless URL forced an override
+                const finalCount = segmentCountOverride > 0
+                    ? Math.min(8, segmentCountOverride)
+                    : suggestedSegmentCount(durationSec);
+                if (finalCount !== segmentCount) setSegmentCount(finalCount);
+
+                // Evenly-spaced keyframes: e.g. for N=4 → 0%, 25%, 50%, 75%
+                const indices = Array.from({ length: finalCount }, (_, i) =>
+                    Math.floor((i / finalCount) * total)
                 );
                 setFrameIndices(indices);
                 setSegments(indices.map((f) => ({
@@ -74,7 +99,9 @@ export default function MultiSegmentConfig() {
                 toast.error('Failed to load session: ' + e.message);
             }
         })();
-    }, [sessionId, segmentCount]);
+        // segmentCount is intentionally omitted — we set it inside this effect
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [sessionId, segmentCountOverride]);
 
     // 2. Lazy-load detection for the active segment on first visit
     useEffect(() => {
@@ -185,10 +212,13 @@ export default function MultiSegmentConfig() {
                 initial={{ opacity: 0, y: -20 }}
                 animate={{ opacity: 1, y: 0 }}
             >
-                <h1>Multi-segment Tracking</h1>
+                <h1>
+                    {segmentCount === 1 ? 'Pick a Player' : 'Multi-segment Tracking'}
+                </h1>
                 <p>
-                    Pick the same player at {segmentCount} points across the video.
-                    Each segment runs in parallel — much faster for long videos.
+                    {segmentCount === 1
+                        ? 'Short clip — one pick is enough.'
+                        : `Pick the same player at ${segmentCount} points across the video. Each segment runs in parallel — much faster for long videos.`}
                 </p>
             </motion.div>
 
