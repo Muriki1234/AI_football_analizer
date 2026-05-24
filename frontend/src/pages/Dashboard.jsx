@@ -582,16 +582,15 @@ export default function Dashboard() {
               </div>
             </main>
 
-            {/* Side drawer */}
-            <AnimatePresence>
-                {drawerOpen && (
-                    <motion.aside
-                        className="dashboard-v2__drawer"
-                        initial={{ x: '100%' }}
-                        animate={{ x: 0 }}
-                        exit={{ x: '100%' }}
-                        transition={{ type: 'tween', duration: 0.28, ease: 'easeOut' }}
-                    >
+            {/* Side drawer — plain aside w/ CSS transition.
+                We tried framer-motion's motion.aside before but its inline
+                transform created a stacking context that intermittently
+                trapped scroll + click events. Plain CSS transition is
+                bulletproof and the animation is identical. */}
+            <aside
+                className={`dashboard-v2__drawer ${drawerOpen ? 'is-open' : ''}`}
+                aria-hidden={!drawerOpen}
+            >
                         <div className="drawer__list">
                             {/* Minimap toggle (stays as on/off switch) */}
                             <div className={`drawer__item ${minimapOn ? 'is-active' : ''}`}>
@@ -675,9 +674,7 @@ export default function Dashboard() {
                                 <HiArrowPath /> New Video
                             </button>
                         </div>
-                    </motion.aside>
-                )}
-            </AnimatePresence>
+            </aside>
         </div>
     );
 }

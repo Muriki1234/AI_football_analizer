@@ -807,9 +807,6 @@
 
 .dashboard-v2__drawer {
     position: fixed;
-    /* Sit flush below the 72px topbar instead of starting from top:0 with
-       padding-top: that combination + default content-box pushes the
-       footer past the viewport bottom and breaks scrolling. */
     top: 72px;
     right: 0;
     bottom: 0;
@@ -824,21 +821,27 @@
     display: flex;
     flex-direction: column;
     box-sizing: border-box;
-    overscroll-behavior: contain;   /* don't bubble wheel to body */
-    /* Force a fresh stacking context + GPU layer for the drawer. Without
-       this, some ancestor's filter/transform can promote the drawer to
-       an absolute (rather than viewport-fixed) position, which we observed
-       as "drawer looks frozen / unclickable" on certain pages. */
-    will-change: transform;
-    pointer-events: auto;
-    contain: layout;
+    overscroll-behavior: contain;
+
+    /* Slide animation lives on this element via plain CSS transition.
+       Default state: pushed off the right edge + non-interactive. */
+    transform: translateX(100%);
+    visibility: hidden;
+    pointer-events: none;
+    transition:
+        transform 0.28s ease-out,
+        visibility 0s linear 0.28s;
 }
 
-/* Scroll container inside the drawer must explicitly receive wheel/touch
-   events. Without pointer-events:auto here, framer-motion's transformed
-   parent has been observed to swallow scroll input on Chrome. */
-.drawer__list {
+.dashboard-v2__drawer.is-open {
+    transform: translateX(0);
+    visibility: visible;
     pointer-events: auto;
+    /* Cancel the visibility delay on open so the drawer is interactive
+       from the very first frame of the slide-in. */
+    transition:
+        transform 0.28s ease-out,
+        visibility 0s;
 }
 
 .drawer__list {
