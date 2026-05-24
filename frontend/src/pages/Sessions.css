@@ -170,3 +170,28 @@
     border-radius: 8px;
     margin-bottom: 1rem;
 }
+
+.sessions-page__row-delete {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    color: #64748b;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, transform 0.15s;
+}
+.sessions-page__row-delete:hover {
+    background: rgba(239, 68, 68, 0.15);
+    color: #f87171;
+    transform: scale(1.08);
+}
+.sessions-page__row-delete.is-deleting {
+    opacity: 0.4;
+    pointer-events: none;
+}
+.sessions-page__row-delete svg {
+    font-size: 1.05rem;
+}

@@ -314,7 +314,10 @@ export const listMySessions = async ({ limit = 50, query: q = '' } = {}) => {
         .from('sessions')
         .select('id, status, created_at, updated_at, video_url, progress, stage, error')
         .eq('user_id', user.id)
-        .order('created_at', { ascending: false })
+        // updated_at, not created_at — so a session that's currently being
+        // re-analysed bubbles to the top, and the user sees activity at a
+        // glance. created_at stays in the result for the "uploaded X ago" label.
+        .order('updated_at', { ascending: false })
         .limit(limit);
     if (q) {
         // ilike on video_url catches filenames the user typed into search
@@ -328,6 +331,21 @@ export const listMySessions = async ({ limit = 50, query: q = '' } = {}) => {
             (row.video_url || '').split('/').pop()?.split('?')[0] || row.id.slice(0, 8)
         ),
     }));
+};
+
+/**
+ * Delete a session row. Tasks are wiped via the ON DELETE CASCADE FK
+ * (added in the cleanup migration). Storage objects (the uploaded video
+ * + R2 artifacts) are *not* removed here — the nightly pg_cron job picks
+ * them up. Deleting them inline would need 2 extra round-trips per session
+ * and isn't worth the latency for a UI-driven delete.
+ */
+export const deleteSession = async (sessionId) => {
+    const { error } = await supabase
+        .from('sessions')
+        .delete()
+        .eq('id', sessionId);
+    if (error) throw error;
 };
 
 export const listTasks = async (sessionId) => {

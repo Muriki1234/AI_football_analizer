@@ -4,9 +4,9 @@ import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
 import {
     HiHome, HiMagnifyingGlass, HiClock,
-    HiCheckCircle, HiExclamationTriangle, HiArrowPath,
+    HiCheckCircle, HiExclamationTriangle, HiArrowPath, HiTrash,
 } from 'react-icons/hi2';
-import { listMySessions } from '../services/api';
+import { listMySessions, deleteSession } from '../services/api';
 import './Sessions.css';
 
 const STATUS_META = {
@@ -74,6 +74,29 @@ export default function Sessions() {
     const open = (id) => navigate(`/dashboard?sessionId=${encodeURIComponent(id)}`, {
         state: { sessionId: id, videoId: id },
     });
+
+    const [deleting, setDeleting] = useState(null);  // session id currently being deleted
+
+    const handleDelete = async (e, session) => {
+        e.stopPropagation();   // don't bubble up to the row click
+        const confirmed = window.confirm(
+            `Delete "${session.fileName}"?\n\n` +
+            `This removes the session record and all its tasks. The uploaded ` +
+            `video file stays in storage until the nightly cleanup runs.\n\n` +
+            `This cannot be undone.`
+        );
+        if (!confirmed) return;
+        setDeleting(session.id);
+        try {
+            await deleteSession(session.id);
+            setSessions((prev) => prev.filter((s) => s.id !== session.id));
+            toast.success(`Deleted ${session.fileName}`);
+        } catch (err) {
+            toast.error(`Delete failed: ${err.message}`);
+        } finally {
+            setDeleting(null);
+        }
+    };
 
     return (
         <div className="sessions-page">
@@ -183,6 +206,22 @@ export default function Sessions() {
                                     style={{ color: meta.color, borderColor: `${meta.color}55` }}
                                 >
                                     {meta.label}
+                                </span>
+                                <span
+                                    role="button"
+                                    tabIndex={0}
+                                    aria-label="Delete session"
+                                    className={`sessions-page__row-delete ${deleting === s.id ? 'is-deleting' : ''}`}
+                                    onClick={(e) => handleDelete(e, s)}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter' || e.key === ' ') {
+                                            e.preventDefault();
+                                            handleDelete(e, s);
+                                        }
+                                    }}
+                                    title="Delete session"
+                                >
+                                    <HiTrash />
                                 </span>
                             </motion.button>
                         );

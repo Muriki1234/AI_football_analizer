@@ -371,8 +371,18 @@ export default function Dashboard() {
         }
 
         realtimeEvents.current = 0;
+        const pollStartedAt = Date.now();
+        // Hard cap: even if Realtime never fires and analysis never reaches
+        // a terminal status, stop polling after 30 minutes. Otherwise a
+        // forgotten tab on the dashboard hammers Supabase every 2s forever.
+        const POLL_HARD_CAP_MS = 30 * 60 * 1000;
         const pollInterval = setInterval(() => {
             if (realtimeEvents.current >= 2) { clearInterval(pollInterval); return; }
+            if (Date.now() - pollStartedAt > POLL_HARD_CAP_MS) {
+                console.warn('[Dashboard] fallback polling hit 30min cap — stopping');
+                clearInterval(pollInterval);
+                return;
+            }
             getSession(sessionId).then((s) => {
                 if (cancelled || !s) return;
                 setSession(s);

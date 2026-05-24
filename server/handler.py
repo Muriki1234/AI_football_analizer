@@ -41,6 +41,24 @@ from .storage.db import SessionManager
 log = logging.getLogger(__name__)
 
 _sm: SessionManager | None = None
+_supabase_client = None   # module-level cache — see _get_supabase()
+
+
+def _get_supabase():
+    """
+    Cached service-role Supabase client. Building one isn't expensive, but
+    we were calling create_client() once per video download AND once per
+    annotated-frame upload, which adds up to 2 fresh clients per analysis.
+    Module-level singleton kills that.
+    """
+    global _supabase_client
+    if _supabase_client is None:
+        if not (settings.SUPABASE_URL and settings.SUPABASE_SERVICE_KEY):
+            return None
+        _supabase_client = create_client(
+            settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY
+        )
+    return _supabase_client
 
 
 def _get_sm() -> SessionManager:
@@ -132,8 +150,8 @@ def _download_video(url: str, dest: Path) -> None:
 def _download_video_once(url: str, dest: Path) -> None:
     """Single download attempt — the retry loop is in _download_video()."""
     storage_key = _supabase_storage_key_from_url(url)
-    if storage_key and settings.SUPABASE_URL and settings.SUPABASE_SERVICE_KEY:
-        supa = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
+    supa = _get_supabase()
+    if storage_key and supa is not None:
         data = supa.storage.from_("videos").download(storage_key)
         dest.write_bytes(data)
         return
@@ -195,8 +213,8 @@ def _action_detect_frame(session_id: str, s: dict, payload: dict, sm: SessionMan
     output_dir = sm.session_output_dir(session_id)
     frame_path = output_dir / result.get("annotated_frame_path", "first_frame.jpg")
     frame_url = None
-    if frame_path.exists() and settings.SUPABASE_URL and settings.SUPABASE_SERVICE_KEY:
-        supa = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
+    supa = _get_supabase()
+    if frame_path.exists() and supa is not None:
         storage_key = f"{session_id}/first_frame.jpg"
         with open(frame_path, "rb") as f:
             supa.storage.from_("videos").upload(
