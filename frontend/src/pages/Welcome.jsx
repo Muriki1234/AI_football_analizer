@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 import { IoFootball } from 'react-icons/io5';
 import { HiArrowRight, HiUserGroup, HiArrowRightOnRectangle, HiClock, HiXMark } from 'react-icons/hi2';
 import { getRecentSessions, removeRecentSession } from '../lib/recentSessions';
+import { getSession } from '../services/api';
 import './Welcome.css';
 
 const formatRelative = (ts) => {
@@ -23,7 +24,27 @@ export default function Welcome() {
 
     const [recents, setRecents] = useState(() => getRecentSessions());
 
-    const handleOpenRecent = (sessionId) => {
+    const handleOpenRecent = async (sessionId) => {
+        // Route based on where the session is in its lifecycle:
+        //   - "uploaded" (never analyzed) → /trim to continue from where they left off
+        //   - "tracking" / "analyzing" / "analysis_done" / "*_failed" → /dashboard
+        // Without this, clicking an "uploaded-only" session would land on a
+        // Dashboard with nothing to show but a "No replay yet" placeholder.
+        try {
+            const s = await getSession(sessionId);
+            const status = s?.status || 'uploaded';
+            const stillNeedsPicker = status === 'uploaded' || !s?.samurai_cache_path;
+            if (stillNeedsPicker && status !== 'analysis_done') {
+                navigate(`/trim?sessionId=${encodeURIComponent(sessionId)}`, {
+                    state: { sessionId, videoId: sessionId },
+                });
+                return;
+            }
+        } catch (e) {
+            // If session lookup fails (deleted / network), fall through to
+            // /dashboard which will show its own "No session" empty state.
+            console.warn('Recent session lookup failed:', e);
+        }
         navigate(`/dashboard?sessionId=${encodeURIComponent(sessionId)}`, {
             state: { sessionId },
         });

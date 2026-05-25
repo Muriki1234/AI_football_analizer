@@ -1,7 +1,18 @@
-# Use a PyTorch/CUDA image that supports Blackwell GPUs (sm_120).
-# RunPod may schedule Serverless workers onto RTX PRO 6000 Blackwell cards;
-# older cu121 wheels fail there with "no kernel image is available".
-FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime
+# PyTorch base image. cu121 wheels include kernels for Turing (sm_75)
+# through Hopper (sm_90), covering RTX 3000 / 4000 series and A100/H100.
+#
+# CAVEAT: this image does NOT include Blackwell (sm_120 / RTX PRO 6000)
+# kernels. If RunPod schedules a worker onto a Blackwell card, SAMURAI's
+# SAM2 subprocess will crash with "no kernel image is available". Pin
+# your endpoint to non-Blackwell GPU types in the RunPod console
+# (Settings → GPU Types) until upstream PyTorch ships a wheel that
+# covers both Ampere (sm_86) and Blackwell (sm_120) in the same build.
+#
+# We tried 2.7.1-cuda12.8-cudnn9-runtime — that includes Blackwell but
+# the SAM2 path then crashes on Ampere cards (sm_86 missing from SAM2's
+# bundled ops). Until that's fixed upstream, the working combo is cu121
+# + a GPU-type filter on the RunPod side.
+FROM pytorch/pytorch:2.2.1-cuda12.1-cudnn8-runtime
 
 # Set working directory
 WORKDIR /app

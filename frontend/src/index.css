@@ -177,11 +177,29 @@ h1, h2, h3, h4, h5, h6 { line-height: 1.2; font-weight: 700; }
   color: #0a0e17;
   box-shadow: var(--shadow-glow);
 }
-.btn-primary:hover {
+.btn-primary:hover:not(:disabled) {
   transform: translateY(-2px);
   box-shadow: 0 0 40px var(--color-accent-glow), var(--shadow-md);
 }
-.btn-primary:active { transform: translateY(0); }
+.btn-primary:active:not(:disabled) { transform: translateY(0); }
+
+/* Disabled state — applies to ALL .btn variants. Without this the
+   `disabled` attribute had no visual effect and primary buttons stayed
+   green even when their action wasn't actually available. */
+.btn:disabled,
+.btn[disabled] {
+    background: rgba(100, 116, 139, 0.25) !important;
+    color: #64748b !important;
+    box-shadow: none !important;
+    cursor: not-allowed;
+    transform: none !important;
+    opacity: 0.7;
+}
+.btn:disabled:hover,
+.btn[disabled]:hover {
+    transform: none !important;
+    box-shadow: none !important;
+}
 .btn-success {
     background: var(--color-accent);
     color: #0a0e17;
