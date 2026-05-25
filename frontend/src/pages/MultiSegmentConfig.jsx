@@ -7,16 +7,20 @@ import { analyzeFrame, getSession } from '../services/api';
 import StepNav from '../components/StepNav';
 import './Configuration.css';
 
-// Auto-suggest how many segments to use based on the clip's length. The
-// trade-off: each segment costs a CUDA-context (~700MB GPU) + 1 click for
-// the user. For very short clips a single SAMURAI run is already fast,
-// so multi just adds friction. For everything else we go straight to 4
-// segments (the safe ceiling on a 16GB GPU) so multi-segment parallelism
-// always kicks in during testing.
+// Auto segment count.
+//
+//   < 20s  → 1 segment  (parallel overhead > savings; SAMURAI on 50 frames
+//                        is already fast, 4 parallel subprocesses just thrash)
+//   >= 20s → 4 segments (sweet spot on 16GB+ GPU — see notes in
+//                        run_samurai_tracking_multi)
+//
+// We don't expose a manual control to users — the choice doesn't carry
+// meaningful information for them, only adds confusion. The ?segments=N
+// URL override stays for power users testing the pipeline.
 function suggestedSegmentCount(durationSec) {
     if (!Number.isFinite(durationSec) || durationSec <= 0) return 4;
-    if (durationSec < 10) return 1;   // < 10s: single pick (test clips, etc.)
-    return 4;                          // everything else: 4-way split
+    if (durationSec < 20) return 1;
+    return 4;
 }
 
 export default function MultiSegmentConfig() {
@@ -152,42 +156,6 @@ export default function MultiSegmentConfig() {
     }, [activeIdx, activeSegFrame, segments.length, sessionId]);
 
     /**
-     * Add or remove segments interactively. We preserve existing picks
-     * where the segment index still exists; new segments come in empty
-     * and get re-detected on first visit.
-     */
-    const adjustSegmentCount = (next) => {
-        const n = Math.max(1, Math.min(8, next));
-        if (n === segmentCount || !totalFrames) return;
-        const newIndices = Array.from({ length: n }, (_, i) =>
-            Math.floor((i / n) * totalFrames)
-        );
-        // Reset detection cache for indices that changed — frames at new
-        // positions need fresh Roboflow calls.
-        detectedSegs.current = new Set();
-        setFrameIndices(newIndices);
-        setSegments(newIndices.map((f, i) => {
-            // Reuse old pick if it's still at the same frame position
-            const old = segments[i];
-            if (old && old.frame === f && old.selectedBbox) {
-                detectedSegs.current.add(i);
-                return old;
-            }
-            return {
-                frame: f,
-                detecting: false,
-                error: null,
-                players: [],
-                frameUrl: null,
-                imgDims: null,
-                selectedBbox: null,
-            };
-        }));
-        setSegmentCount(n);
-        if (activeIdx >= n) setActiveIdx(n - 1);
-    };
-
-    /**
      * Shift one segment's keyframe by ±N frames. Useful when the auto-split
      * lands on the player out-of-frame / occluded — user nudges a few frames
      * forward, hits Retry-detect (auto-triggered by frame change), picks again.
@@ -267,12 +235,10 @@ export default function MultiSegmentConfig() {
             >
                 <button
                     className="btn btn-ghost"
-                    onClick={() => navigate(`/configure?sessionId=${encodeURIComponent(sessionId)}`, {
-                        state: { sessionId, videoId: sessionId }
-                    })}
+                    onClick={() => navigate('/upload')}
                     disabled={starting}
                 >
-                    <HiArrowLeft /> Single-pick mode
+                    <HiArrowLeft /> Back to Upload
                 </button>
             </motion.div>
 
@@ -293,15 +259,8 @@ export default function MultiSegmentConfig() {
                 </p>
             </motion.div>
 
-            {/* Segment progress dots — with +/- to tune count manually */}
+            {/* Segment progress dots — count auto-decided from video length */}
             <div className="mseg__dots">
-                <button
-                    type="button"
-                    className="mseg__pm"
-                    onClick={() => adjustSegmentCount(segmentCount - 1)}
-                    disabled={segmentCount <= 1 || starting}
-                    title="Remove one segment"
-                >−</button>
                 {segments.map((s, i) => {
                     const done = !!s.selectedBbox;
                     const isActive = i === activeIdx;
@@ -317,13 +276,6 @@ export default function MultiSegmentConfig() {
                         </button>
                     );
                 })}
-                <button
-                    type="button"
-                    className="mseg__pm"
-                    onClick={() => adjustSegmentCount(segmentCount + 1)}
-                    disabled={segmentCount >= 8 || starting}
-                    title="Add one more segment"
-                >+</button>
             </div>
 
             <div className="config-split-view">
@@ -399,43 +351,56 @@ export default function MultiSegmentConfig() {
                 <div className="config-sidebar">
                     <div className="mseg__sidebar-status">
                         <strong>Segment {activeIdx + 1} of {segmentCount}</strong>
-                        <div className="mseg__frame-nudge">
-                            <button
-                                type="button"
-                                className="mseg__nudge-btn"
-                                onClick={() => nudgeFrame(activeIdx, -30)}
-                                disabled={!active || active.frame < 30}
-                                title="Step back 30 frames"
-                            >−30</button>
-                            <button
-                                type="button"
-                                className="mseg__nudge-btn"
-                                onClick={() => nudgeFrame(activeIdx, -5)}
-                                disabled={!active || active.frame < 5}
-                                title="Step back 5 frames"
-                            >−5</button>
-                            <span className="mseg__frame-display">
-                                Frame {active?.frame ?? 0}
-                            </span>
-                            <button
-                                type="button"
-                                className="mseg__nudge-btn"
-                                onClick={() => nudgeFrame(activeIdx, 5)}
-                                disabled={!active || active.frame + 5 >= totalFrames}
-                                title="Step forward 5 frames"
-                            >+5</button>
-                            <button
-                                type="button"
-                                className="mseg__nudge-btn"
-                                onClick={() => nudgeFrame(activeIdx, 30)}
-                                disabled={!active || active.frame + 30 >= totalFrames}
-                                title="Step forward 30 frames"
-                            >+30</button>
-                        </div>
+
+                        {/* Frame nudge — only meaningful for multi-segment
+                            mode where the auto-extracted frame may not show
+                            the player. For single-segment mode at frame 0
+                            we hide it to keep the UI clean. */}
+                        {segmentCount > 1 && (
+                            <>
+                                <p className="mseg__nudge-hint">
+                                    Player not in this frame? Nudge to a nearby moment:
+                                </p>
+                                <div className="mseg__frame-nudge">
+                                    <button
+                                        type="button"
+                                        className="mseg__nudge-btn"
+                                        onClick={() => nudgeFrame(activeIdx, -30)}
+                                        disabled={!active || active.frame < 30}
+                                        title="−30 frames (≈1 second back)"
+                                    >−30</button>
+                                    <button
+                                        type="button"
+                                        className="mseg__nudge-btn"
+                                        onClick={() => nudgeFrame(activeIdx, -5)}
+                                        disabled={!active || active.frame < 5}
+                                        title="−5 frames"
+                                    >−5</button>
+                                    <span className="mseg__frame-display">
+                                        Frame {active?.frame ?? 0}
+                                    </span>
+                                    <button
+                                        type="button"
+                                        className="mseg__nudge-btn"
+                                        onClick={() => nudgeFrame(activeIdx, 5)}
+                                        disabled={!active || active.frame + 5 >= totalFrames}
+                                        title="+5 frames"
+                                    >+5</button>
+                                    <button
+                                        type="button"
+                                        className="mseg__nudge-btn"
+                                        onClick={() => nudgeFrame(activeIdx, 30)}
+                                        disabled={!active || active.frame + 30 >= totalFrames}
+                                        title="+30 frames (≈1 second forward)"
+                                    >+30</button>
+                                </div>
+                            </>
+                        )}
+
                         <p style={{ color: '#94a3b8', margin: '0.4rem 0 1rem', fontSize: '0.85rem' }}>
                             {active?.selectedBbox
                                 ? '✓ Player chosen'
-                                : 'Click a box on the left, or nudge frame above'}
+                                : 'Click the player on the left.'}
                         </p>
                     </div>
 
