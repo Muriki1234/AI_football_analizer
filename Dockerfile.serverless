@@ -1,5 +1,7 @@
-# Use the official PyTorch image with CUDA support
-FROM pytorch/pytorch:2.2.1-cuda12.1-cudnn8-runtime
+# Use a PyTorch/CUDA image that supports Blackwell GPUs (sm_120).
+# RunPod may schedule Serverless workers onto RTX PRO 6000 Blackwell cards;
+# older cu121 wheels fail there with "no kernel image is available".
+FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime
 
 # Set working directory
 WORKDIR /app
@@ -31,7 +33,8 @@ RUN pip install --no-cache-dir -r server/requirements.txt
 COPY samurai /app/samurai
 
 # Install SAM2 package in editable mode.
-# - SAM2_BUILD_CUDA=0: skip CUDA extension (requires torch 2.3+, we have 2.2.1)
+# - SAM2_BUILD_CUDA=0: skip CUDA extension; the pure-Python path is enough for
+#   our inference flow and avoids tying the image to one build-time GPU arch.
 # - --no-build-isolation: reuse the torch already in the image
 # - --no-deps: skip install_requires (torch>=2.3.1 hard-pinned in setup.py).
 #   All runtime deps already satisfied by the base image; only hydra-core

@@ -154,7 +154,7 @@ export default function MinimapOverlay({ dataUrl, videoRef, visible }) {
         };
 
         // The exported JSON is downsampled (stride ~fps/5). data.sample_indices
-        // (if present) maps array index → original video frame, so we
+        // (if present) maps array index → ORIGINAL video frame, so we
         // binary-search by frame to find the nearest sample.
         const stride = data.sample_stride || 1;
         const sampleIndices = data.sample_indices;
@@ -162,13 +162,10 @@ export default function MinimapOverlay({ dataUrl, videoRef, visible }) {
             if (!sampleIndices || sampleIndices.length === 0) {
                 return Math.min(Math.max(0, targetFrame), data.frames.length - 1);
             }
-            // sample_indices is sorted ascending; use stride to estimate position
             const approx = Math.min(
                 Math.max(0, Math.floor(targetFrame / stride)),
                 sampleIndices.length - 1,
             );
-            // The estimate is usually correct, but stride may not be uniform
-            // at the very end. Do a tiny linear scan to fine-tune.
             let best = approx;
             let bestDelta = Math.abs(sampleIndices[approx] - targetFrame);
             for (const step of [-1, 1]) {
@@ -181,15 +178,38 @@ export default function MinimapOverlay({ dataUrl, videoRef, visible }) {
             return best;
         };
 
+        // ── Period-aware time mapping ──────────────────────────────────────
+        // The rendered mp4 has non-match frames stripped out, so its
+        // duration ≠ original video duration. video.currentTime maps to an
+        // OUTPUT frame, which we need to translate back to the original
+        // frame index that sample_indices uses.
+        //
+        // Algorithm: walk match_periods accumulating their lengths until
+        // we've covered enough output frames to reach the requested point.
+        const matchPeriods = Array.isArray(data.match_periods) && data.match_periods.length > 0
+            ? data.match_periods : null;
+        const outputFrameToOriginal = (outFrame) => {
+            if (!matchPeriods) return outFrame;
+            let acc = 0;
+            for (const [ps, pe] of matchPeriods) {
+                const periodLen = pe - ps;
+                if (outFrame < acc + periodLen) {
+                    return ps + (outFrame - acc);
+                }
+                acc += periodLen;
+            }
+            // Past the end of all periods — clamp to the last frame
+            const last = matchPeriods[matchPeriods.length - 1];
+            return last[1] - 1;
+        };
+
         let raf;
         const tick = () => {
             const v = videoRef?.current;
             if (!v) { raf = requestAnimationFrame(tick); return; }
             const fps = data.fps || 25;
-            const targetFrame = Math.min(
-                Math.max(0, Math.floor(v.currentTime * fps)),
-                (data.total_frames || (data.frames.length * stride)) - 1,
-            );
+            const outputFrame = Math.max(0, Math.floor(v.currentTime * fps));
+            const targetFrame = outputFrameToOriginal(outputFrame);
             const sampleIdx = pickSample(targetFrame);
             const frame = data.frames[sampleIdx] || [];
             const ball = data.ball?.[sampleIdx];

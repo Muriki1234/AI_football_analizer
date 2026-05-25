@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { ProgressProvider } from './components/ProgressBar';
 import Welcome from './pages/Welcome';
 import Upload from './pages/Upload';
+import Trimmer from './pages/Trimmer';
 import MultiSegmentConfig from './pages/MultiSegmentConfig';
 import Sessions from './pages/Sessions';
 import Dashboard from './pages/Dashboard';
@@ -25,6 +26,7 @@ function AnimatedRoutes() {
                 <Route path="/login" element={<PageWrap><Login /></PageWrap>} />
                 <Route path="/" element={<PageWrap><Welcome /></PageWrap>} />
                 <Route path="/upload" element={<PageWrap><Upload /></PageWrap>} />
+                <Route path="/trim" element={<PageWrap><Trimmer /></PageWrap>} />
                 {/* /configure (legacy single-pick) redirects to multi-segment */}
                 <Route path="/configure" element={<PageWrap><MultiSegmentConfig /></PageWrap>} />
                 <Route path="/configure-multi" element={<PageWrap><MultiSegmentConfig /></PageWrap>} />

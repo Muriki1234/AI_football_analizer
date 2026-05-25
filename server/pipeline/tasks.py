@@ -495,13 +495,20 @@ def run_samurai_tracking_multi(session_id: str, session: dict,
         SKIP_STEP = 10
 
         n_segments = len(segs_sorted)
-        print(f"[SAMURAI-MULTI] {n_segments} segments × parallel subprocess")
 
-        # Dispatch all segments to the thread pool. Each thread blocks on
-        # subprocess.run, so the OS scheduler interleaves them on the GPU.
-        # Each segment gets one automatic retry if its first run fails —
-        # SAMURAI is mostly deterministic, but cold-start CUDA OOM or a
-        # transient subprocess hiccup is recoverable on a fresh attempt.
+        # Group segments by period_idx so we can run "segments WITHIN a period
+        # in parallel, periods SERIALLY". On a 16GB GPU 4 SAMURAI subprocesses
+        # share the card comfortably (~10GB); running both halves' 4-each
+        # simultaneously = 8 procs = ~14.6GB which is too tight.
+        from collections import defaultdict
+        groups: dict[int, list] = defaultdict(list)
+        for i, seg in enumerate(segs_sorted):
+            groups[int(seg.get("period_idx", 0))].append((i, seg))
+        period_keys = sorted(groups.keys())
+        print(f"[SAMURAI-MULTI] {n_segments} segments across "
+              f"{len(period_keys)} period(s) — periods run serially, "
+              f"segments inside each period run in parallel")
+
         def _submit_segment(pool, i, seg):
             return pool.submit(
                 _run_samurai_segment,
@@ -512,47 +519,53 @@ def run_samurai_tracking_multi(session_id: str, session: dict,
             )
 
         results = []
-        seg_attempts: dict[int, int] = {}   # seg_idx -> attempt count (1 or 2)
-        with ThreadPoolExecutor(max_workers=n_segments) as pool:
-            futures = {
-                _submit_segment(pool, i, seg): i
-                for i, seg in enumerate(segs_sorted)
-            }
-            for i in futures.values():
-                seg_attempts[i] = 1
+        done = 0
+        seg_attempts: dict[int, int] = {}
 
-            pending = set(futures.keys())
-            done = 0
-            while pending:
-                for fut in list(as_completed(pending)):
-                    pending.discard(fut)
-                    seg_idx = futures[fut]
-                    try:
-                        r = fut.result()
-                        results.append(r)
-                        done += 1
-                        pct = 5 + int(80 * done / n_segments)
-                        sm.update_status(
-                            session_id, "tracking", progress=pct,
-                            stage=f"samurai_multi ({done}/{n_segments} segments)"
-                        )
-                        print(f"[SAMURAI-MULTI] seg {r['seg_idx']} done "
-                              f"({r['frames_emitted']} sparse frames, "
-                              f"range {r['start']}..{r['end']})")
-                    except Exception as seg_exc:
-                        attempt = seg_attempts[seg_idx]
-                        if attempt < 2:
-                            seg_attempts[seg_idx] += 1
-                            print(f"[SAMURAI-MULTI] seg {seg_idx} attempt "
-                                  f"{attempt} failed: {seg_exc} — retrying")
-                            retry_fut = _submit_segment(pool, seg_idx,
-                                                        segs_sorted[seg_idx])
-                            futures[retry_fut] = seg_idx
-                            pending.add(retry_fut)
-                        else:
-                            print(f"[SAMURAI-MULTI] seg {seg_idx} failed "
-                                  f"after {attempt} attempts: {seg_exc} — "
-                                  "interpolation will cover the gap")
+        for period_idx in period_keys:
+            group = groups[period_idx]
+            n_in_group = len(group)
+            print(f"[SAMURAI-MULTI] starting period {period_idx} "
+                  f"({n_in_group} parallel segment(s))")
+
+            with ThreadPoolExecutor(max_workers=n_in_group) as pool:
+                futures = {
+                    _submit_segment(pool, i, seg): i
+                    for i, seg in group
+                }
+                for i in futures.values():
+                    seg_attempts[i] = 1
+                pending = set(futures.keys())
+                while pending:
+                    for fut in list(as_completed(pending)):
+                        pending.discard(fut)
+                        seg_idx = futures[fut]
+                        try:
+                            r = fut.result()
+                            results.append(r)
+                            done += 1
+                            pct = 5 + int(80 * done / n_segments)
+                            sm.update_status(
+                                session_id, "tracking", progress=pct,
+                                stage=f"samurai_multi ({done}/{n_segments} segments)"
+                            )
+                            print(f"[SAMURAI-MULTI] seg {r['seg_idx']} done "
+                                  f"({r['frames_emitted']} sparse frames, "
+                                  f"range {r['start']}..{r['end']})")
+                        except Exception as seg_exc:
+                            attempt = seg_attempts[seg_idx]
+                            if attempt < 2:
+                                seg_attempts[seg_idx] += 1
+                                print(f"[SAMURAI-MULTI] seg {seg_idx} attempt "
+                                      f"{attempt} failed: {seg_exc} — retrying")
+                                retry_seg = next(s for (i, s) in group if i == seg_idx)
+                                retry_fut = _submit_segment(pool, seg_idx, retry_seg)
+                                futures[retry_fut] = seg_idx
+                                pending.add(retry_fut)
+                            else:
+                                print(f"[SAMURAI-MULTI] seg {seg_idx} failed "
+                                      f"after {attempt} attempts: {seg_exc} — "
+                                      "interpolation will cover the gap")
 
         if not results:
             raise RuntimeError(
@@ -926,14 +939,46 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                 _f.write("-" * 40 + "\n")
         except Exception:
             pass
+        # Scene segmentation — but skip the auto detection if the user
+        # already gave us explicit match periods (point C). Their periods
+        # ARE the segmentation, and trusting them avoids the scene detector
+        # mis-classifying low-player-count frames inside an actual match.
         sm.update_status(session_id, "analyzing", progress=90, stage="scene_segmentation")
         _t = _time.perf_counter()
-        scene_det = SceneChangeDetector(fps=fps)
-        segments  = scene_det.detect_segments(tracks, total)
+        user_periods = session.get("match_periods_frames")
+        if user_periods and len(user_periods) > 0:
+            segments = []
+            cursor = 0
+            for i, (ps, pe) in enumerate(user_periods):
+                if ps > cursor:
+                    segments.append({
+                        "type": "halftime" if 0 < i else "pre_match",
+                        "start_frame": cursor, "end_frame": ps,
+                        "duration_sec": (ps - cursor) / max(fps, 1.0),
+                    })
+                segments.append({
+                    "type": "first_half" if i == 0 and len(user_periods) > 1
+                            else "second_half" if i == 1 and len(user_periods) > 1
+                            else "match",
+                    "start_frame": ps, "end_frame": pe,
+                    "duration_sec": (pe - ps) / max(fps, 1.0),
+                })
+                cursor = pe
+            if cursor < total:
+                segments.append({
+                    "type": "post_match",
+                    "start_frame": cursor, "end_frame": total,
+                    "duration_sec": (total - cursor) / max(fps, 1.0),
+                })
+            print(f"[INFO] Scene segments (from user periods): "
+                  f"{[s['type'] for s in segments]}")
+        else:
+            scene_det = SceneChangeDetector(fps=fps)
+            segments  = scene_det.detect_segments(tracks, total)
+            print(f"[INFO] Scene segments (auto-detected): "
+                  f"{[s['type'] for s in segments]} "
+                  f"(durations: {[round(s['duration_sec']) for s in segments]}s)")
         _bench("scene_segmentation", _t)
-        seg_types = [s["type"] for s in segments]
-        print(f"[INFO] Scene segments: {seg_types} "
-              f"(durations: {[round(s['duration_sec']) for s in segments]}s)")
 
         # ── Wait for SAMURAI here if it was running concurrently. ─────────
         # Timeout scales with video length: SAMURAI walltime is roughly
@@ -1020,9 +1065,17 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         # MP4 server-side. ~300-700KB per session, well worth the small CPU.
         minimap_url, heatmap_url = None, None
         try:
+            # Pass match_periods so the JSON embeds them — the frontend uses
+            # them to map rendered-video currentTime back to original-frame
+            # indices (the mp4 has halftime stripped so timecodes diverge).
+            _user_periods = session.get("match_periods_frames")
+            _periods_for_export = (
+                [tuple(p) for p in _user_periods] if _user_periods else None
+            )
             minimap_url, heatmap_url = _export_position_jsons(
                 session_id, tracks, tracked_bboxes, team_control,
                 team_assigner.team_colors, fps, total, output_dir,
+                match_periods=_periods_for_export,
             )
         except Exception as exc:
             print(f"[WARN] position JSON export failed (non-fatal): {exc}")
@@ -1184,7 +1237,8 @@ def _compute_player_summary(tracks: dict, tracked_bboxes: dict,
 
 def _export_position_jsons(session_id: str, tracks: dict, tracked_bboxes: dict,
                             team_control: list, team_colors: dict, fps: float,
-                            total: int, output_dir: Path) -> tuple[str | None, str | None]:
+                            total: int, output_dir: Path,
+                            match_periods: list | None = None) -> tuple[str | None, str | None]:
     """
     Export two compact JSON files for the frontend canvas overlays:
 
@@ -1312,6 +1366,11 @@ def _export_position_jsons(session_id: str, tracks: dict, tracked_bboxes: dict,
         # treat array index as frame index.
         "sample_stride": minimap_stride,
         "sample_indices": minimap_sampled_indices,
+        # match_periods enables rendered-mp4-currentTime → original-frame
+        # mapping on the frontend. Without it, after halftime is stripped
+        # from the mp4 the minimap would lag the video by the halftime
+        # length. Format: [[start_frame, end_frame], ...] in ORIGINAL frames.
+        "match_periods": [list(p) for p in (match_periods or [])],
         "team_colors":   team_colors_hex,
         "frames":        minimap_frames,
         "ball":          ball_path,
@@ -1785,9 +1844,27 @@ def _render_chunk_to_mp4(args):
     import subprocess as sp_local
     import pickle as pkl_local
 
+    # match_periods is a list of (start_frame, end_frame) tuples — frames
+    # falling outside ANY period are dropped from the rendered mp4 (e.g.
+    # the user's chosen halftime gap). None means "render every frame".
     (start, end, video_path, tracks_cache_path,
      hex_t1, hex_t2, fps, w, h,
-     yolo_path, output_path, max_height) = args
+     yolo_path, output_path, max_height, match_periods) = args
+
+    # Pre-compute a fast in-period check
+    if match_periods:
+        # Sorted, non-overlapping — clamp once to the chunk's range
+        period_set = [(max(ps, start), min(pe, end))
+                       for ps, pe in match_periods
+                       if pe > start and ps < end]
+        def _in_period(i: int) -> bool:
+            for ps, pe in period_set:
+                if ps <= i < pe:
+                    return True
+            return False
+    else:
+        def _in_period(_: int) -> bool:
+            return True
 
     # Reload analysis cache in this worker (workers run in parallel, so the
     # 5-10s of pickle-load happens concurrently across all of them).
@@ -1832,11 +1909,18 @@ def _render_chunk_to_mp4(args):
     proc = sp_local.Popen(ffmpeg_cmd, stdin=sp_local.PIPE,
                            stdout=sp_local.DEVNULL, stderr=sp_local.DEVNULL)
     rendered_frames = 0
+    skipped_frames = 0
     try:
         for i in range(start, end):
             ret, frame = cap.read()
             if not ret:
                 frame = np.zeros((h, w, 3), dtype=np.uint8)
+            # Skip non-match frames cheaply: still decode (cv2 doesn't expose
+            # frame skipping that's faster than read), but don't render/write.
+            # Output mp4 ends up containing only valid-period frames.
+            if not _in_period(i):
+                skipped_frames += 1
+                continue
             rargs = (i, frame, tracks, tracked_bboxes, team_control,
                      team_assigner, tracker_obj, config, hex_t1, hex_t2)
             _, rendered = _render_single_frame_worker_full(rargs)
@@ -1921,6 +2005,14 @@ def run_full_replay(session_id: str, session: dict, task_id: str, sm: SessionMan
         tracks_cache_path = session.get("tracks_cache_path") or str(output_dir / "tracks.pkl")
         yolo_path = get_yolo_model_path()
         chunk_size = math.ceil(total_frames / n_workers)
+        # User-supplied match periods drive frame skipping at render time.
+        # Frames outside every period are silently dropped, producing a
+        # shorter mp4 that's pure match footage stitched back-to-back.
+        match_periods_raw = session.get("match_periods_frames")
+        match_periods = (
+            [tuple(p) for p in match_periods_raw]
+            if match_periods_raw else None
+        )
         chunk_args = []
         for ci in range(n_workers):
             start = ci * chunk_size
@@ -1932,6 +2024,7 @@ def run_full_replay(session_id: str, session: dict, task_id: str, sm: SessionMan
                 start, end, session["video_path"], tracks_cache_path,
                 hex_t1, hex_t2, fps, w, h,
                 yolo_path, str(chunk_path), REPLAY_MAX_HEIGHT,
+                match_periods,
             ))
 
         # Dispatch to worker pool
@@ -2023,6 +2116,20 @@ def _render_full_replay_single(session_id, session, task_id, sm,
         out_h = (int(REPLAY_MAX_HEIGHT) // 2) * 2
     do_resize = (out_w, out_h) != (w, h)
 
+    # Single-process path also honours user-supplied match_periods
+    match_periods_raw = session.get("match_periods_frames")
+    match_periods = (
+        [tuple(p) for p in match_periods_raw]
+        if match_periods_raw else None
+    )
+    def _in_period(i: int) -> bool:
+        if not match_periods:
+            return True
+        for ps, pe in match_periods:
+            if ps <= i < pe:
+                return True
+        return False
+
     with _video_capture(session["video_path"]) as cap:
         ffmpeg_cmd = [
             "ffmpeg", "-y",
@@ -2043,6 +2150,8 @@ def _render_full_replay_single(session_id, session, task_id, sm,
                     ret, frame = cap.read()
                     if not ret:
                         frame = np.zeros((h, w, 3), dtype=np.uint8)
+                    if not _in_period(i):
+                        continue   # drop halftime / pre-game / post-game frames
                     args = (i, frame, tracks, tracked_bboxes, team_control,
                             team_assigner, tracker_obj, config, hex_t1, hex_t2)
                     _, rendered = _render_single_frame_worker_full(args)

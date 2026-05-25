@@ -108,24 +108,28 @@ class SessionManager:
             updates_payload["error"] = error
 
         # Fast path: one RPC call. Tries the SQL function added in
-        # 20260525_jsonb_merge_rpc.sql.
-        try:
-            self.client.rpc(
-                "merge_session_extra",
-                {
-                    "p_session_id": session_id,
-                    "p_extra":      json.loads(json.dumps(extra_payload, default=str)),
-                    "p_updates":    updates_payload,
-                },
-            ).execute()
-            return
-        except Exception as rpc_exc:
-            # Likely the RPC wasn't deployed yet — fall through to legacy path.
-            # Log once per cold start, not every call.
-            if not getattr(self.__class__, "_rpc_warned", False):
-                print(f"[db] merge_session_extra RPC unavailable ({rpc_exc!r}); "
-                      f"falling back to two-step update")
-                self.__class__._rpc_warned = True
+        # 20260525_jsonb_merge_rpc.sql. If the deployed database doesn't have
+        # it, remember that for this worker so every progress update doesn't
+        # emit a noisy Supabase 404 before falling back.
+        if not getattr(self.__class__, "_rpc_unavailable", False):
+            try:
+                self.client.rpc(
+                    "merge_session_extra",
+                    {
+                        "p_session_id": session_id,
+                        "p_extra":      json.loads(json.dumps(extra_payload, default=str)),
+                        "p_updates":    updates_payload,
+                    },
+                ).execute()
+                return
+            except Exception as rpc_exc:
+                # Likely the RPC wasn't deployed yet — fall through to legacy path.
+                # Log once per cold start, not every call.
+                self.__class__._rpc_unavailable = True
+                if not getattr(self.__class__, "_rpc_warned", False):
+                    print(f"[db] merge_session_extra RPC unavailable ({rpc_exc!r}); "
+                          f"falling back to two-step update")
+                    self.__class__._rpc_warned = True
 
         # ── Legacy fallback: SELECT-merge-UPDATE ─────────────────────────
         legacy_updates: dict[str, Any] = {

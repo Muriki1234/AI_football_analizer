@@ -231,13 +231,40 @@ def _action_detect_frame(session_id: str, s: dict, payload: dict, sm: SessionMan
     }
 
 
-def _parse_segments(payload: dict, total_frames_hint: int = 1500) -> list[dict]:
+def _parse_match_periods(payload: dict, total_frames_hint: int) -> list[tuple[int, int]]:
+    """
+    Read match_periods from payload. Format from frontend:
+      [[startFrame, endFrame], ...]  (sorted, non-overlapping)
+    Defaults to a single full-video period if missing/empty.
+    """
+    raw = payload.get("match_periods")
+    if not raw:
+        return [(0, total_frames_hint)]
+    out: list[tuple[int, int]] = []
+    for p in raw:
+        if isinstance(p, (list, tuple)) and len(p) >= 2:
+            s = max(0, int(p[0]))
+            e = min(total_frames_hint, int(p[1]))
+            if e > s + 1:
+                out.append((s, e))
+    if not out:
+        return [(0, total_frames_hint)]
+    out.sort()
+    return out
+
+
+def _parse_segments(payload: dict, total_frames_hint: int = 1500,
+                    periods: list[tuple[int, int]] | None = None) -> list[dict]:
     """
     Normalize either:
       - single bbox (legacy): payload["bbox"] = {x1,y1,x2,y2} or [...]
-      - segments array (new): payload["segments"] = [{frame, bbox}, ...]
+      - segments array (new): payload["segments"] = [{frame, bbox, period_idx?}, ...]
     into the segments list shape that run_samurai_tracking_multi expects:
-      [{"start_frame": int, "end_frame": int, "bbox": {x,y,w,h}}, ...]
+      [{"start_frame": int, "end_frame": int, "bbox": {x,y,w,h}, "period_idx": int}, ...]
+
+    `periods` constrains each segment's end_frame to the bounds of its
+    period — without this, the last seg in period 1 would span across
+    a skipped halftime gap into period 2.
     """
     segments_in = payload.get("segments")
     if segments_in:
@@ -255,16 +282,31 @@ def _parse_segments(payload: dict, total_frames_hint: int = 1500) -> list[dict]:
                 continue
             out.append({
                 "start_frame": int(seg.get("frame", 0)),
+                "period_idx":  int(seg.get("period_idx", 0)),
                 "bbox": {"x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1},
             })
         out.sort(key=lambda s_: s_["start_frame"])
-        # Fill in end_frame from the next segment's start, last one ends at video end
+
+        # Fill end_frame:
+        #   - if periods supplied: end is min(next seg in same period start,
+        #                                     this period's end_frame)
+        #   - if no periods:       end is next seg start, or video end
         for i, s_ in enumerate(out):
-            s_["end_frame"] = (out[i + 1]["start_frame"]
-                                if i + 1 < len(out) else total_frames_hint)
+            same_period_next = next(
+                (n["start_frame"] for n in out[i + 1:]
+                 if n["period_idx"] == s_["period_idx"]),
+                None
+            )
+            if periods:
+                period_end = periods[s_["period_idx"]][1] \
+                    if s_["period_idx"] < len(periods) else total_frames_hint
+                s_["end_frame"] = min(same_period_next or period_end, period_end)
+            else:
+                s_["end_frame"] = same_period_next or total_frames_hint
         return out
 
-    # Legacy single-bbox path
+    # Legacy single-bbox path (kept for backward compatibility with the
+    # single-segment FastAPI route still calling through run_samurai_tracking)
     bbox_raw = payload.get("bbox", {})
     frame = int(payload.get("frame", 0))
     if isinstance(bbox_raw, dict):
@@ -277,6 +319,7 @@ def _parse_segments(payload: dict, total_frames_hint: int = 1500) -> list[dict]:
     return [{
         "start_frame": frame,
         "end_frame": total_frames_hint,
+        "period_idx": 0,
         "bbox": {"x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1},
     }]
 
@@ -306,23 +349,32 @@ def _action_track(session_id: str, s: dict, payload: dict, sm: SessionManager) -
         except Exception:
             pass
 
-    segments = _parse_segments(payload, total_frames_hint=total_frames_hint)
+    match_periods = _parse_match_periods(payload, total_frames_hint)
+    segments = _parse_segments(payload, total_frames_hint=total_frames_hint,
+                               periods=match_periods)
     if not segments:
         return {"error": "Provide either bbox+frame or segments=[{frame,bbox},...]"}
 
+    # Enforce minimum period length (point E)
+    MIN_PERIOD_FRAMES = 30 * 25  # 30s × ~25fps. Backend-side defensive check.
+    for ps, pe in match_periods:
+        if pe - ps < MIN_PERIOD_FRAMES:
+            return {"error": f"Period {ps}..{pe} shorter than 30s minimum"}
+
     s_merged = {**s, "start_frame": segments[0]["start_frame"]}
-    # Pre-write the expected samurai cache path so run_global_analysis can
-    # find it later (it polls for the file's existence).
     samurai_cache_path = str(sm.session_output_dir(session_id) / "samurai_tracking.pkl")
     sm.update_status(session_id, "tracking", progress=1,
                      stage="samurai_multi_pending",
-                     samurai_cache_path=samurai_cache_path)
+                     samurai_cache_path=samurai_cache_path,
+                     # Pin the periods on the session so downstream code
+                     # (analysis, render) can read them without re-parsing
+                     # the payload.
+                     match_periods_frames=[list(p) for p in match_periods])
 
-    # Refresh session so it includes samurai_cache_path
     s_merged = sm.get_session(session_id) or s_merged
 
-    print(f"[TRACK] launching SAMURAI ({len(segments)} segment(s)) || "
-          f"merged analysis in parallel")
+    print(f"[TRACK] launching SAMURAI ({len(segments)} segment(s) across "
+          f"{len(match_periods)} period(s)) || merged analysis in parallel")
 
     # Event-based handoff between SAMURAI thread and analysis thread.
     # Replaces the old filesystem busy-poll (sleep 1s in a loop): zero CPU

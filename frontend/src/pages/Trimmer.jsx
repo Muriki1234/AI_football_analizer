@@ -1,74 +1,253 @@
-import { useState, useRef } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+/**
+ * MatchPeriods page — formerly Trimmer.
+ *
+ * Sits between Upload and MultiSegmentConfig. User defines 1+ valid match
+ * intervals; the gaps between them are "skip" regions that the backend
+ * leaves out of analysis, tracking, and the rendered replay.
+ *
+ * Default state is one period covering the whole video — so a user who
+ * just hits "Continue" gets the previous behaviour unchanged.
+ */
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
-import { HiScissors, HiArrowRight, HiArrowLeft, HiForward } from 'react-icons/hi2';
-import { trimVideo, artifactUrl } from '../services/api';
-import RangeSlider from '../components/RangeSlider';
+import {
+    HiArrowLeft, HiArrowRight, HiPlus, HiMinus, HiArrowPath,
+} from 'react-icons/hi2';
+import { getSession, saveMatchPeriods } from '../services/api';
 import StepNav from '../components/StepNav';
 import './Trimmer.css';
 
-function formatTime(seconds) {
-    if (!isFinite(seconds) || seconds < 0) return '00:00';
-    const m = Math.floor(seconds / 60);
-    const s = Math.floor(seconds % 60);
+const MIN_PERIOD_SEC = 30;       // backend rejects shorter periods (E)
+const MAX_PERIODS = 4;           // 4 periods × 4 segs = 16 picks ceiling
+const HANDLE_PX = 16;
+
+function fmt(sec) {
+    if (!Number.isFinite(sec) || sec < 0) return '00:00';
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
+function parseTimecode(str, max) {
+    const m = /^(\d{1,3}):(\d{2})$/.exec(str.trim());
+    if (!m) return null;
+    const sec = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+    return Math.max(0, Math.min(max, sec));
+}
+
 export default function Trimmer() {
-    const [range, setRange] = useState([0, 0]);
-    const [duration, setDuration] = useState(0);
-    const [isTrimming, setIsTrimming] = useState(false);
-    const [isVideoLoading, setIsVideoLoading] = useState(true);
-    const videoRef = useRef(null);
     const navigate = useNavigate();
     const location = useLocation();
-    const videoId = location.state?.videoId || location.state?.sessionId;
+    const query = new URLSearchParams(location.search);
+    const sessionId =
+        location.state?.sessionId || location.state?.videoId || query.get('sessionId');
 
-    const clipDuration = Math.max(0, range[1] - range[0]);
+    const [duration, setDuration] = useState(0);   // seconds
+    const [videoUrl, setVideoUrl] = useState(null);
+    const [previewTime, setPreviewTime] = useState(0);
+    const videoRef = useRef(null);
 
-    const goToDashboard = () => {
-        navigate(`/dashboard?sessionId=${encodeURIComponent(videoId)}`, {
-            state: { sessionId: videoId, videoId, startAnalysis: true },
+    // periods: sorted by start, non-overlapping, in SECONDS (we send frames to backend)
+    const [periods, setPeriods] = useState([{ start: 0, end: 0 }]);
+    const [dragging, setDragging] = useState(null);   // { idx, edge: 'start'|'end' }
+    const trackRef = useRef(null);
+
+    // Load session + initial periods (from session.extra.match_periods_sec
+    // if user is coming back via "Back" from MultiSegmentConfig — point D)
+    useEffect(() => {
+        if (!sessionId) return;
+        (async () => {
+            try {
+                const s = await getSession(sessionId);
+                setVideoUrl(s?.video_url || null);
+
+                const dur = await new Promise((resolve) => {
+                    if (!s?.video_url) return resolve(0);
+                    const v = document.createElement('video');
+                    v.preload = 'metadata';
+                    v.src = s.video_url;
+                    v.addEventListener('loadedmetadata',
+                        () => resolve(v.duration || 0), { once: true });
+                    v.addEventListener('error', () => resolve(0), { once: true });
+                });
+                setDuration(dur);
+
+                const saved = Array.isArray(s?.match_periods_sec) ? s.match_periods_sec : null;
+                if (saved && saved.length > 0) {
+                    setPeriods(saved);
+                } else {
+                    setPeriods([{ start: 0, end: dur }]);
+                }
+            } catch (e) {
+                toast.error('Failed to load video: ' + e.message);
+            }
+        })();
+    }, [sessionId]);
+
+    // Scrub video preview when user drags a handle
+    useEffect(() => {
+        if (videoRef.current && Number.isFinite(previewTime)) {
+            videoRef.current.currentTime = previewTime;
+        }
+    }, [previewTime]);
+
+    // ── Add / remove / reset ──────────────────────────────────────────────
+    const addBreak = () => {
+        if (periods.length >= MAX_PERIODS) {
+            toast(`Maximum ${MAX_PERIODS} periods`);
+            return;
+        }
+        const next = [...periods];
+        let longestIdx = 0;
+        for (let i = 0; i < next.length; i++) {
+            if (next[i].end - next[i].start > next[longestIdx].end - next[longestIdx].start) {
+                longestIdx = i;
+            }
+        }
+        const p = next[longestIdx];
+        const mid = (p.start + p.end) / 2;
+        const gap = 30;
+        if (mid - p.start < MIN_PERIOD_SEC + gap / 2
+            || p.end - mid < MIN_PERIOD_SEC + gap / 2) {
+            toast(`Period too short to split (need ≥ ${2 * MIN_PERIOD_SEC + gap}s)`);
+            return;
+        }
+        next.splice(longestIdx, 1,
+            { start: p.start, end: mid - gap / 2 },
+            { start: mid + gap / 2, end: p.end },
+        );
+        setPeriods(next);
+    };
+
+    const removeBreak = () => {
+        if (periods.length <= 1) return;
+        const next = periods.slice(0, -2);
+        const a = periods[periods.length - 2];
+        const b = periods[periods.length - 1];
+        next.push({ start: a.start, end: b.end });
+        setPeriods(next);
+    };
+
+    const reset = () => {
+        setPeriods([{ start: 0, end: duration }]);
+    };
+
+    // ── Handle dragging ───────────────────────────────────────────────────
+    const onTrackPointerDown = (idx, edge) => (e) => {
+        e.preventDefault();
+        setDragging({ idx, edge });
+    };
+
+    useEffect(() => {
+        if (!dragging) return;
+        const onMove = (e) => {
+            if (!trackRef.current) return;
+            const rect = trackRef.current.getBoundingClientRect();
+            const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+            const ratio = Math.max(0, Math.min(1, x / rect.width));
+            const newSec = ratio * duration;
+
+            setPeriods((prev) => {
+                const next = prev.map((p) => ({ ...p }));
+                const { idx, edge } = dragging;
+                const prevBound = idx > 0 ? next[idx - 1].end : 0;
+                const nextBound = idx < next.length - 1 ? next[idx + 1].start : duration;
+                if (edge === 'start') {
+                    next[idx].start = Math.max(prevBound + 1,
+                        Math.min(newSec, next[idx].end - MIN_PERIOD_SEC));
+                } else {
+                    next[idx].end = Math.min(nextBound - 1,
+                        Math.max(newSec, next[idx].start + MIN_PERIOD_SEC));
+                }
+                return next;
+            });
+            setPreviewTime(newSec);
+        };
+        const onUp = () => setDragging(null);
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', onUp);
+        window.addEventListener('touchmove', onMove);
+        window.addEventListener('touchend', onUp);
+        return () => {
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+            window.removeEventListener('touchmove', onMove);
+            window.removeEventListener('touchend', onUp);
+        };
+    }, [dragging, duration]);
+
+    // ── Numeric mm:ss inputs ──────────────────────────────────────────────
+    const setEdge = (idx, edge, sec) => {
+        setPeriods((prev) => {
+            const next = prev.map((p) => ({ ...p }));
+            const prevBound = idx > 0 ? next[idx - 1].end : 0;
+            const nextBound = idx < next.length - 1 ? next[idx + 1].start : duration;
+            if (edge === 'start') {
+                next[idx].start = Math.max(prevBound + 1,
+                    Math.min(sec, next[idx].end - MIN_PERIOD_SEC));
+            } else {
+                next[idx].end = Math.min(nextBound - 1,
+                    Math.max(sec, next[idx].start + MIN_PERIOD_SEC));
+            }
+            return next;
         });
     };
 
-    const handleConfirm = async () => {
-        if (!videoId) {
-            navigate('/dashboard');
+    const totalMatchSec = useMemo(
+        () => periods.reduce((sum, p) => sum + (p.end - p.start), 0),
+        [periods],
+    );
+    const skippedSec = Math.max(0, duration - totalMatchSec);
+
+    const handleContinue = async () => {
+        if (!sessionId) {
+            navigate('/upload');
             return;
         }
-        // If user didn't move the handles, skip the trim and jump straight to analysis.
-        if (duration > 0 && range[0] <= 0.1 && Math.abs(range[1] - duration) < 0.1) {
-            goToDashboard();
-            return;
+        for (let i = 0; i < periods.length; i++) {
+            if (periods[i].end - periods[i].start < MIN_PERIOD_SEC) {
+                toast.error(`Period ${i + 1} is shorter than ${MIN_PERIOD_SEC}s`);
+                return;
+            }
         }
-        setIsTrimming(true);
-        const toastId = toast.loading('Trimming clip…');
+        // Persist so "Back" works + re-pick flow remembers (point D)
         try {
-            await trimVideo(videoId, range[0], range[1]);
-            toast.success('Clip ready', { id: toastId });
-            goToDashboard();
+            await saveMatchPeriods(sessionId, periods);
         } catch (e) {
-            console.error(e);
-            toast.error(
-                e?.response?.data?.detail || e?.message || 'Trim failed',
-                { id: toastId }
-            );
-            setIsTrimming(false);
+            console.warn('Failed to persist match periods (continuing anyway):', e);
         }
+        navigate(`/configure-multi?sessionId=${encodeURIComponent(sessionId)}`, {
+            state: {
+                sessionId,
+                videoId: sessionId,
+                matchPeriods: periods,
+            },
+        });
     };
 
+    if (!sessionId) {
+        return (
+            <div className="page-container">
+                <p style={{ padding: 24 }}>No session — go back to upload.</p>
+                <button className="btn btn-primary" onClick={() => navigate('/upload')}>
+                    Go to Upload
+                </button>
+            </div>
+        );
+    }
+
     return (
-        <div className="page-container trimmer-page">
+        <div className="page-container trim-page">
             <div className="bg-grid" />
 
             <motion.div
-                className="trimmer-page__back"
                 initial={{ opacity: 0, x: -10 }}
                 animate={{ opacity: 1, x: 0 }}
+                style={{ padding: '16px 24px' }}
             >
-                <button className="btn btn-ghost" onClick={() => navigate('/upload')} disabled={isTrimming}>
+                <button className="btn btn-ghost" onClick={() => navigate('/upload')}>
                     <HiArrowLeft /> Back
                 </button>
             </motion.div>
@@ -76,104 +255,175 @@ export default function Trimmer() {
             <StepNav />
 
             <motion.div
-                className="trimmer-page__header"
+                className="config-page__header"
                 initial={{ opacity: 0, y: -20 }}
                 animate={{ opacity: 1, y: 0 }}
             >
-                <HiScissors className="trimmer-page__icon" />
-                <h1>Trim Video Clip</h1>
-                <p>Select a time range, or skip to analyze the whole video.</p>
+                <h1>Mark Match Periods</h1>
+                <p>
+                    Drag the handles to skip pre-game intro, halftime,
+                    and post-game cooldown. Click <strong>+ Add break</strong>
+                    {' '}for a halftime split.
+                </p>
             </motion.div>
 
-            <motion.div
-                className="trimmer__viewport"
-                initial={{ opacity: 0, scale: 0.98 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ delay: 0.2 }}
-            >
-                <div className="trimmer__video-area">
-                    {videoId ? (
-                        <video
-                            ref={videoRef}
-                            src={artifactUrl(videoId, 'video.mp4')}
-                            className="trimmer__video-player"
-                            controls
-                            onLoadedMetadata={(e) => {
-                                const d = e.target.duration;
-                                setDuration(d);
-                                setRange([0, d]);
-                                setIsVideoLoading(false);
-                            }}
-                        />
-                    ) : (
-                        <div className="trimmer__video-placeholder">
-                            <div className="trimmer__timestamp">{formatTime(range[0])}</div>
-                            <div className="trimmer__video-label">Video Preview (No Video Loaded)</div>
-                            <div className="trimmer__timestamp">{formatTime(range[1])}</div>
+            <div className="trim-page__layout">
+                {videoUrl && (
+                    <video
+                        ref={videoRef}
+                        src={videoUrl}
+                        className="trim-page__video"
+                        controls
+                        muted
+                    />
+                )}
+
+                <div className="periods-track" ref={trackRef}>
+                    <div className="periods-track__bg" />
+                    {duration > 0 && periods.map((p, i) => {
+                        const left = (p.start / duration) * 100;
+                        const width = Math.max(0, ((p.end - p.start) / duration) * 100);
+                        return (
+                            <div key={i}>
+                                <div
+                                    className="periods-track__band"
+                                    style={{ left: `${left}%`, width: `${width}%` }}
+                                    title={`Period ${i + 1}: ${fmt(p.start)} – ${fmt(p.end)}`}
+                                />
+                                <div
+                                    className={`periods-track__handle ${dragging?.idx === i && dragging.edge === 'start' ? 'is-dragging' : ''}`}
+                                    style={{ left: `${left}%` }}
+                                    onMouseDown={onTrackPointerDown(i, 'start')}
+                                    onTouchStart={onTrackPointerDown(i, 'start')}
+                                />
+                                <div
+                                    className={`periods-track__handle ${dragging?.idx === i && dragging.edge === 'end' ? 'is-dragging' : ''}`}
+                                    style={{ left: `${left + width}%`, marginLeft: `-${HANDLE_PX}px` }}
+                                    onMouseDown={onTrackPointerDown(i, 'end')}
+                                    onTouchStart={onTrackPointerDown(i, 'end')}
+                                />
+                            </div>
+                        );
+                    })}
+                </div>
+
+                <div className="periods-track__time-labels">
+                    <span>{fmt(0)}</span>
+                    <span>{fmt(duration / 2)}</span>
+                    <span>{fmt(duration)}</span>
+                </div>
+
+                <div className="periods-list">
+                    {periods.map((p, i) => (
+                        <div key={i} className="periods-list__row">
+                            <span className="periods-list__label">
+                                Period {i + 1}{periods.length > 1 ? ` of ${periods.length}` : ''}
+                            </span>
+                            <PeriodInput
+                                value={p.start}
+                                onChange={(s) => setEdge(i, 'start', s)}
+                                max={duration}
+                                label="Start"
+                            />
+                            <span style={{ color: '#64748b' }}>→</span>
+                            <PeriodInput
+                                value={p.end}
+                                onChange={(s) => setEdge(i, 'end', s)}
+                                max={duration}
+                                label="End"
+                            />
+                            <span className="periods-list__dur">
+                                = {fmt(p.end - p.start)}
+                            </span>
                         </div>
-                    )}
-
-                    <div className="trimmer__timeline">
-                        {Array.from({ length: 20 }).map((_, i) => (
-                            <div key={i} className="trimmer__timeline-bar" style={{
-                                height: `${20 + Math.random() * 30}px`,
-                                opacity: duration > 0 && (i / 20 >= range[0] / duration && i / 20 <= range[1] / duration) ? 1 : 0.25,
-                            }} />
-                        ))}
-                    </div>
+                    ))}
                 </div>
 
-                <div className="trimmer__slider-area">
-                    {isVideoLoading && videoId && (
-                        <div className="trimmer__loading">
-                            <div className="trimmer__loading-spinner" />
-                            <span>Loading video…</span>
-                        </div>
-                    )}
-                    {duration > 0 && (
-                        <RangeSlider
-                            key={duration}
-                            min={0}
-                            max={duration}
-                            onChange={(newRange) => {
-                                if (newRange[0] !== range[0] && videoRef.current) {
-                                    videoRef.current.currentTime = newRange[0];
-                                } else if (newRange[1] !== range[1] && videoRef.current) {
-                                    videoRef.current.currentTime = newRange[1];
-                                }
-                                setRange(newRange);
-                            }}
-                            formatLabel={formatTime}
-                        />
-                    )}
+                <div className="periods-actions">
+                    <button
+                        className="btn btn-secondary"
+                        onClick={addBreak}
+                        disabled={periods.length >= MAX_PERIODS}
+                        title="Insert a skip gap inside the longest period"
+                    >
+                        <HiPlus /> Add break
+                    </button>
+                    <button
+                        className="btn btn-secondary"
+                        onClick={removeBreak}
+                        disabled={periods.length <= 1}
+                        title="Remove the last skip gap"
+                    >
+                        <HiMinus /> Remove break
+                    </button>
+                    <button
+                        className="btn btn-ghost"
+                        onClick={reset}
+                        title="Back to one full-length period"
+                    >
+                        <HiArrowPath /> Reset
+                    </button>
                 </div>
 
-                <div className="trimmer__footer">
-                    <div className="trimmer__clip-info">
-                        <span className="trimmer__clip-badge">
-                            Clip Duration: <strong>{formatTime(clipDuration)}</strong>
-                        </span>
-                    </div>
-                    <div style={{ display: 'flex', gap: 8 }}>
-                        <button
-                            className="btn btn-ghost"
-                            onClick={goToDashboard}
-                            disabled={isTrimming}
-                            title="Skip trimming and analyze the whole video"
-                        >
-                            <HiForward /> Use whole video
-                        </button>
-                        <button
-                            className={`btn btn-primary ${isTrimming ? 'btn--loading' : ''}`}
-                            onClick={handleConfirm}
-                            disabled={isTrimming || duration === 0}
-                        >
-                            {isTrimming ? 'Trimming…' : 'Confirm & Analyze'}
-                            {!isTrimming && <HiArrowRight />}
-                        </button>
-                    </div>
+                <div className="periods-summary">
+                    <span>
+                        ⏱ Match time:{' '}
+                        <strong style={{ color: '#4ade80' }}>{fmt(totalMatchSec)}</strong>
+                        {skippedSec > 0.5 && (
+                            <span style={{ color: '#94a3b8' }}>
+                                {' '}(skipping {fmt(skippedSec)})
+                            </span>
+                        )}
+                        {periods.length > 1 && (
+                            <span style={{ color: '#94a3b8' }}>
+                                {' '}— {periods.length}× 4 = {periods.length * 4} player picks coming up
+                            </span>
+                        )}
+                    </span>
                 </div>
-            </motion.div>
+
+                <div className="periods-cta">
+                    <button
+                        className="btn btn-primary btn-lg"
+                        onClick={handleContinue}
+                        disabled={!duration}
+                    >
+                        Continue <HiArrowRight />
+                    </button>
+                </div>
+            </div>
         </div>
+    );
+}
+
+function PeriodInput({ value, onChange, max, label }) {
+    const [draft, setDraft] = useState(fmt(value));
+    useEffect(() => { setDraft(fmt(value)); }, [value]);
+    const commit = () => {
+        const parsed = parseTimecode(draft, max);
+        if (parsed != null) onChange(parsed);
+        else setDraft(fmt(value));
+    };
+    return (
+        <input
+            type="text"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                    e.currentTarget.blur();
+                } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    const delta = e.key === 'ArrowUp' ? 1 : -1;
+                    const step = e.shiftKey ? 5 : 1;
+                    onChange(Math.max(0, Math.min(max, value + delta * step)));
+                }
+            }}
+            className="periods-list__input"
+            placeholder="mm:ss"
+            aria-label={label}
+            title={label}
+        />
     );
 }

@@ -240,6 +240,7 @@ export default function Dashboard() {
     const sessionId = location.state?.sessionId || location.state?.videoId || query.get('sessionId');
     const selectedBbox = location.state?.selectedBbox || null;
     const multiSegments = location.state?.multiSegments || null;
+    const matchPeriodsFrames = location.state?.matchPeriodsFrames || null;
     const playerName = location.state?.playerName || null;
     const startWithoutSelection = location.state?.startAnalysis === true;
     const isFreshAnalysis = Boolean(
@@ -322,12 +323,15 @@ export default function Dashboard() {
         (async () => {
             try {
                 if (multiSegments && multiSegments.length > 0) {
-                    // Multi-segment path: bboxes already in {x1,y1,x2,y2} form
+                    // Multi-segment path — pass period_idx and the match
+                    // periods themselves so the backend can run period-aware
+                    // SAMURAI + skip non-match frames in analysis/render.
                     const segments = multiSegments.map((seg) => ({
                         frame: seg.frame,
                         bbox: seg.bbox,
+                        period_idx: seg.period_idx ?? 0,
                     }));
-                    await startTrackingMulti(sessionId, segments);
+                    await startTrackingMulti(sessionId, segments, matchPeriodsFrames);
                     toast.success(`Tracking across ${segments.length} segments in parallel…`);
                 } else if (selectedBbox && Array.isArray(selectedBbox) && selectedBbox.length === 4) {
                     const [x1, y1, x2, y2] = selectedBbox;

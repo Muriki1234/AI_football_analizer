@@ -174,20 +174,57 @@ export const startTracking = async (sessionId, bbox, frame = 0) => {
  *
  * segments: [{ frame: number, bbox: {x1,y1,x2,y2} }, ...]
  */
-export const startTrackingMulti = async (sessionId, segments) => {
+/**
+ * Persist the user's match-period selection to session.extra so the
+ * MultiSegmentConfig + Dashboard can read it later (including after
+ * a "Back to Trim" round-trip — point D in the design).
+ *
+ * periods: [{start: number, end: number}, ...] in seconds.
+ */
+export const saveMatchPeriods = async (sessionId, periods) => {
+    // Stored as match_periods_sec inside the JSONB extra column; the
+    // backend writer uses the same field on its side.
+    const { data: row, error: getErr } = await supabase
+        .from('sessions')
+        .select('extra')
+        .eq('id', sessionId)
+        .single();
+    if (getErr) throw getErr;
+
+    let extra = row?.extra;
+    if (typeof extra === 'string') {
+        try { extra = JSON.parse(extra); } catch { extra = {}; }
+    }
+    extra = { ...(extra || {}), match_periods_sec: periods };
+
+    const { error } = await supabase
+        .from('sessions')
+        .update({ extra })
+        .eq('id', sessionId);
+    if (error) throw error;
+};
+
+export const startTrackingMulti = async (sessionId, segments, matchPeriodsFrames = null) => {
     const session = await getSession(sessionId);
+
+    // matchPeriodsFrames: [{startFrame, endFrame}, ...] — sent to backend so
+    // it can skip non-match frames in analysis + render
+    const input = {
+        action: 'track',
+        session_id: sessionId,
+        video_url: session.video_url,
+        segments,
+    };
+    if (matchPeriodsFrames && matchPeriodsFrames.length > 0) {
+        input.match_periods = matchPeriodsFrames.map((p) => [
+            p.startFrame, p.endFrame,
+        ]);
+    }
 
     const res = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            input: {
-                action: 'track',
-                session_id: sessionId,
-                video_url: session.video_url,
-                segments,
-            },
-        }),
+        body: JSON.stringify({ input }),
     });
 
     const data = await res.json();

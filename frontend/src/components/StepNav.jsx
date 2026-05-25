@@ -11,9 +11,12 @@ const STEPS = [
 export default function StepNav() {
     const { pathname } = useLocation();
     const navigate = useNavigate();
-    // /configure-multi is a variant of step 2 — match it to "Configure"
-    // so the breadcrumb dot lights up there too.
-    const normalizedPath = pathname.startsWith('/configure') ? '/configure' : pathname;
+    // /configure-multi and /trim are both part of step 2 ("Configure"),
+    // so the breadcrumb dot lights up consistently across the picker pages.
+    const normalizedPath =
+        pathname.startsWith('/configure') || pathname.startsWith('/trim')
+            ? '/configure'
+            : pathname;
     const currentIdx = STEPS.findIndex((s) => s.path === normalizedPath);
 
     if (currentIdx < 0) return null;
