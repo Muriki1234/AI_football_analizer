@@ -140,7 +140,14 @@ export default function HeatmapCanvas({ dataUrl }) {
             px[i] = r; px[i + 1] = g; px[i + 2] = b;
             px[i + 3] = Math.min(220, a * 1.8);
         }
-        ctx.putImageData(img, 0, 0);
+        // Put remapped pixels back to the offscreen canvas, then composite
+        // onto the main canvas with drawImage so alpha-blending preserves
+        // the green pitch background underneath.
+        // (putImageData on the main canvas directly would overwrite pitch
+        // pixels with the transparent regions of the heat layer — that is
+        // why the green pitch was disappearing.)
+        octx.putImageData(img, 0, 0);
+        ctx.drawImage(off, 0, 0, width, height);
     }, [data, size]);
 
     if (err) return <div className="heatmap-error">Failed to load heatmap: {err}</div>;
