@@ -876,7 +876,17 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         # results are merged. Speeds up detection from ~10min → ~3min on a
         # 16GB+ GPU.  Set PARALLEL_YOLO_SEGS=1 to disable and fall through
         # to the merged-streaming or legacy paths.
-        n_yolo_segs = int(os.environ.get("PARALLEL_YOLO_SEGS", "4"))
+        #
+        # GPU contention guard: when SAMURAI is running concurrently on this
+        # same GPU (indicated by _samurai_done_event in session), 4 SAMURAI
+        # subprocesses already occupy ~10GB. Adding 4 YOLO subprocesses
+        # (~8GB) totals ~18GB — fine on A40/A100 but OOMs on 16GB cards and
+        # is dangerously tight on A10G (24GB).  In concurrent mode we cap
+        # YOLO at 2 segments (~4GB) so total stays comfortably under 16GB.
+        # Standalone mode (no SAMURAI thread) keeps the full 4-segment default.
+        _samurai_concurrent = "_samurai_done_event" in session
+        _default_segs = 2 if _samurai_concurrent else 4
+        n_yolo_segs = int(os.environ.get("PARALLEL_YOLO_SEGS", str(_default_segs)))
         parallel_ok = False
         if n_yolo_segs > 1:
             print(f"[INFO] Parallel YOLO: {n_yolo_segs} segments")
