@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
@@ -18,36 +18,83 @@ const formatRelative = (ts) => {
     return `${Math.floor(h / 24)}d ago`;
 };
 
+// Map raw session status → a friendly badge label + colour class.
+// Three tiers matter for routing: 'needs-trim' | 'needs-pick' | 'in-progress' | 'done'
+function sessionStage(s) {
+    if (!s) return null;
+    const st = s.status || 'uploaded';
+    if (['analysis_done'].includes(st))
+        return { label: 'Done', cls: 'badge--done', tier: 'done' };
+    if (['tracking', 'samurai_multi_pending', 'samurai_done', 'analyzing', 'queued'].includes(st))
+        return { label: 'Analyzing…', cls: 'badge--progress', tier: 'in-progress' };
+    if (['tracking_failed', 'analysis_failed', 'failed'].includes(st))
+        return { label: 'Failed', cls: 'badge--failed', tier: 'done' };
+    // status === 'uploaded'
+    const hasPeriods = Array.isArray(s.match_periods_sec) && s.match_periods_sec.length > 0;
+    if (hasPeriods)
+        return { label: 'Pick player', cls: 'badge--pick', tier: 'needs-pick' };
+    return { label: 'Continue setup', cls: 'badge--setup', tier: 'needs-trim' };
+}
+
 export default function Welcome() {
     const navigate = useNavigate();
     const showInDevelopment = () => toast('Feature in development');
 
     const [recents, setRecents] = useState(() => getRecentSessions());
+    // Live status fetched once per recent session (keyed by id)
+    const [sessionMeta, setSessionMeta] = useState({});
+    const [openingId, setOpeningId] = useState(null);  // which card is loading
+
+    // Fetch live session data for each recent item on mount so we can show
+    // up-to-date status badges without the user having to click anything.
+    useEffect(() => {
+        if (recents.length === 0) return;
+        recents.forEach(({ id }) => {
+            getSession(id)
+                .then((s) => setSessionMeta((prev) => ({ ...prev, [id]: s })))
+                .catch(() => {});  // stale / deleted — badge stays hidden
+        });
+    }, [recents.length]);  // re-fetch only when list length changes
 
     const handleOpenRecent = async (sessionId) => {
-        // Route based on where the session is in its lifecycle:
-        //   - "uploaded" (never analyzed) → /trim to continue from where they left off
-        //   - "tracking" / "analyzing" / "analysis_done" / "*_failed" → /dashboard
-        // Without this, clicking an "uploaded-only" session would land on a
-        // Dashboard with nothing to show but a "No replay yet" placeholder.
+        setOpeningId(sessionId);
         try {
             const s = await getSession(sessionId);
-            const status = s?.status || 'uploaded';
-            const stillNeedsPicker = status === 'uploaded' || !s?.samurai_cache_path;
-            if (stillNeedsPicker && status !== 'analysis_done') {
-                navigate(`/trim?sessionId=${encodeURIComponent(sessionId)}`, {
-                    state: { sessionId, videoId: sessionId },
+            const stage = sessionStage(s);
+
+            if (stage?.tier === 'done' || stage?.tier === 'in-progress') {
+                // Analysis started or complete → show dashboard
+                navigate(`/dashboard?sessionId=${encodeURIComponent(sessionId)}`, {
+                    state: { sessionId },
                 });
                 return;
             }
+
+            if (stage?.tier === 'needs-pick') {
+                // Match periods already saved → skip /trim, go straight to player pick
+                navigate(`/configure-multi?sessionId=${encodeURIComponent(sessionId)}`, {
+                    state: {
+                        sessionId,
+                        videoId: sessionId,
+                        matchPeriods: s.match_periods_sec,
+                    },
+                });
+                return;
+            }
+
+            // 'needs-trim' or unknown → start at the trim/periods page
+            navigate(`/trim?sessionId=${encodeURIComponent(sessionId)}`, {
+                state: { sessionId, videoId: sessionId },
+            });
         } catch (e) {
-            // If session lookup fails (deleted / network), fall through to
-            // /dashboard which will show its own "No session" empty state.
+            // Session deleted or network error — fall back to dashboard empty state
             console.warn('Recent session lookup failed:', e);
+            navigate(`/dashboard?sessionId=${encodeURIComponent(sessionId)}`, {
+                state: { sessionId },
+            });
+        } finally {
+            setOpeningId(null);
         }
-        navigate(`/dashboard?sessionId=${encodeURIComponent(sessionId)}`, {
-            state: { sessionId },
-        });
     };
 
     const handleRemoveRecent = (e, sessionId) => {
@@ -178,27 +225,40 @@ export default function Welcome() {
                                 </button>
                             </div>
                             <ul className="welcome__recents-list">
-                                {recents.map((r) => (
-                                    <li
-                                        key={r.id}
-                                        className="welcome__recent-item"
-                                        onClick={() => handleOpenRecent(r.id)}
-                                    >
-                                        <span className="welcome__recent-name" title={r.fileName}>
-                                            {r.fileName}
-                                        </span>
-                                        <span className="welcome__recent-time">
-                                            {formatRelative(r.addedAt)}
-                                        </span>
-                                        <button
-                                            className="welcome__recent-remove"
-                                            onClick={(e) => handleRemoveRecent(e, r.id)}
-                                            aria-label="Remove from recent"
+                                {recents.map((r) => {
+                                    const stage = sessionStage(sessionMeta[r.id]);
+                                    const isOpening = openingId === r.id;
+                                    return (
+                                        <li
+                                            key={r.id}
+                                            className={`welcome__recent-item${isOpening ? ' is-opening' : ''}`}
+                                            onClick={() => !isOpening && handleOpenRecent(r.id)}
                                         >
-                                            <HiXMark />
-                                        </button>
-                                    </li>
-                                ))}
+                                            <span className="welcome__recent-name" title={r.fileName}>
+                                                {r.fileName}
+                                            </span>
+                                            <span className="welcome__recent-time">
+                                                {formatRelative(r.addedAt)}
+                                            </span>
+                                            {/* Status badge — shows once live data arrives */}
+                                            {stage && !isOpening && (
+                                                <span className={`welcome__recent-badge ${stage.cls}`}>
+                                                    {stage.label}
+                                                </span>
+                                            )}
+                                            {isOpening && (
+                                                <span className="welcome__recent-spinner" />
+                                            )}
+                                            <button
+                                                className="welcome__recent-remove"
+                                                onClick={(e) => handleRemoveRecent(e, r.id)}
+                                                aria-label="Remove from recent"
+                                            >
+                                                <HiXMark />
+                                            </button>
+                                        </li>
+                                    );
+                                })}
                             </ul>
                         </motion.div>
                     )}

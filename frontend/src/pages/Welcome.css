@@ -225,3 +225,70 @@
     background: rgba(239, 68, 68, 0.15);
     color: #f87171;
 }
+
+/* ── Loading state while resolving session ──────────────────── */
+.welcome__recent-item.is-opening {
+    opacity: 0.7;
+    cursor: wait;
+    pointer-events: none;
+}
+
+.welcome__recent-spinner {
+    flex: 0 0 auto;
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(96, 165, 250, 0.3);
+    border-top-color: #60a5fa;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* ── Status badges ──────────────────────────────────────────── */
+.welcome__recent-badge {
+    flex: 0 0 auto;
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 20px;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+}
+
+/* Continue setup — hasn't set match periods yet */
+.welcome__recent-badge.badge--setup {
+    background: rgba(99, 102, 241, 0.15);
+    color: #a5b4fc;
+    border: 1px solid rgba(99, 102, 241, 0.3);
+}
+
+/* Needs player pick — periods set, hasn't picked yet */
+.welcome__recent-badge.badge--pick {
+    background: rgba(251, 191, 36, 0.12);
+    color: #fbbf24;
+    border: 1px solid rgba(251, 191, 36, 0.3);
+}
+
+/* Analysis in progress */
+.welcome__recent-badge.badge--progress {
+    background: rgba(56, 189, 248, 0.1);
+    color: #7dd3fc;
+    border: 1px solid rgba(56, 189, 248, 0.25);
+}
+
+/* Analysis done */
+.welcome__recent-badge.badge--done {
+    background: rgba(74, 222, 128, 0.1);
+    color: #4ade80;
+    border: 1px solid rgba(74, 222, 128, 0.25);
+}
+
+/* Failed */
+.welcome__recent-badge.badge--failed {
+    background: rgba(248, 113, 113, 0.1);
+    color: #f87171;
+    border: 1px solid rgba(248, 113, 113, 0.25);
+}
