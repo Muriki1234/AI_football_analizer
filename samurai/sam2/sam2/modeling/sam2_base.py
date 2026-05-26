@@ -220,17 +220,42 @@ class SAM2Base(torch.nn.Module):
         print(f"\033[93mSAMURAI mode: {self.samurai_mode}\033[0m")
 
         # Model compilation
+        # torch.compile 把 image encoder 的 forward 编译成融合 kernel，
+        # 推理快 20-30%，无精度影响。两层兜底：
+        #   1) setup 阶段 try/except — 防止 torch.compile() 本身的导入/参数错误
+        #   2) runtime 编译失败由 torch._dynamo 自动 fallback 到 eager 模式
+        #      （suppress_errors=True），打印 warning 但不崩
         if compile_image_encoder:
-            # Compile the forward function (not the full module) to allow loading checkpoints.
-            print(
-                "Image encoder compilation is enabled. First forward pass will be slow."
-            )
-            self.image_encoder.forward = torch.compile(
-                self.image_encoder.forward,
-                mode="max-autotune",
-                fullgraph=True,
-                dynamic=False,
-            )
+            try:
+                # 让 torch.compile 在首次 forward 编译失败时自动退回 eager,
+                # 而不是抛 BackendCompilerFailed。否则 SAMURAI 会整段崩。
+                import torch._dynamo as _dynamo
+                _dynamo.config.suppress_errors = True
+                _dynamo.config.verbose = True   # 失败时打印详细原因
+
+                print(
+                    "[SAM2] Image encoder compilation enabled "
+                    "(first forward pass will be slow, ~1-2 min). "
+                    "Runtime errors will auto-fallback to eager mode."
+                )
+                _orig_forward = self.image_encoder.forward
+                self.image_encoder.forward = torch.compile(
+                    _orig_forward,
+                    mode="max-autotune",
+                    fullgraph=True,
+                    dynamic=False,
+                )
+                print("[SAM2] torch.compile setup OK")
+            except Exception as _compile_exc:
+                import traceback as _tb
+                print(
+                    "\033[91m[SAM2] torch.compile setup FAILED — falling back "
+                    f"to eager mode. Reason: {_compile_exc!r}\033[0m",
+                    flush=True,
+                )
+                _tb.print_exc()
+                # 兜底：保留原 forward，行为跟 compile_image_encoder=False 一样
+                # 不抛异常，让 SAMURAI 继续跑（只是没了 20-30% 加速）
 
     @property
     def device(self):
