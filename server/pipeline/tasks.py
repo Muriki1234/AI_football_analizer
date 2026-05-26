@@ -1287,8 +1287,18 @@ def _export_position_jsons(session_id: str, tracks: dict, tracked_bboxes: dict,
         players_this_frame = []
         frame_players = tracks["players"][i] if i < len(tracks["players"]) else {}
         for pid, info in (frame_players or {}).items():
-            pos = info.get("position_minimap") or info.get("position_transformed")
-            if pos is None:
+            mm_pos = info.get("position_minimap")
+            tr_pos = info.get("position_transformed")
+            if mm_pos is not None:
+                # position_minimap is already in SoccerPitchConfiguration scale
+                # (0-12000 × 0-7000 cm) — use directly.
+                pos = mm_pos
+            elif tr_pos is not None:
+                # position_transformed is in METRES (0-105 × 0-68).
+                # Convert to the same cm scale so toPx() on the frontend works:
+                #   x_cm = x_m * 100,  y_cm = y_m * 100
+                pos = [float(tr_pos[0]) * 100.0, float(tr_pos[1]) * 100.0]
+            else:
                 continue
             try:
                 x = float(pos[0]); y = float(pos[1])
@@ -1310,39 +1320,63 @@ def _export_position_jsons(session_id: str, tracks: dict, tracked_bboxes: dict,
             sx, sy, sw, sh = tracked_bboxes[i]
             matched = _find_matched_player(frame_players or {}, (sx + sw / 2, sy + sh / 2))
             if matched:
-                tpos = matched.get("position_minimap") or matched.get("position_transformed")
+                mm = matched.get("position_minimap")
+                tr = matched.get("position_transformed")
+                if mm is not None:
+                    tpos = [float(mm[0]), float(mm[1])]
+                elif tr is not None:
+                    tpos = [float(tr[0]) * 100.0, float(tr[1]) * 100.0]
+                else:
+                    tpos = None
                 if tpos is not None:
                     try:
-                        tracked_positions.append([round(float(tpos[0]), 1), round(float(tpos[1]), 1)])
+                        tracked_positions.append([round(tpos[0], 1), round(tpos[1], 1)])
                     except (TypeError, IndexError):
                         pass
 
         # Per-minimap-sample bookkeeping
         if emit_minimap:
-            # Mark the tracked player in this sample so frontend can highlight
+            # Mark ONLY the tracked player so the frontend can highlight it.
+            # BUG (fixed): the old check `p["id"] in (frame_players or {})`
+            # was true for EVERY player (all ids are keys of frame_players),
+            # so all dots got tr=1 and the frontend's "if p.tr → continue"
+            # loop skipped all of them, leaving only the last one visible.
             if i in tracked_bboxes:
                 sx, sy, sw, sh = tracked_bboxes[i]
                 matched = _find_matched_player(
                     frame_players or {}, (sx + sw / 2, sy + sh / 2)
                 )
                 if matched:
-                    for p in players_this_frame:
-                        if p["id"] in (frame_players or {}):
-                            p["tr"] = 1
+                    # Identify the pid whose info object is the matched one
+                    matched_pid = None
+                    for pid, info in (frame_players or {}).items():
+                        if info is matched:
+                            matched_pid = int(pid)
+                            break
+                    if matched_pid is not None:
+                        for p in players_this_frame:
+                            if p["id"] == matched_pid:
+                                p["tr"] = 1
+                                break
 
             minimap_frames.append(players_this_frame)
             minimap_sampled_indices.append(i)
 
-            # Ball — same key-lookup order as players
+            # Ball — same key-lookup order as players, same unit normalisation
             bx_data = None
             for _, b in (tracks["ball"][i] if i < len(tracks["ball"]) else {}).items():
                 if not b:
                     continue
-                bpos = b.get("position_minimap") or b.get("position_transformed")
-                if bpos is None:
+                b_mm = b.get("position_minimap")
+                b_tr = b.get("position_transformed")
+                if b_mm is not None:
+                    bpos = [float(b_mm[0]), float(b_mm[1])]
+                elif b_tr is not None:
+                    bpos = [float(b_tr[0]) * 100.0, float(b_tr[1]) * 100.0]
+                else:
                     continue
                 try:
-                    bx_data = [round(float(bpos[0]), 1), round(float(bpos[1]), 1)]
+                    bx_data = [round(bpos[0], 1), round(bpos[1], 1)]
                 except (TypeError, IndexError):
                     pass
                 break
