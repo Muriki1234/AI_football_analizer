@@ -877,15 +877,11 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         # 16GB+ GPU.  Set PARALLEL_YOLO_SEGS=1 to disable and fall through
         # to the merged-streaming or legacy paths.
         #
-        # GPU contention guard: when SAMURAI is running concurrently on this
-        # same GPU (indicated by _samurai_done_event in session), 4 SAMURAI
-        # subprocesses already occupy ~10GB. Adding 4 YOLO subprocesses
-        # (~8GB) totals ~18GB — fine on A40/A100 but OOMs on 16GB cards and
-        # is dangerously tight on A10G (24GB).  In concurrent mode we cap
-        # YOLO at 2 segments (~4GB) so total stays comfortably under 16GB.
-        # Standalone mode (no SAMURAI thread) keeps the full 4-segment default.
-        _samurai_concurrent = "_samurai_done_event" in session
-        _default_segs = 2 if _samurai_concurrent else 4
+        # 24GB GPU: run 4 YOLO segments unconditionally.  Previously capped at
+        # 2 when SAMURAI was concurrent to stay within 16GB; that guard is no
+        # longer needed on 24GB cards (4 SAMURAI ~10GB + 4 YOLO ~8GB = ~18GB,
+        # leaving a ~6GB buffer).
+        _default_segs = 4
         n_yolo_segs = int(os.environ.get("PARALLEL_YOLO_SEGS", str(_default_segs)))
         parallel_ok = False
         if n_yolo_segs > 1:
@@ -1000,104 +996,202 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             _bench("keypoint_detection", _t)
         _check_memory_and_gc()
 
-        # ── 5. 速度 & 距离 ───────────────────────────────────────────
-        sm.update_status(session_id, "analyzing", progress=70, stage="speed_calculation")
-        _t = _time.perf_counter()
-        speed_est = AccurateSpeedEstimator(fps=fps)
-        speed_est.add_speed_and_distance_to_tracks(tracks)
-        _bench("speed_calculation", _t)
-        _check_memory_and_gc()
+        # ── 5-7. 三路并行：速度计算 / 队伍颜色+投票 / 场景分割 ──────────
+        # YOLO 结束后 GPU 已释放（SAMURAI 仍在后台跑），三个任务互不依赖：
+        #   Thread A — 速度/距离（CPU，读 position_transformed，写 speed/distance）
+        #   Thread B — 队伍颜色初始化 + 多帧投票（CPU，读 bbox+sample_frames）
+        #   Thread C — 场景分割（CPU，读 tracks player 数 或 user_periods）
+        # 三路 join 后再做球权检测（需要 B 的 player_final_team），避免写冲突。
 
-        # ── 7. 队伍颜色 + 球权检测 ────────────────────────────────────
-        sm.update_status(session_id, "analyzing", progress=80, stage="team_assignment")
-        team_assigner = TeamAssigner()
+        _speed_exc:  list = [None]
+        _team_exc:   list = [None]
+        _scene_exc:  list = [None]
+        _team_result: dict = {}   # team_assigner, team_color_initialized, player_final_team
+        _scene_result: dict = {}  # segments
+
+        # ── Thread A: 速度 & 距离 ─────────────────────────────────────
+        def _thread_speed():
+            try:
+                sm.update_status(session_id, "analyzing", progress=70,
+                                 stage="speed_calculation")
+                _t = _time.perf_counter()
+                speed_est = AccurateSpeedEstimator(fps=fps)
+                speed_est.add_speed_and_distance_to_tracks(tracks)
+                _bench("speed_calculation", _t)
+            except Exception as _e:
+                _speed_exc[0] = _e
+
+        # ── Thread B: 队伍颜色初始化 + 多帧投票 ──────────────────────
+        def _thread_team():
+            try:
+                from collections import Counter as _Counter
+                sm.update_status(session_id, "analyzing", progress=80,
+                                 stage="team_assignment")
+                _ta = TeamAssigner()
+
+                sm.update_status(session_id, "analyzing", progress=82,
+                                 stage="team_color_init")
+                _t = _time.perf_counter()
+                _init_colors = _ta.assign_team_color_from_frame_dict(
+                    team_sample_frames, tracks["players"], team_init_indices)
+                if _ta.kmeans is None:
+                    print("[WARN] Missing streamed team samples; falling back to video seek")
+                    _ta.assign_team_color_from_video(video_path, tracks["players"], n_samples=8)
+                _tci = bool(_ta.kmeans is not None)
+                _bench("team_color_init", _t)
+                if _tci:
+                    print(f"[INFO] Team colors initialized from {_init_colors} color samples")
+                else:
+                    print("[WARN] Team color initialization failed — all players assigned to team 1")
+
+                _pfd: dict = {}  # player_final_team
+                if _tci:
+                    sm.update_status(session_id, "analyzing", progress=85,
+                                     stage="team_voting")
+                    _t = _time.perf_counter()
+                    _t_read_total = 0.0
+                    _t_color_total = 0.0
+                    _vote_samples = 0
+                    _vote_color_ops = 0
+                    _player_vote_dict: dict = {}
+
+                    _missing = [idx for idx in team_vote_indices
+                                if idx not in team_sample_frames]
+                    if _missing:
+                        print(f"[WARN] Missing {len(_missing)} vote sample frames; "
+                              "falling back to video seek for those")
+                        _tr = _time.perf_counter()
+                        team_sample_frames.update(
+                            read_frames_at_indices(video_path, _missing))
+                        _t_read_total += _time.perf_counter() - _tr
+
+                    for _idx in team_vote_indices:
+                        _frame = team_sample_frames.get(_idx)
+                        if _frame is None or _idx >= len(tracks["players"]):
+                            continue
+                        _vote_samples += 1
+                        for _pid, _info in _ta._iter_color_sample_players(
+                                tracks["players"][_idx]):
+                            try:
+                                _tc2 = _time.perf_counter()
+                                _color = _ta._get_player_color(_frame, _info['bbox'])
+                                _t_color_total += _time.perf_counter() - _tc2
+                                if _color is not None and not np.all(_color == 0):
+                                    _cid = int(_ta.kmeans.predict(_color.reshape(1, -1))[0])
+                                    _pred = _ta._cluster_to_team.get(_cid)
+                                    if _pred is None:
+                                        _d1 = np.linalg.norm(
+                                            _color - _ta.team_colors.get(1, np.zeros(3)))
+                                        _d2 = np.linalg.norm(
+                                            _color - _ta.team_colors.get(2, np.zeros(3)))
+                                        _pred = 1 if _d1 <= _d2 else 2
+                                    _player_vote_dict.setdefault(_pid, []).append(_pred)
+                                    _vote_color_ops += 1
+                            except Exception:
+                                pass
+
+                    _pfd = {
+                        _pid: _Counter(_votes).most_common(1)[0][0]
+                        for _pid, _votes in _player_vote_dict.items() if _votes
+                    }
+                    _bench("team_voting", _t)
+                    print(
+                        f"[INFO] Multi-frame voting done: {len(_pfd)} players assigned "
+                        f"from {_vote_samples} sampled frames / {_vote_color_ops} color ops "
+                        f"(read={_t_read_total:.1f}s, color={_t_color_total:.1f}s)"
+                    )
+
+                _team_result.update({
+                    "team_assigner":         _ta,
+                    "team_color_initialized": _tci,
+                    "player_final_team":      _pfd,
+                })
+            except Exception as _e:
+                _team_exc[0] = _e
+
+        # ── Thread C: 场景分割 ────────────────────────────────────────
+        def _thread_scene():
+            try:
+                sm.update_status(session_id, "analyzing", progress=90,
+                                 stage="scene_segmentation")
+                _t = _time.perf_counter()
+                _user_p = session.get("match_periods_frames")
+
+                def _period_segment(seg_type: str, start: int, end: int) -> dict:
+                    return {
+                        "type": seg_type,
+                        "start_frame": start,
+                        "end_frame": end,
+                        "start_sec": round(start / max(fps, 1.0), 2),
+                        "end_sec": round(end / max(fps, 1.0), 2),
+                        "duration_sec": round((end - start) / max(fps, 1.0), 2),
+                    }
+
+                if _user_p and len(_user_p) > 0:
+                    _segs = []
+                    _cursor = 0
+                    for _i, (_ps, _pe) in enumerate(_user_p):
+                        if _ps > _cursor:
+                            _segs.append(_period_segment(
+                                "halftime" if _i > 0 else "pre_match", _cursor, _ps))
+                        _stype = ("first_half" if _i == 0 and len(_user_p) > 1
+                                  else "second_half" if _i == 1 and len(_user_p) > 1
+                                  else "match")
+                        _segs.append(_period_segment(_stype, _ps, _pe))
+                        _cursor = _pe
+                    if _cursor < total:
+                        _segs.append(_period_segment("post_match", _cursor, total))
+                    print(f"[INFO] Scene segments (from user periods): "
+                          f"{[s['type'] for s in _segs]}")
+                else:
+                    _scene_det = SceneChangeDetector(fps=fps)
+                    _segs = _scene_det.detect_segments(tracks, total)
+                    print(f"[INFO] Scene segments (auto-detected): "
+                          f"{[s['type'] for s in _segs]} "
+                          f"(durations: {[round(s['duration_sec']) for s in _segs]}s)")
+
+                _scene_result["segments"] = _segs
+                _bench("scene_segmentation", _t)
+            except Exception as _e:
+                _scene_exc[0] = _e
+
+        # ── 启动三路并行，等待全部完成 ────────────────────────────────
+        _t_parallel = _time.perf_counter()
+        _th_speed = threading.Thread(target=_thread_speed, daemon=True, name="speed")
+        _th_team  = threading.Thread(target=_thread_team,  daemon=True, name="team")
+        _th_scene = threading.Thread(target=_thread_scene, daemon=True, name="scene")
+        _th_speed.start(); _th_team.start(); _th_scene.start()
+        _th_speed.join();  _th_team.join();  _th_scene.join()
+        _bench("parallel_post_yolo", _t_parallel)
+
+        # 传播线程异常
+        for _exc in (_speed_exc[0], _team_exc[0], _scene_exc[0]):
+            if _exc is not None:
+                raise _exc
+
+        # 解包结果
+        team_assigner          = _team_result["team_assigner"]
+        team_color_initialized = _team_result["team_color_initialized"]
+        player_final_team      = _team_result["player_final_team"]
+        segments               = _scene_result["segments"]
+
+        # ── 8. 球权检测（串行，写入 tracks；需要 B 的 player_final_team）──
         team_control  = []
         poss_detector = SmartBallPossessionDetector(fps=fps, video_w=_vid_w, video_h=_vid_h)
         ball_history  = []
 
-        # 多帧聚合初始化队伍颜色。优先复用 YOLO 流式阶段顺手抓到的采样帧，
-        # 避免在 MP4 上反复 CAP_PROP_POS_FRAMES 随机 seek。
-        sm.update_status(session_id, "analyzing", progress=82, stage="team_color_init")
-        _t = _time.perf_counter()
-        init_colors = team_assigner.assign_team_color_from_frame_dict(
-            team_sample_frames, tracks["players"], team_init_indices)
-        if team_assigner.kmeans is None:
-            print("[WARN] Missing streamed team samples; falling back to video seek")
-            team_assigner.assign_team_color_from_video(video_path, tracks["players"], n_samples=8)
-        team_color_initialized = bool(team_assigner.kmeans is not None)
-        _bench("team_color_init", _t)
         if team_color_initialized:
-            print(f"[INFO] Team colors initialized from {init_colors} color samples")
-        else:
-            print("[WARN] Team color initialization failed — all players assigned to team 1")
-
-        if team_color_initialized:
-            # ── 多帧投票：复用 YOLO 阶段缓存的采样帧 ──
-            sm.update_status(session_id, "analyzing", progress=85, stage="team_voting")
-            _t = _time.perf_counter()
-            _t_read_total = 0.0  # kept in logs; should stay 0 on the fast path
-            _t_color_total = 0.0
-            vote_samples = 0
-            vote_color_ops = 0
-            from collections import Counter
-            player_vote_dict = {}
-
-            missing_vote_indices = [idx for idx in team_vote_indices
-                                    if idx not in team_sample_frames]
-            if missing_vote_indices:
-                print(f"[WARN] Missing {len(missing_vote_indices)} vote sample frames; "
-                      "falling back to video seek for those")
-                _tr = _time.perf_counter()
-                team_sample_frames.update(read_frames_at_indices(video_path, missing_vote_indices))
-                _t_read_total += _time.perf_counter() - _tr
-
-            for idx in team_vote_indices:
-                frame = team_sample_frames.get(idx)
-                if frame is None or idx >= len(tracks["players"]):
-                    continue
-                vote_samples += 1
-                for pid, info in team_assigner._iter_color_sample_players(tracks["players"][idx]):
-                    try:
-                        _tc = _time.perf_counter()
-                        color = team_assigner._get_player_color(frame, info['bbox'])
-                        _t_color_total += _time.perf_counter() - _tc
-                        if color is not None and not np.all(color == 0):
-                            cluster_id = int(team_assigner.kmeans.predict(
-                                color.reshape(1, -1))[0])
-                            # 用 _cluster_to_team 映射到 team 1/2，小簇按颜色距离归队
-                            predicted = team_assigner._cluster_to_team.get(cluster_id)
-                            if predicted is None:
-                                d1 = np.linalg.norm(color - team_assigner.team_colors.get(1, np.zeros(3)))
-                                d2 = np.linalg.norm(color - team_assigner.team_colors.get(2, np.zeros(3)))
-                                predicted = 1 if d1 <= d2 else 2
-                            player_vote_dict.setdefault(pid, []).append(predicted)
-                            vote_color_ops += 1
-                    except Exception:
-                        pass
-
-            player_final_team = {
-                pid: Counter(votes).most_common(1)[0][0]
-                for pid, votes in player_vote_dict.items() if votes
-            }
-            _bench("team_voting", _t)
-            print(
-                f"[INFO] Multi-frame voting done: {len(player_final_team)} players assigned "
-                f"from {vote_samples} sampled frames / {vote_color_ops} color ops "
-                f"(read={_t_read_total:.1f}s, color={_t_color_total:.1f}s)"
-            )
-
-            sm.update_status(session_id, "analyzing", progress=88, stage="possession_detection")
+            sm.update_status(session_id, "analyzing", progress=88,
+                             stage="possession_detection")
             _t = _time.perf_counter()
             for i, p_tracks in enumerate(tracks["players"]):
                 for pid, info in p_tracks.items():
                     if not info:
                         continue
-                    # 投票结果优先，未覆盖的 ID 默认队伍1
                     tid = player_final_team.get(pid, 1)
                     info["team"]       = tid
                     info["team_color"] = team_assigner.team_colors.get(tid, np.array([0,0,0]))
 
-                # 球权检测
                 ball_info = tracks["ball"][i].get(1, {})
                 ball_bbox = ball_info.get("bbox", [])
                 if len(ball_bbox) == 4:
@@ -1116,7 +1210,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                 if (pid_has_ball != -1 and pid_has_ball in p_tracks
                         and conf > 0.3
                         and poss_detector.ball_state == "controlled"):
-                    p_tracks[pid_has_ball]["has_ball"]             = True
+                    p_tracks[pid_has_ball]["has_ball"]              = True
                     p_tracks[pid_has_ball]["possession_confidence"] = conf
                     team_control.append(p_tracks[pid_has_ball].get("team", 0))
                 else:
@@ -1124,7 +1218,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
 
             _bench("possession_detection", _t)
 
-        # ── 8. 摘要 & 缓存 ────────────────────────────────────────────
+        # ── 9. 摘要 & 缓存 ────────────────────────────────────────────
         _bench("TOTAL", _t_total)
         try:
             log_path = os.path.join(os.path.dirname(__file__), "..", "..", "benchmark.log")
@@ -1132,49 +1226,6 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                 _f.write("-" * 40 + "\n")
         except Exception:
             pass
-        # Scene segmentation — but skip the auto detection if the user
-        # already gave us explicit match periods (point C). Their periods
-        # ARE the segmentation, and trusting them avoids the scene detector
-        # mis-classifying low-player-count frames inside an actual match.
-        sm.update_status(session_id, "analyzing", progress=90, stage="scene_segmentation")
-        _t = _time.perf_counter()
-        user_periods = session.get("match_periods_frames")
-        if user_periods and len(user_periods) > 0:
-            segments = []
-            def _period_segment(seg_type: str, start: int, end: int) -> dict:
-                return {
-                    "type": seg_type,
-                    "start_frame": start,
-                    "end_frame": end,
-                    "start_sec": round(start / max(fps, 1.0), 2),
-                    "end_sec": round(end / max(fps, 1.0), 2),
-                    "duration_sec": round((end - start) / max(fps, 1.0), 2),
-                }
-
-            cursor = 0
-            for i, (ps, pe) in enumerate(user_periods):
-                if ps > cursor:
-                    segments.append(_period_segment(
-                        "halftime" if 0 < i else "pre_match",
-                        cursor,
-                        ps,
-                    ))
-                seg_type = ("first_half" if i == 0 and len(user_periods) > 1
-                            else "second_half" if i == 1 and len(user_periods) > 1
-                            else "match")
-                segments.append(_period_segment(seg_type, ps, pe))
-                cursor = pe
-            if cursor < total:
-                segments.append(_period_segment("post_match", cursor, total))
-            print(f"[INFO] Scene segments (from user periods): "
-                  f"{[s['type'] for s in segments]}")
-        else:
-            scene_det = SceneChangeDetector(fps=fps)
-            segments  = scene_det.detect_segments(tracks, total)
-            print(f"[INFO] Scene segments (auto-detected): "
-                  f"{[s['type'] for s in segments]} "
-                  f"(durations: {[round(s['duration_sec']) for s in segments]}s)")
-        _bench("scene_segmentation", _t)
 
         # ── Wait for SAMURAI here if it was running concurrently. ─────────
         # Timeout scales with video length: SAMURAI walltime is roughly
