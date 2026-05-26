@@ -635,18 +635,14 @@ def run_samurai_tracking_multi(session_id: str, session: dict,
 
         n_segments = len(segs_sorted)
 
-        # Group segments by period_idx so we can run "segments WITHIN a period
-        # in parallel, periods SERIALLY". On a 16GB GPU 4 SAMURAI subprocesses
-        # share the card comfortably (~10GB); running both halves' 4-each
-        # simultaneously = 8 procs = ~14.6GB which is too tight.
-        from collections import defaultdict
-        groups: dict[int, list] = defaultdict(list)
-        for i, seg in enumerate(segs_sorted):
-            groups[int(seg.get("period_idx", 0))].append((i, seg))
-        period_keys = sorted(groups.keys())
-        print(f"[SAMURAI-MULTI] {n_segments} segments across "
-              f"{len(period_keys)} period(s) — periods run serially, "
-              f"segments inside each period run in parallel")
+        # 24GB GPU: run ALL segments across ALL periods in parallel.
+        # Previously periods were serialised (first half → second half) to
+        # stay within 16GB (4 procs × ~2.5GB = ~10GB per period).  On 24GB
+        # all 8 segments run simultaneously (~14-16GB total), cutting
+        # SAMURAI wall-time roughly in half (e.g. 30 min → 15 min).
+        all_segs = list(enumerate(segs_sorted))
+        print(f"[SAMURAI-MULTI] {n_segments} segments — all running in parallel "
+              f"(24GB GPU mode)")
 
         def _submit_segment(pool, i, seg):
             return pool.submit(
@@ -661,50 +657,44 @@ def run_samurai_tracking_multi(session_id: str, session: dict,
         done = 0
         seg_attempts: dict[int, int] = {}
 
-        for period_idx in period_keys:
-            group = groups[period_idx]
-            n_in_group = len(group)
-            print(f"[SAMURAI-MULTI] starting period {period_idx} "
-                  f"({n_in_group} parallel segment(s))")
-
-            with ThreadPoolExecutor(max_workers=n_in_group) as pool:
-                futures = {
-                    _submit_segment(pool, i, seg): i
-                    for i, seg in group
-                }
-                for i in futures.values():
-                    seg_attempts[i] = 1
-                pending = set(futures.keys())
-                while pending:
-                    for fut in list(as_completed(pending)):
-                        pending.discard(fut)
-                        seg_idx = futures[fut]
-                        try:
-                            r = fut.result()
-                            results.append(r)
-                            done += 1
-                            pct = 5 + int(80 * done / n_segments)
-                            sm.update_status(
-                                session_id, "tracking", progress=pct,
-                                stage=f"samurai_multi ({done}/{n_segments} segments)"
-                            )
-                            print(f"[SAMURAI-MULTI] seg {r['seg_idx']} done "
-                                  f"({r['frames_emitted']} sparse frames, "
-                                  f"range {r['start']}..{r['end']})")
-                        except Exception as seg_exc:
-                            attempt = seg_attempts[seg_idx]
-                            if attempt < 2:
-                                seg_attempts[seg_idx] += 1
-                                print(f"[SAMURAI-MULTI] seg {seg_idx} attempt "
-                                      f"{attempt} failed: {seg_exc} — retrying")
-                                retry_seg = next(s for (i, s) in group if i == seg_idx)
-                                retry_fut = _submit_segment(pool, seg_idx, retry_seg)
-                                futures[retry_fut] = seg_idx
-                                pending.add(retry_fut)
-                            else:
-                                print(f"[SAMURAI-MULTI] seg {seg_idx} failed "
-                                      f"after {attempt} attempts: {seg_exc} — "
-                                      "interpolation will cover the gap")
+        with ThreadPoolExecutor(max_workers=n_segments) as pool:
+            futures = {
+                _submit_segment(pool, i, seg): i
+                for i, seg in all_segs
+            }
+            for i in futures.values():
+                seg_attempts[i] = 1
+            pending = set(futures.keys())
+            while pending:
+                for fut in list(as_completed(pending)):
+                    pending.discard(fut)
+                    seg_idx = futures[fut]
+                    try:
+                        r = fut.result()
+                        results.append(r)
+                        done += 1
+                        pct = 5 + int(80 * done / n_segments)
+                        sm.update_status(
+                            session_id, "tracking", progress=pct,
+                            stage=f"samurai_multi ({done}/{n_segments} segments)"
+                        )
+                        print(f"[SAMURAI-MULTI] seg {r['seg_idx']} done "
+                              f"({r['frames_emitted']} sparse frames, "
+                              f"range {r['start']}..{r['end']})")
+                    except Exception as seg_exc:
+                        attempt = seg_attempts[seg_idx]
+                        if attempt < 2:
+                            seg_attempts[seg_idx] += 1
+                            print(f"[SAMURAI-MULTI] seg {seg_idx} attempt "
+                                  f"{attempt} failed: {seg_exc} — retrying")
+                            retry_seg = next(s for (i, s) in all_segs if i == seg_idx)
+                            retry_fut = _submit_segment(pool, seg_idx, retry_seg)
+                            futures[retry_fut] = seg_idx
+                            pending.add(retry_fut)
+                        else:
+                            print(f"[SAMURAI-MULTI] seg {seg_idx} failed "
+                                  f"after {attempt} attempts: {seg_exc} — "
+                                  "interpolation will cover the gap")
 
         if not results:
             raise RuntimeError(
