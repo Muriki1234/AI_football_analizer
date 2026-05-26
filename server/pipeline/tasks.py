@@ -15,6 +15,7 @@ tasks.py - 所有后台任务实现（Flask 线程版）
 
 # Standard imports
 import os
+import sys
 import subprocess
 import pickle
 import threading
@@ -1005,27 +1006,37 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         _team_result: dict = {}   # team_assigner, team_color_initialized, player_final_team
         _scene_result: dict = {}  # segments
 
+        # 进度条单调推进：主线程在 fan-out 前后各设一次 progress，
+        # 子线程只更新 stage（文本标签），避免多线程争抢导致进度倒退。
+        sm.update_status(session_id, "analyzing", progress=70,
+                         stage="parallel_post_yolo (speed + team + scene)")
+
+        def _capture_exc(slot: list):
+            """Print traceback in the crashing thread, then store exc for main."""
+            slot[0] = sys.exc_info()[1]
+            traceback.print_exc()
+
         # ── Thread A: 速度 & 距离 ─────────────────────────────────────
         def _thread_speed():
             try:
-                sm.update_status(session_id, "analyzing", progress=70,
+                sm.update_status(session_id, "analyzing",
                                  stage="speed_calculation")
                 _t = _time.perf_counter()
                 speed_est = AccurateSpeedEstimator(fps=fps)
                 speed_est.add_speed_and_distance_to_tracks(tracks)
                 _bench("speed_calculation", _t)
-            except Exception as _e:
-                _speed_exc[0] = _e
+            except Exception:
+                _capture_exc(_speed_exc)
 
         # ── Thread B: 队伍颜色初始化 + 多帧投票 ──────────────────────
         def _thread_team():
             try:
                 from collections import Counter as _Counter
-                sm.update_status(session_id, "analyzing", progress=80,
+                sm.update_status(session_id, "analyzing",
                                  stage="team_assignment")
                 _ta = TeamAssigner()
 
-                sm.update_status(session_id, "analyzing", progress=82,
+                sm.update_status(session_id, "analyzing",
                                  stage="team_color_init")
                 _t = _time.perf_counter()
                 _init_colors = _ta.assign_team_color_from_frame_dict(
@@ -1042,7 +1053,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
 
                 _pfd: dict = {}  # player_final_team
                 if _tci:
-                    sm.update_status(session_id, "analyzing", progress=85,
+                    sm.update_status(session_id, "analyzing",
                                      stage="team_voting")
                     _t = _time.perf_counter()
                     _t_read_total = 0.0
@@ -1102,13 +1113,13 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                     "team_color_initialized": _tci,
                     "player_final_team":      _pfd,
                 })
-            except Exception as _e:
-                _team_exc[0] = _e
+            except Exception:
+                _capture_exc(_team_exc)
 
         # ── Thread C: 场景分割 ────────────────────────────────────────
         def _thread_scene():
             try:
-                sm.update_status(session_id, "analyzing", progress=90,
+                sm.update_status(session_id, "analyzing",
                                  stage="scene_segmentation")
                 _t = _time.perf_counter()
                 _user_p = session.get("match_periods_frames")
@@ -1148,8 +1159,8 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
 
                 _scene_result["segments"] = _segs
                 _bench("scene_segmentation", _t)
-            except Exception as _e:
-                _scene_exc[0] = _e
+            except Exception:
+                _capture_exc(_scene_exc)
 
         # ── 启动三路并行，等待全部完成 ────────────────────────────────
         _t_parallel = _time.perf_counter()
@@ -1160,7 +1171,11 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         _th_speed.join();  _th_team.join();  _th_scene.join()
         _bench("parallel_post_yolo", _t_parallel)
 
-        # 传播线程异常
+        # 单调推进：所有并行阶段都完成后再推到 87
+        sm.update_status(session_id, "analyzing", progress=87,
+                         stage="parallel_post_yolo_done")
+
+        # 传播线程异常（traceback 已在子线程内 print，这里只需要重新 raise）
         for _exc in (_speed_exc[0], _team_exc[0], _scene_exc[0]):
             if _exc is not None:
                 raise _exc
