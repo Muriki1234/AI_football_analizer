@@ -179,6 +179,29 @@ def stream_video_chunks(video_path: str, chunk_size: int = 500):
     cap.release()
 
 
+def stream_video_chunks_range(video_path: str, start_frame: int, end_frame: int,
+                               chunk_size: int = 500):
+    """Like stream_video_chunks but only reads [start_frame, end_frame)."""
+    cap = cv2.VideoCapture(video_path, cv2.CAP_FFMPEG)
+    if start_frame > 0:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, float(start_frame))
+    cur = start_frame
+    while cur < end_frame:
+        chunk = []
+        for _ in range(chunk_size):
+            if cur >= end_frame:
+                break
+            ret, frame = cap.read()
+            if not ret:
+                break
+            chunk.append(frame)
+            cur += 1
+        if not chunk:
+            break
+        yield cur - len(chunk), chunk
+    cap.release()
+
+
 def _check_memory_and_gc(threshold_pct: float = 85.0) -> float:
     """检查内存使用率（%），超阈值时强制 GC。返回当前使用率（无 psutil 返回 -1）。"""
     try:
@@ -1873,3 +1896,162 @@ def render_minimap_frame(frame_idx: int, tracks: dict,
                 (8, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
     return frame
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Segment detection — used by parallel YOLO subprocess workers
+# ═══════════════════════════════════════════════════════════════════════
+
+def run_segment_detection(video_path: str, start_frame: int, end_frame: int,
+                           yolo_model_path: str, kpt_model_path: str,
+                           batch_size: int = 15,
+                           chunk_size: int = 500) -> tuple:
+    """
+    Run YOLO detection + keypoint detection + optical flow on one video segment
+    [start_frame, end_frame). Called from _yolo_parallel_worker subprocesses.
+
+    Each subprocess has its own Tracker (and thus its own sv.ByteTrack instance),
+    so player IDs are local to the segment — cross-segment ID discontinuity is
+    acceptable because _compute_player_summary uses bbox proximity, not IDs.
+
+    Returns:
+        raw_tracks  – dict with "players"/"referees"/"ball" lists, length = seg_len.
+                      Each entry has raw bbox/track data (no position fields yet).
+        cam_mov     – list[list[float, float]], length = seg_len (smoothed).
+        kps         – list of per-frame keypoint dicts, length = seg_len
+                      (interpolated via _linear_fill_keypoints).
+        seg_start   – start_frame (echoed back for merge alignment)
+        seg_end     – end_frame
+    """
+    seg_len = end_frame - start_frame
+
+    # Each subprocess gets its own Tracker (and fresh sv.ByteTrack)
+    tracker = Tracker(yolo_model_path)
+    kpt_det = KeypointDetector(kpt_model_path)
+    cam_est = CameraMovementEstimator.from_video_path(video_path)
+
+    raw_tracks = {
+        "players":  [{} for _ in range(seg_len)],
+        "referees": [{} for _ in range(seg_len)],
+        "ball":     [{} for _ in range(seg_len)],
+    }
+
+    # sampled_cam: {local_frame_idx: [cx, cy]}
+    sampled_cam: dict = {0: [0.0, 0.0]}
+    # sampled_kpts: {local_frame_idx: {kid: [x, y]}}
+    sampled_kpts: dict = {}
+
+    flow_state = {"old_gray": None, "old_pts": None}
+    OPT_FLOW_STRIDE = 3
+
+    for chunk_start, chunk in stream_video_chunks_range(
+            video_path, start_frame, end_frame, chunk_size):
+        local_start = chunk_start - start_frame  # offset within segment
+
+        # ── YOLO detection (ByteTrack in frame order) ──────────────────
+        det_local = list(range(0, len(chunk), YOLO_DETECTION_STRIDE))
+        det_dict: dict = {}
+        for i in range(0, len(det_local), batch_size):
+            batch_l = det_local[i:i + batch_size]
+            results = tracker.model.predict(
+                [chunk[j] for j in batch_l],
+                conf=PLAYER_CONF, iou=0.45,
+                verbose=False, half=True, imgsz=1280,
+            )
+            for res, local_idx in zip(results, batch_l):
+                det_dict[local_idx] = res
+
+        # ByteTrack must process frames in order (stateful)
+        for local_idx in sorted(det_dict.keys()):
+            fi_local = local_start + local_idx
+            if fi_local >= seg_len:
+                break
+            ds = sv.Detections.from_ultralytics(det_dict[local_idx])
+            # _process_detections writes to the track dict using the local frame idx
+            # We need a temporary tracks view aligned to fi_local
+            tracker._process_detections(ds, fi_local, raw_tracks)
+
+        # ── Optical flow (CPU, inline) ──────────────────────────────────
+        old_gray = flow_state["old_gray"]
+        old_pts  = flow_state["old_pts"]
+        for local_idx, frame in enumerate(chunk):
+            fi_local = local_start + local_idx
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            if old_gray is None:
+                old_gray = gray
+                old_pts = cv2.goodFeaturesToTrack(old_gray, **cam_est.features)
+                continue
+            if fi_local % OPT_FLOW_STRIDE != 0:
+                old_gray = gray
+                continue
+            new_pts, _, _ = cv2.calcOpticalFlowPyrLK(
+                old_gray, gray, old_pts, None, **cam_est.lk_params)
+            max_d, cx, cy = 0, 0.0, 0.0
+            if new_pts is not None and old_pts is not None:
+                for n, o in zip(new_pts, old_pts):
+                    d = measure_distance(n.ravel(), o.ravel())
+                    if d > max_d:
+                        max_d = d
+                        cx, cy = measure_xy_distance(o.ravel(), n.ravel())
+            if fi_local < seg_len:
+                sampled_cam[fi_local] = (
+                    [cx, cy] if max_d > cam_est.minimum_distance else [0.0, 0.0]
+                )
+                if max_d > cam_est.minimum_distance:
+                    old_pts = cv2.goodFeaturesToTrack(gray, **cam_est.features)
+            old_gray = gray.copy()
+        flow_state["old_gray"] = old_gray
+        flow_state["old_pts"]  = old_pts
+
+        # ── Keypoint detection ──────────────────────────────────────────
+        pan_thresh_sq = kpt_det._PAN_TRIGGER_PX ** 2
+        kpt_local_set = {j for j in range(len(chunk))
+                         if (local_start + j) % KEYPOINT_STRIDE == 0}
+        # Pan-trigger augmentation (parity with merged pipeline)
+        for j in range(len(chunk)):
+            fi_local = local_start + j
+            mv = sampled_cam.get(fi_local)
+            if mv and (mv[0] * mv[0] + mv[1] * mv[1]) > pan_thresh_sq:
+                kpt_local_set.add(j)
+
+        kpt_local = sorted(kpt_local_set)
+        if kpt_local:
+            kpt_frames = [chunk[j] for j in kpt_local]
+            for i in range(0, len(kpt_frames), batch_size):
+                batch_l = kpt_local[i:i + batch_size]
+                kpt_results = kpt_det.model.predict(
+                    [chunk[j] for j in batch_l],
+                    conf=0.1, verbose=False, half=True, imgsz=416,
+                )
+                for j, kres in zip(batch_l, kpt_results):
+                    fi_local = local_start + j
+                    if fi_local >= seg_len:
+                        continue
+                    kps = {}
+                    if kres.keypoints is not None and kres.keypoints.xy.shape[1] > 0:
+                        xy = kres.keypoints.xy[0].cpu().numpy()
+                        confs = (kres.keypoints.conf[0].cpu().numpy()
+                                 if kres.keypoints.conf is not None
+                                 else np.ones(len(xy)))
+                        for kid, (x, y) in enumerate(xy):
+                            if confs[kid] > 0.65 and (x != 0 or y != 0):
+                                kps[kid] = [float(x), float(y)]
+                    sampled_kpts[fi_local] = kps
+
+    # Post-process tracks within segment (interpolate player tracks)
+    tracker._interpolate_tracks(raw_tracks, seg_len)
+
+    # Smooth camera movement timeline (same as legacy path)
+    df = pd.DataFrame(index=range(seg_len), columns=["x", "y"], dtype=float)
+    for idx, mv in sampled_cam.items():
+        if idx < seg_len:
+            df.loc[idx] = mv
+    df = df.interpolate(method="linear").bfill().ffill()
+    df["x"] = df["x"].rolling(5, min_periods=1, center=True).mean()
+    df["y"] = df["y"].rolling(5, min_periods=1, center=True).mean()
+    cam_mov = df.values.tolist()
+
+    # Fill keypoints to full segment length
+    kps_full = _linear_fill_keypoints(sampled_kpts, seg_len)
+
+    return raw_tracks, cam_mov, kps_full, start_frame, end_frame

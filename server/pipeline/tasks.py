@@ -61,6 +61,7 @@ from .analysis_core import (
     bgr_to_hex,
     render_minimap_frame,
     measure_distance,
+    run_segment_detection,
 )
 
 try:
@@ -401,6 +402,144 @@ def _run_samurai_segment(seg_idx: int, session_id: str, output_dir: Path,
     }
 
 
+# ── Parallel YOLO detection workers ─────────────────────────────────────────
+# Module-level so they are picklable for ProcessPoolExecutor(mp_context='spawn').
+
+def _yolo_parallel_worker(args: dict) -> str:
+    """
+    Subprocess worker: run detection on one video segment, write partial
+    tracks to a pkl file, return its path.
+    Called via ProcessPoolExecutor(mp_context='spawn').
+    """
+    import pickle
+    from pathlib import Path
+    from .analysis_core import (
+        run_segment_detection, Tracker, CameraMovementEstimator, ViewTransformer,
+    )
+
+    seg_idx    = args["seg_idx"]
+    video_path = args["video_path"]
+    start      = args["start_frame"]
+    end        = args["end_frame"]
+    yolo_path  = args["yolo_path"]
+    kpt_path   = args["kpt_path"]
+    output_dir = Path(args["output_dir"])
+    batch_size = args.get("batch_size", 15)
+
+    raw_tracks, cam_mov, kps, seg_start, seg_end = run_segment_detection(
+        video_path, start, end, yolo_path, kpt_path, batch_size=batch_size,
+    )
+
+    # Post-process (everything except add_speed_and_distance):
+    tracker_obj = Tracker(yolo_path)
+    tracker_obj.add_position_to_tracks(raw_tracks)
+    cam_obj = CameraMovementEstimator.from_video_path(video_path)
+    cam_obj.add_adjust_positions_to_tracks(raw_tracks, cam_mov)
+    vt = ViewTransformer()
+    vt.add_transformed_position_to_tracks(raw_tracks, kps)
+    # Interpolate ball within segment (cross-segment gaps handled after merge)
+    raw_tracks["ball"] = tracker_obj.interpolate_ball_positions(raw_tracks["ball"])
+
+    out_path = output_dir / f"yolo_partial_{seg_idx}.pkl"
+    with open(out_path, "wb") as f:
+        pickle.dump({
+            "seg_idx": seg_idx,
+            "start_frame": seg_start,
+            "end_frame": seg_end,
+            "tracks": raw_tracks,
+            "cam_mov": cam_mov,
+        }, f, protocol=4)
+
+    print(f"[YOLO-PAR] seg {seg_idx} done: frames {seg_start}–{seg_end}, "
+          f"pkl={out_path.name}")
+    return str(out_path)
+
+
+def _run_yolo_parallel(video_path: str, total_frames: int, n_segs: int,
+                        yolo_path: str, kpt_path: str, output_dir: Path,
+                        fps: float,
+                        progress_callback=None) -> tuple:
+    """
+    Split video into n_segs equal segments, run YOLO+KPT+flow on each in
+    parallel subprocesses (spawn context to avoid CUDA fork issues).
+    Returns (merged_tracks, merged_cam_mov) ready for speed/team/possession.
+    """
+    import multiprocessing as mp
+    import pickle
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+    from .analysis_core import YOLO_BATCH_SIZE
+
+    seg_size = total_frames // n_segs
+    # batch_size per subprocess — reduce to avoid OOM when running n_segs parallel GPU procs
+    batch_size = max(8, YOLO_BATCH_SIZE // n_segs)
+    seg_args = []
+    for i in range(n_segs):
+        start = i * seg_size
+        end   = total_frames if i == n_segs - 1 else (i + 1) * seg_size
+        seg_args.append({
+            "seg_idx":     i,
+            "video_path":  video_path,
+            "start_frame": start,
+            "end_frame":   end,
+            "yolo_path":   yolo_path,
+            "kpt_path":    kpt_path,
+            "output_dir":  str(output_dir),
+            "batch_size":  batch_size,
+        })
+
+    print(f"[YOLO-PAR] {n_segs} segments, "
+          f"batch_size={batch_size}, "
+          f"~{seg_size / max(fps, 1):.0f}s each")
+
+    ctx = mp.get_context("spawn")
+    pkl_paths: dict = {}
+
+    with ProcessPoolExecutor(max_workers=n_segs, mp_context=ctx) as pool:
+        futures = {pool.submit(_yolo_parallel_worker, a): a["seg_idx"]
+                   for a in seg_args}
+        done = 0
+        for fut in as_completed(futures):
+            seg_idx = futures[fut]
+            try:
+                pkl_paths[seg_idx] = fut.result()
+            except Exception as exc:
+                raise RuntimeError(
+                    f"[YOLO-PAR] segment {seg_idx} failed: {exc}") from exc
+            done += 1
+            if progress_callback:
+                progress_callback(done / n_segs, done * seg_size, total_frames, 0)
+            print(f"[YOLO-PAR] {done}/{n_segs} segments done")
+
+    # Merge: concatenate by original frame index
+    merged_tracks = {
+        "players":  [{} for _ in range(total_frames)],
+        "referees": [{} for _ in range(total_frames)],
+        "ball":     [{} for _ in range(total_frames)],
+    }
+    merged_cam_mov = [[0.0, 0.0]] * total_frames
+
+    for seg_idx in sorted(pkl_paths):
+        pkl_path = pkl_paths[seg_idx]
+        with open(pkl_path, "rb") as f:
+            data = pickle.load(f)
+        start = data["start_frame"]
+        seg_tracks = data["tracks"]
+        seg_cam    = data["cam_mov"]
+        for key in ("players", "referees", "ball"):
+            for i, fd in enumerate(seg_tracks[key]):
+                if start + i < total_frames:
+                    merged_tracks[key][start + i] = fd
+        for i, cm in enumerate(seg_cam):
+            if start + i < total_frames:
+                merged_cam_mov[start + i] = cm
+        try:
+            os.remove(pkl_path)
+        except OSError:
+            pass
+
+    return merged_tracks, merged_cam_mov
+
+
 def run_samurai_tracking(session_id: str, session: dict,
                          player_bbox: dict, sm: SessionManager):
     """Thin wrapper kept for the legacy single-bbox call site in
@@ -731,6 +870,50 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                 stage=f"streaming_analysis ({frames_done}/{frames_total} frames, ETA {eta_str})"
             )
 
+        # ── Parallel YOLO across N segments ─────────────────────────────
+        # PARALLEL_YOLO_SEGS=4 (default) → 4 subprocesses each handle 1/4
+        # of the video. Each subprocess runs YOLO+KPT+optical flow, then
+        # results are merged. Speeds up detection from ~10min → ~3min on a
+        # 16GB+ GPU.  Set PARALLEL_YOLO_SEGS=1 to disable and fall through
+        # to the merged-streaming or legacy paths.
+        n_yolo_segs = int(os.environ.get("PARALLEL_YOLO_SEGS", "4"))
+        parallel_ok = False
+        if n_yolo_segs > 1:
+            print(f"[INFO] Parallel YOLO: {n_yolo_segs} segments")
+            sm.update_status(session_id, "analyzing", progress=12,
+                             stage=f"parallel_yolo ({n_yolo_segs} segments)")
+            try:
+                tracks, cam_mov = _run_yolo_parallel(
+                    video_path, total, n_yolo_segs,
+                    yolo_path, kpt_path, output_dir, fps,
+                    progress_callback=_merge_progress,
+                )
+                # Ball interpolation across segment boundaries
+                tracks["ball"] = tracker.interpolate_ball_positions(tracks["ball"])
+                # 2D position interpolation across segment boundaries
+                vt_main = ViewTransformer()
+                vt_main.interpolate_2d_positions(tracks)
+                # Capture team-sample frames from merged tracks for team-color init
+                if team_sample_indices:
+                    missing = [i for i in team_sample_indices
+                               if i not in team_sample_frames]
+                    if missing:
+                        team_sample_frames.update(
+                            read_frames_at_indices(video_path, missing))
+                _bench("parallel_yolo", _t)
+                print(f"[INFO] Parallel YOLO done. "
+                      f"Captured {len(team_sample_frames)}/{len(team_sample_indices)} "
+                      "team sample frames")
+                parallel_ok = True
+            except Exception as par_exc:
+                import sys
+                print(f"[YOLO-PAR] parallel pipeline crashed: {par_exc!r}", flush=True)
+                traceback.print_exc(file=sys.stderr)
+                sys.stderr.flush()
+                print("[YOLO-PAR] falling back to merged/legacy path", flush=True)
+                team_sample_frames.clear()
+                _t = _time.perf_counter()
+
         # Merged streaming pipeline: 1 video read instead of 3, CUDA streams
         # parallelize YOLO/keypoint, optical flow runs concurrently on CPU.
         # Set MERGED_STREAMING=0 to fall back to the legacy 3-pass path if a
@@ -741,7 +924,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         # exception, log the traceback so we can debug, then fall back to the
         # legacy 3-pass path so the user's analysis still completes.
         merged_ok = False
-        if use_merged:
+        if not parallel_ok and use_merged:
             from .analysis_core import run_merged_streaming_pipeline
             try:
                 kp = KeypointDetector(kpt_path)
@@ -775,7 +958,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                 team_sample_frames.clear()
                 _t = _time.perf_counter()
 
-        if not use_merged or not merged_ok:
+        if not parallel_ok and (not use_merged or not merged_ok):
             reason = "MERGED_STREAMING=0" if not use_merged else "merged path failed"
             print(f"[INFO] Using legacy 3-pass pipeline ({reason})")
             tracks = tracker.get_object_tracks_streamed(
