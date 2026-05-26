@@ -948,28 +948,31 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         user_periods = session.get("match_periods_frames")
         if user_periods and len(user_periods) > 0:
             segments = []
+            def _period_segment(seg_type: str, start: int, end: int) -> dict:
+                return {
+                    "type": seg_type,
+                    "start_frame": start,
+                    "end_frame": end,
+                    "start_sec": round(start / max(fps, 1.0), 2),
+                    "end_sec": round(end / max(fps, 1.0), 2),
+                    "duration_sec": round((end - start) / max(fps, 1.0), 2),
+                }
+
             cursor = 0
             for i, (ps, pe) in enumerate(user_periods):
                 if ps > cursor:
-                    segments.append({
-                        "type": "halftime" if 0 < i else "pre_match",
-                        "start_frame": cursor, "end_frame": ps,
-                        "duration_sec": (ps - cursor) / max(fps, 1.0),
-                    })
-                segments.append({
-                    "type": "first_half" if i == 0 and len(user_periods) > 1
+                    segments.append(_period_segment(
+                        "halftime" if 0 < i else "pre_match",
+                        cursor,
+                        ps,
+                    ))
+                seg_type = ("first_half" if i == 0 and len(user_periods) > 1
                             else "second_half" if i == 1 and len(user_periods) > 1
-                            else "match",
-                    "start_frame": ps, "end_frame": pe,
-                    "duration_sec": (pe - ps) / max(fps, 1.0),
-                })
+                            else "match")
+                segments.append(_period_segment(seg_type, ps, pe))
                 cursor = pe
             if cursor < total:
-                segments.append({
-                    "type": "post_match",
-                    "start_frame": cursor, "end_frame": total,
-                    "duration_sec": (total - cursor) / max(fps, 1.0),
-                })
+                segments.append(_period_segment("post_match", cursor, total))
             print(f"[INFO] Scene segments (from user periods): "
                   f"{[s['type'] for s in segments]}")
         else:
@@ -3129,4 +3132,3 @@ def _finish_task(sm: SessionManager, session_id: str, task_id: str,
 def _log_error(name: str, session_id: str, exc: Exception):
     print(f"[ERROR] {name} | session={session_id}")
     print(traceback.format_exc())
-
