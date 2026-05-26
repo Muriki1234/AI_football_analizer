@@ -19,9 +19,14 @@ import { getSession, saveMatchPeriods } from '../services/api';
 import StepNav from '../components/StepNav';
 import './Trimmer.css';
 
-const MIN_PERIOD_SEC = 30;       // backend rejects shorter periods (E)
+// For real match videos (≥5 min) keep 30s minimum so the backend is happy.
+// For short test clips we drop to 3s so handles and Add-Break still work.
+// Backend has a matching check — keep these in sync with handler.py.
+const REAL_MATCH_THRESHOLD_SEC = 300;  // 5 minutes
+const MIN_PERIOD_SEC_REAL = 30;
+const MIN_PERIOD_SEC_TEST = 3;
 const MAX_PERIODS = 4;           // 4 periods × 4 segs = 16 picks ceiling
-const HANDLE_PX = 16;
+const HANDLE_PX = 7;             // half the handle CSS width (14px) — for centering
 
 function fmt(sec) {
     if (!Number.isFinite(sec) || sec < 0) return '00:00';
@@ -47,6 +52,12 @@ export default function Trimmer() {
     const [duration, setDuration] = useState(0);   // seconds
     const [videoUrl, setVideoUrl] = useState(null);
     const [previewTime, setPreviewTime] = useState(0);
+
+    // Dynamic minimum — short test clips use 3s so handles/Add-Break still work.
+    // Real match videos (≥5 min) use the full 30s that the backend enforces.
+    const minPeriodSec = duration >= REAL_MATCH_THRESHOLD_SEC
+        ? MIN_PERIOD_SEC_REAL
+        : MIN_PERIOD_SEC_TEST;
     const videoRef = useRef(null);
 
     // periods: sorted by start, non-overlapping, in SECONDS (we send frames to backend)
@@ -108,10 +119,12 @@ export default function Trimmer() {
         }
         const p = next[longestIdx];
         const mid = (p.start + p.end) / 2;
-        const gap = 30;
-        if (mid - p.start < MIN_PERIOD_SEC + gap / 2
-            || p.end - mid < MIN_PERIOD_SEC + gap / 2) {
-            toast(`Period too short to split (need ≥ ${2 * MIN_PERIOD_SEC + gap}s)`);
+        // Gap between the two resulting periods — scale with minPeriodSec so
+        // short test clips still get a visible gap without violating the minimum.
+        const gap = Math.max(2, minPeriodSec * 0.5);
+        if (mid - p.start < minPeriodSec + gap / 2
+            || p.end - mid < minPeriodSec + gap / 2) {
+            toast(`Period too short to split (need ≥ ${Math.ceil(2 * minPeriodSec + gap)}s)`);
             return;
         }
         next.splice(longestIdx, 1,
@@ -155,11 +168,11 @@ export default function Trimmer() {
                 const prevBound = idx > 0 ? next[idx - 1].end : 0;
                 const nextBound = idx < next.length - 1 ? next[idx + 1].start : duration;
                 if (edge === 'start') {
-                    next[idx].start = Math.max(prevBound + 1,
-                        Math.min(newSec, next[idx].end - MIN_PERIOD_SEC));
+                    next[idx].start = Math.max(prevBound,
+                        Math.min(newSec, next[idx].end - minPeriodSec));
                 } else {
-                    next[idx].end = Math.min(nextBound - 1,
-                        Math.max(newSec, next[idx].start + MIN_PERIOD_SEC));
+                    next[idx].end = Math.min(nextBound,
+                        Math.max(newSec, next[idx].start + minPeriodSec));
                 }
                 return next;
             });
@@ -185,11 +198,11 @@ export default function Trimmer() {
             const prevBound = idx > 0 ? next[idx - 1].end : 0;
             const nextBound = idx < next.length - 1 ? next[idx + 1].start : duration;
             if (edge === 'start') {
-                next[idx].start = Math.max(prevBound + 1,
-                    Math.min(sec, next[idx].end - MIN_PERIOD_SEC));
+                next[idx].start = Math.max(prevBound,
+                    Math.min(sec, next[idx].end - minPeriodSec));
             } else {
-                next[idx].end = Math.min(nextBound - 1,
-                    Math.max(sec, next[idx].start + MIN_PERIOD_SEC));
+                next[idx].end = Math.min(nextBound,
+                    Math.max(sec, next[idx].start + minPeriodSec));
             }
             return next;
         });
@@ -207,8 +220,8 @@ export default function Trimmer() {
             return;
         }
         for (let i = 0; i < periods.length; i++) {
-            if (periods[i].end - periods[i].start < MIN_PERIOD_SEC) {
-                toast.error(`Period ${i + 1} is shorter than ${MIN_PERIOD_SEC}s`);
+            if (periods[i].end - periods[i].start < minPeriodSec) {
+                toast.error(`Period ${i + 1} is shorter than ${minPeriodSec}s`);
                 return;
             }
         }
@@ -292,7 +305,7 @@ export default function Trimmer() {
                                 />
                                 <div
                                     className={`periods-track__handle ${dragging?.idx === i && dragging.edge === 'start' ? 'is-dragging' : ''}`}
-                                    style={{ left: `${left}%` }}
+                                    style={{ left: `${left}%`, marginLeft: `-${HANDLE_PX}px` }}
                                     onMouseDown={onTrackPointerDown(i, 'start')}
                                     onTouchStart={onTrackPointerDown(i, 'start')}
                                 />

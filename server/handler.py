@@ -355,11 +355,16 @@ def _action_track(session_id: str, s: dict, payload: dict, sm: SessionManager) -
     if not segments:
         return {"error": "Provide either bbox+frame or segments=[{frame,bbox},...]"}
 
-    # Enforce minimum period length (point E)
-    MIN_PERIOD_FRAMES = 30 * 25  # 30s × ~25fps. Backend-side defensive check.
+    # Enforce minimum period length (point E).
+    # Real match videos (total ≥ 300s × 25fps = 7500 frames) keep the 30s minimum
+    # so SAMURAI has enough frames to build a reliable model.
+    # Short test clips (< 5 min) use a relaxed 3s minimum so the UI works during dev.
+    _fps_est = 25
+    _min_sec = 30 if total_frames_hint >= 300 * _fps_est else 3
+    MIN_PERIOD_FRAMES = _min_sec * _fps_est
     for ps, pe in match_periods:
         if pe - ps < MIN_PERIOD_FRAMES:
-            return {"error": f"Period {ps}..{pe} shorter than 30s minimum"}
+            return {"error": f"Period {ps}..{pe} shorter than {_min_sec}s minimum"}
 
     s_merged = {**s, "start_frame": segments[0]["start_frame"]}
     samurai_cache_path = str(sm.session_output_dir(session_id) / "samurai_tracking.pkl")
