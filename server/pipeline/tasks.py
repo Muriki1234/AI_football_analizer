@@ -640,9 +640,15 @@ def run_samurai_tracking_multi(session_id: str, session: dict,
         # stay within 16GB (4 procs × ~2.5GB = ~10GB per period).  On 24GB
         # all 8 segments run simultaneously (~14-16GB total), cutting
         # SAMURAI wall-time roughly in half (e.g. 30 min → 15 min).
+        # Hard cap at 8 concurrent workers: each SAMURAI proc uses ~2.5GB,
+        # so 8 × 2.5 = ~20GB which fits comfortably in 24GB.  Extra segments
+        # (e.g. 3 periods × 4 players = 12) queue behind the first 8 and run
+        # as slots free up — still faster than the old serial-by-period path.
+        MAX_PARALLEL = int(os.environ.get("SAMURAI_MAX_PARALLEL", "8"))
+        max_workers  = min(n_segments, MAX_PARALLEL)
         all_segs = list(enumerate(segs_sorted))
-        print(f"[SAMURAI-MULTI] {n_segments} segments — all running in parallel "
-              f"(24GB GPU mode)")
+        print(f"[SAMURAI-MULTI] {n_segments} segments — "
+              f"{max_workers} running in parallel (cap={MAX_PARALLEL})")
 
         def _submit_segment(pool, i, seg):
             return pool.submit(
@@ -657,7 +663,7 @@ def run_samurai_tracking_multi(session_id: str, session: dict,
         done = 0
         seg_attempts: dict[int, int] = {}
 
-        with ThreadPoolExecutor(max_workers=n_segments) as pool:
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {
                 _submit_segment(pool, i, seg): i
                 for i, seg in all_segs
