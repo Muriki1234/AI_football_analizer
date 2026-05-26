@@ -2099,6 +2099,9 @@ def _probe_nvenc() -> bool:
 
 
 _NVENC_AVAILABLE = _probe_nvenc()
+print(f"[ENCODER] NVENC available: {_NVENC_AVAILABLE} "
+      f"({'h264_nvenc (GPU)' if _NVENC_AVAILABLE else 'libx264 (CPU fallback)'})",
+      flush=True)
 
 
 def _h264_encode_args() -> list[str]:
