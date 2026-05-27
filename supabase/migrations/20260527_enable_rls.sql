@@ -88,10 +88,27 @@ create policy "tasks_modify_own"
         )
     );
 
--- 3. merge_session_extra RPC — tighten access ---------------------------------
--- Previously granted to `authenticated`, so any user could call it on any
--- session_id. Revoke from authenticated; only service_role should call it
--- (server-side worker). The frontend doesn't depend on this RPC.
-revoke execute on function public.merge_session_extra(uuid, jsonb, jsonb) from authenticated;
-revoke execute on function public.merge_session_extra(uuid, jsonb, jsonb) from anon;
+-- 3. merge_session_extra RPC — tighten access (if deployed) -------------------
+-- 之前 20260525_jsonb_merge_rpc.sql 把 EXECUTE 授给了 authenticated，相当于
+-- 任何登录用户都能改任意 session 的元数据。撤销该权限，只留 service_role。
+--
+-- 注：这个 RPC 可能在某些 Supabase 项目里还没部署 (server/storage/db.py 有
+-- 自动 fallback 走 SELECT-then-UPDATE 老路)。所以用动态查找 + 条件 revoke，
+-- 不存在就跳过，整个 migration 仍能成功。
+do $$
+declare
+    f record;
+begin
+    for f in
+        select n.nspname || '.' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' as sig
+        from pg_proc p
+        join pg_namespace n on n.oid = p.pronamespace
+        where n.nspname = 'public'
+          and p.proname = 'merge_session_extra'
+    loop
+        execute format('revoke execute on function %s from authenticated', f.sig);
+        execute format('revoke execute on function %s from anon', f.sig);
+        raise notice 'revoked merge_session_extra access from authenticated/anon: %', f.sig;
+    end loop;
+end$$;
 -- service_role retains access via its bypass-RLS default; no grant needed.
