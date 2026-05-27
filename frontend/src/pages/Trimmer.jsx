@@ -82,16 +82,29 @@ export default function Trimmer() {
                 const s = await getSession(sessionId);
                 setVideoUrl(s?.video_url || null);
 
+                // 视频 metadata 加载加 10s 超时 — corrupt 文件 / CORS 卡住时
+                // 之前会让 duration 永远是 0，Continue 按钮永远 disabled，
+                // 用户看不到任何错误就以为页面坏了。
                 const dur = await new Promise((resolve) => {
                     if (!s?.video_url) return resolve(0);
                     const v = document.createElement('video');
                     v.preload = 'metadata';
                     v.src = s.video_url;
-                    v.addEventListener('loadedmetadata',
-                        () => resolve(v.duration || 0), { once: true });
-                    v.addEventListener('error', () => resolve(0), { once: true });
+                    let settled = false;
+                    const done = (val) => { if (!settled) { settled = true; resolve(val); } };
+                    v.addEventListener('loadedmetadata', () => done(v.duration || 0), { once: true });
+                    v.addEventListener('error', () => done(0), { once: true });
+                    setTimeout(() => {
+                        if (!settled) {
+                            toast.error('Video metadata took too long to load; check connection');
+                            done(0);
+                        }
+                    }, 10_000);
                 });
                 setDuration(dur);
+                if (!dur) {
+                    toast.error('Could not read video duration. Try re-uploading.');
+                }
 
                 const saved = Array.isArray(s?.match_periods_sec) ? s.match_periods_sec : null;
                 if (saved && saved.length > 0) {

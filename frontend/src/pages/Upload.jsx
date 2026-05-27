@@ -31,18 +31,31 @@ export default function Upload() {
         setUploadPct(0);
         setUploadSuccess(false);
 
+        // 上传进度 indeterminate：Supabase JS SDK 的 .upload() 不暴露进度，
+        // 之前 onProgress 只在结束时 fire 一次 100%，UI "0% 卡半小时然后跳 100%"
+        // 看起来跟挂了一样。改成显示已耗时让用户知道还在动。
+        const tStart = Date.now();
         const toastId = toast.loading('Uploading video…');
+        const tickHandle = setInterval(() => {
+            const sec = Math.floor((Date.now() - tStart) / 1000);
+            const mm = String(Math.floor(sec / 60)).padStart(2, '0');
+            const ss = String(sec % 60).padStart(2, '0');
+            toast.loading(`Uploading video… ${mm}:${ss} elapsed`, { id: toastId });
+        }, 1000);
         try {
             start();
             const data = await uploadVideo(f, (pct) => {
+                // 保留 onProgress 兼容性：SDK 只会在结束时 fire 100，作用是
+                // 让按钮文字从 indeterminate 变成 done。
                 setUploadPct(pct);
-                toast.loading(`Uploading video… ${pct}%`, { id: toastId });
             });
+            clearInterval(tickHandle);
             done();
             setUploadSuccess(true);
             setUploadedVideoId(data.session_id || data.video_id);
             toast.success('Upload complete', { id: toastId });
         } catch (err) {
+            clearInterval(tickHandle);
             console.error('Upload failed', err);
             done();
             setFile(null);
@@ -144,7 +157,7 @@ export default function Upload() {
                                     <p className="upload-preview__filename">{file.name}</p>
                                     <p className="upload-preview__filesize">
                                         {(file.size / (1024 * 1024)).toFixed(1)} MB
-                                        {!uploadSuccess && uploadPct > 0 && ` · ${uploadPct}%`}
+                                        {!uploadSuccess && ' · uploading…'}
                                     </p>
                                 </div>
                             </div>
@@ -153,7 +166,7 @@ export default function Upload() {
                                 onClick={goToTrim}
                                 disabled={!uploadSuccess}
                             >
-                                {uploadSuccess ? 'Continue' : `Uploading… ${uploadPct}%`}
+                                {uploadSuccess ? 'Continue' : 'Uploading…'}
                                 <HiArrowRight />
                             </button>
                         </div>

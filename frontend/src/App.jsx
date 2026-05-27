@@ -7,8 +7,8 @@ import Trimmer from './pages/Trimmer';
 import MultiSegmentConfig from './pages/MultiSegmentConfig';
 import Sessions from './pages/Sessions';
 import Dashboard from './pages/Dashboard';
-import PlayerLibrary from './pages/PlayerLibrary';
-import PlayerProfile from './pages/PlayerProfile';
+// PlayerLibrary / PlayerProfile 是 100% mock data，没接后端，不暴露路由
+// 直到真的有 player metadata pipeline 再上线。
 import Login from './pages/Login';
 import './index.css';
 
@@ -32,8 +32,7 @@ function AnimatedRoutes() {
                 <Route path="/configure-multi" element={<PageWrap><MultiSegmentConfig /></PageWrap>} />
                 <Route path="/sessions" element={<PageWrap><Sessions /></PageWrap>} />
                 <Route path="/dashboard" element={<PageWrap><Dashboard /></PageWrap>} />
-                <Route path="/players" element={<PageWrap><PlayerLibrary /></PageWrap>} />
-                <Route path="/players/:id" element={<PageWrap><PlayerProfile /></PageWrap>} />
+                {/* /players 路由暂时下线（mock data，未对接后端） */}
             </Routes>
         </AnimatePresence>
     );
