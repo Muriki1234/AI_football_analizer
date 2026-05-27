@@ -874,11 +874,15 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         # 16GB+ GPU.  Set PARALLEL_YOLO_SEGS=1 to disable and fall through
         # to the merged-streaming or legacy paths.
         #
-        # 24GB GPU: run 4 YOLO segments unconditionally.  Previously capped at
-        # 2 when SAMURAI was concurrent to stay within 16GB; that guard is no
-        # longer needed on 24GB cards (4 SAMURAI ~10GB + 4 YOLO ~8GB = ~18GB,
-        # leaving a ~6GB buffer).
-        _default_segs = 4
+        # 24GB GPU GPU contention guard：
+        #   - 单期视频 (1 period × 4 players) → 4 SAMURAI 段，跟 4 YOLO 段同时 = 8 进程，~18GB ✅
+        #   - 多期视频 (2+ periods × 4 players) → 8 SAMURAI 段，加 4 YOLO 段 = 12 进程，~24-28GB ❌ 可能 OOM
+        #
+        # 所以当 SAMURAI 在并发运行时 (_samurai_done_event 在 session 里) 把 YOLO 限到 3 段：
+        #   3 YOLO (~6GB) + 8 SAMURAI (~12-20GB) = 18-26GB，绝大多数 24GB 卡撑得住。
+        # 没 SAMURAI 并发时（比如 re-analyze 已有 tracks.pkl）保持 4 段最快。
+        _samurai_concurrent = "_samurai_done_event" in session
+        _default_segs = 3 if _samurai_concurrent else 4
         n_yolo_segs = int(os.environ.get("PARALLEL_YOLO_SEGS", str(_default_segs)))
         parallel_ok = False
         if n_yolo_segs > 1:
