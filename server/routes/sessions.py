@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shutil
 import subprocess
 import uuid
@@ -100,6 +101,21 @@ def _safe_filename(name: str) -> str:
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 
+# 上传单文件大小硬上限 (10GB by default)。无限上传可以填满网络卷。
+_MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(10 * 1024**3)))
+_ALLOWED_VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"}
+
+
+def _check_ext(filename: str) -> None:
+    """拒绝非视频后缀。挡不住伪装但能挡住绝大多数误传 / 路径污染。"""
+    ext = Path(filename).suffix.lower()
+    if ext not in _ALLOWED_VIDEO_EXTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file extension {ext!r}; expected one of {sorted(_ALLOWED_VIDEO_EXTS)}",
+        )
+
+
 @router.post("", response_model=CreateSessionResponse, status_code=status.HTTP_201_CREATED)
 async def create_session(
     file: UploadFile | None = File(default=None),
@@ -112,11 +128,24 @@ async def create_session(
 
     if file is not None:
         filename = _safe_filename(file.filename or "video.mp4")
+        _check_ext(filename)
         dest = upload_dir / filename
         try:
+            written = 0
             with dest.open("wb") as out:
                 while chunk := await file.read(1024 * 1024):
+                    written += len(chunk)
+                    if written > _MAX_UPLOAD_BYTES:
+                        out.close()
+                        try: dest.unlink()
+                        except Exception: pass
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"Upload exceeds {_MAX_UPLOAD_BYTES // (1024**2)} MB cap",
+                        )
                     out.write(chunk)
+        except HTTPException:
+            raise
         except OSError as e:
             raise HTTPException(status_code=500, detail=f"Disk write failed: {e}") from e
         sm.create_session(session_id, str(dest))
@@ -136,6 +165,8 @@ async def upload_chunk(
     request: Request,
     sm: SessionManager = Depends(get_session_manager),
 ) -> dict:
+    # 先校验 session 存在，再 mkdir。之前顺序反了：随便 PUT 一个不存在的
+    # session id 也会先 mkdir，造成磁盘填充 DoS（生成一堆空的 .chunks 目录）。
     if not sm.get_session(session_id):
         raise HTTPException(status_code=404, detail="Unknown session")
     if index < 0 or index > 10_000:
@@ -145,10 +176,25 @@ async def upload_chunk(
     chunks_dir.mkdir(parents=True, exist_ok=True)
     chunk_path = chunks_dir / f"{index:06d}.part"
 
+    # chunk 单独大小限制 (单 chunk ≤ 100MB) — 防止单个超大 chunk 撑爆磁盘。
+    # 10000 chunks × 100MB = 1TB 理论上限，但有 _MAX_UPLOAD_BYTES 兜底。
+    _PER_CHUNK_MAX = 100 * 1024**2
     try:
+        written = 0
         with chunk_path.open("wb") as out:
             async for data in request.stream():
+                written += len(data)
+                if written > _PER_CHUNK_MAX:
+                    out.close()
+                    try: chunk_path.unlink()
+                    except Exception: pass
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Chunk exceeds {_PER_CHUNK_MAX // (1024**2)} MB",
+                    )
                 out.write(data)
+    except HTTPException:
+        raise
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"Disk write failed: {e}") from e
 

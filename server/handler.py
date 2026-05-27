@@ -496,6 +496,18 @@ def _action_track(session_id: str, s: dict, payload: dict, sm: SessionManager) -
         join_timeout = max(900.0, 2.0 * (total_frames_hint / 25.0))
         samurai_thread.join(timeout=join_timeout)
 
+    # Daemon thread 超时后仍可能 is_alive=True：上一版直接 return ok，等于
+    # 静默丢任务，DB 里 status=analysis_done 但 SAMURAI 还在背后跑 / 没结果。
+    # 现在显式检查、写入失败状态、return error。
+    if samurai_thread.is_alive():
+        err = f"SAMURAI exceeded {join_timeout/60:.1f} min — abandoning thread"
+        log.error(err)
+        try:
+            sm.update_status(session_id, "tracking_failed", error=err)
+        except Exception:
+            pass
+        return {"error": err}
+
     if samurai_err:
         return {"error": f"SAMURAI failed: {samurai_err['exc']}"}
 

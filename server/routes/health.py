@@ -22,10 +22,18 @@ async def health() -> dict:
 
 @router.get("/ready")
 async def ready() -> dict:
-    weights_ready = (
-        os.environ.get("YOLO_MODEL_PATH") is not None
-        and Path(os.environ.get("YOLO_MODEL_PATH", "")).exists()
-    )
+    # 用真正的 resolver 检查 weights，而不是只看 env 变量 ——
+    # pipeline 里走的是 get_yolo_model_path() 的 fallback 链，
+    # 之前 /ready 只看 YOLO_MODEL_PATH env 容易给出假阴性/假阳性。
+    weights_ready = False
+    try:
+        from ..pipeline.tasks import get_yolo_model_path, get_keypoint_model_path
+        ypath = get_yolo_model_path()
+        kpath = get_keypoint_model_path()
+        weights_ready = bool(ypath and Path(ypath).exists()
+                             and kpath and Path(kpath).exists())
+    except Exception:
+        weights_ready = False
     db_ready = settings.db_path.parent.exists()
     return {
         "status": "ready" if weights_ready and db_ready else "degraded",

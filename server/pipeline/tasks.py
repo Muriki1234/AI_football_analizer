@@ -136,7 +136,10 @@ def _video_capture(path: str):
 
 
 def _atomic_pickle_dump(obj, target_path: Path) -> None:
-    """原子写 pickle：先写 .tmp → fsync → os.replace"""
+    """原子写 pickle：先写 .tmp → fsync → os.replace。
+    顺手把同路径的 in-memory cache 清掉 —— 否则 re-analyze 重写了 pickle，
+    但 _TRACKS_CACHE 里还是旧对象，下游 feature 任务读到 stale tracks。
+    """
     target_path = Path(target_path)
     tmp_path = target_path.with_suffix(target_path.suffix + ".tmp")
     print(f"[INFO] Writing pickle to {target_path} (tmp: {tmp_path})")
@@ -145,6 +148,14 @@ def _atomic_pickle_dump(obj, target_path: Path) -> None:
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp_path, target_path)
+    # Invalidate in-memory cache for this path (no-op if not cached yet)
+    try:
+        with _TRACKS_CACHE_LOCK:
+            _TRACKS_CACHE.pop(str(target_path), None)
+    except NameError:
+        # _TRACKS_CACHE defined later in module; first call during import-time
+        # benchmark setup may hit this — safe to skip, nothing is cached yet.
+        pass
     try:
         size_mb = target_path.stat().st_size / (1024 * 1024)
         print(f"[INFO] Pickle write complete: {target_path.name} ({size_mb:.1f} MB)")
@@ -356,10 +367,21 @@ def _run_samurai_segment(seg_idx: int, session_id: str, output_dir: Path,
         f"{samurai_root}:{samurai_root}/sam2:" + env.get("PYTHONPATH", "")
     )
     env["HYDRA_FULL_ERROR"] = "1"
-    proc = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=None,
-        env=env, cwd=samurai_root,
-    )
+    # subprocess 超时：基于 segment 长度估算，最少 10 分钟。SAMURAI ≈ 0.5×
+    # 视频时长，给 5× 余量。timeout=None 之前能让一个挂死的子进程吃掉整个
+    # Serverless worker 时窗 + GPU 显存。
+    _seg_sec = max(1.0, (end_frame - start_frame) / 25.0)
+    _samurai_timeout = max(600.0, _seg_sec * 5.0)
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=_samurai_timeout,
+            env=env, cwd=samurai_root,
+        )
+    except subprocess.TimeoutExpired as _te:
+        raise RuntimeError(
+            f"[seg {seg_idx}] SAMURAI timed out after {_samurai_timeout/60:.1f} min "
+            f"(segment {start_frame}..{end_frame})"
+        ) from _te
     if proc.returncode != 0:
         tail = proc.stderr[-2000:] if proc.stderr else ""
         raise RuntimeError(

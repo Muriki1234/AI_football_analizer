@@ -162,8 +162,13 @@ async def detect_frame(
     try:
         result = await fut
     except Exception as e:
+        # 完整堆栈写服务端日志（含 CUDA 错误地址、内部路径等敏感信息）；
+        # 返回给 client 的只有泛化消息，不泄漏内部结构。
         log.exception("detect_frame failed")
-        raise HTTPException(status_code=500, detail=f"Detection failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Detection failed; see server logs for details",
+        ) from e
 
     # Build a frame URL the frontend can render
     rel = result.get("annotated_frame_path", "first_frame.jpg")
