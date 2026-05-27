@@ -18,12 +18,17 @@ FROM pytorch/pytorch:2.2.1-cuda12.1-cudnn8-runtime
 WORKDIR /app
 
 # Install system dependencies
+# gcc/g++/build-essential: torch.compile (inductor 后端) 需要 C/C++ 编译器
+# 把 PyTorch 生成的 .cpp 代码编译成动态库。没这俩 torch.compile 必崩。
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     libgl1-mesa-glx \
     libglib2.0-0 \
     git \
     wget \
+    gcc \
+    g++ \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # The base image's conda ffmpeg lacks libx264 (only --enable-libopenh264).
