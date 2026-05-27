@@ -40,10 +40,45 @@ const pollJobResult = async (jobId, maxWaitMs = 120000) => {
     throw new Error('Detection timed out after 2 minutes');
 };
 
-// Helper to get public URL for a file in Supabase Storage
-const getPublicUrl = (fileName) => {
-    const { data } = supabase.storage.from('videos').getPublicUrl(fileName);
-    return data.publicUrl;
+// Bucket `videos` 现在是 private —— 不能再用 getPublicUrl()。
+// 改成 signed URL：浏览器需要带签名才能播。后端用 service_role
+// download() 不受影响。
+//
+// 默认 1 小时 TTL：足够用户从 Trim → Configure → Dashboard 走完一遍。
+// uploadVideo 时存的初始 URL 给 7 天 TTL，让分析过程慢的时候也不过期。
+const SIGNED_URL_TTL_SHORT = 60 * 60;          // 1 h（页面会话）
+const SIGNED_URL_TTL_LONG  = 60 * 60 * 24 * 7; // 7 d（DB 持久化）
+
+const _createSignedUrl = async (storagePath, ttl = SIGNED_URL_TTL_SHORT) => {
+    const { data, error } = await supabase.storage
+        .from('videos')
+        .createSignedUrl(storagePath, ttl);
+    if (error) throw error;
+    return data.signedUrl;
+};
+
+/** 从 Supabase Storage URL 抠出 path (例如 "<sessionId>/<filename>")。
+ *  同时识别 public 和 sign 两种格式，兼容历史数据。
+ */
+const _storagePathFromUrl = (url) => {
+    if (!url) return null;
+    const m = String(url).match(
+        /\/storage\/v1\/object\/(?:public|sign)\/videos\/([^?]+)/
+    );
+    return m ? decodeURIComponent(m[1]) : null;
+};
+
+/** 给一个老的（可能是 public 或过期 signed）URL 换一张新鲜的 signed URL。
+ *  不是 Supabase Storage URL 就原样返回（外部 CDN、测试数据等）。 */
+const _refreshVideoUrl = async (storedUrl) => {
+    const path = _storagePathFromUrl(storedUrl);
+    if (!path) return storedUrl;
+    try {
+        return await _createSignedUrl(path, SIGNED_URL_TTL_SHORT);
+    } catch (e) {
+        console.error('[storage] failed to refresh signed URL:', e);
+        return storedUrl; // 失败 fallback（bucket 是 public 才会成功；private 则失效）
+    }
 };
 
 // ── Sessions (Supabase Auth & DB) ──────────────────────────────────────────
@@ -75,7 +110,9 @@ export const uploadVideo = async (file, onProgress) => {
     if (uploadError) throw uploadError;
     if (onProgress) onProgress(100);
 
-    const videoUrl = getPublicUrl(fileName);
+    // 7 天 signed URL 存入 DB —— 之后用户刷新页面会通过 getSession 自动
+    // 再签一份新的 1h URL，保持时刻有效。后端用 service_role 不受签名约束。
+    const videoUrl = await _createSignedUrl(fileName, SIGNED_URL_TTL_LONG);
 
     // 2. Create session record in Database
     const { error: dbError } = await supabase
@@ -124,7 +161,13 @@ export const getSession = async (sessionId) => {
         .single();
 
     if (error) throw error;
-    return _flattenSession(data);
+    const session = _flattenSession(data);
+    // bucket 现在是 private —— 把 DB 里存的 video_url (可能是 7 天前签的，
+    // 也可能是历史 public URL) 转成一张新鲜的 1h signed URL，保证 <video> 能播。
+    if (session?.video_url) {
+        session.video_url = await _refreshVideoUrl(session.video_url);
+    }
+    return session;
 };
 
 // ── Analysis (Vercel Proxy to RunPod) ───────────────────────────────────────
