@@ -112,11 +112,8 @@ model:
   multimask_min_pt_num: 0
   multimask_max_pt_num: 1
   use_mlp_for_obj_ptr_proj: true
-  # Compilation flag — image encoder torch.compile (20-30% faster, no
-  # accuracy loss). sam2_base.py wraps it in try/except + dynamo
-  # suppress_errors=True, so any compile failure falls back to eager
-  # mode automatically and SAMURAI still runs.
-  compile_image_encoder: True
+  # Compilation flag
+  compile_image_encoder: False
   # SAMURAI
   samurai_mode: true
   stable_frames_threshold: 15
