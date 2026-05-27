@@ -69,9 +69,32 @@ def _session_upload_dir(session_id: str) -> Path:
     return p
 
 
+_SAFE_FILENAME_RE = None  # lazy compile
+
 def _safe_filename(name: str) -> str:
-    # Strip directory traversal attempts; keep extension.
-    return Path(name).name
+    """
+    防止：
+      1. 路径穿越 (../etc/passwd)
+      2. ffmpeg flag 注入：filename 以 - 开头会被 ffmpeg 当作选项解析。
+         例如 `-i.mp4` -> `ffmpeg ... -ss 0 -i - -i.mp4` 把 stdin 也吃了。
+         配合 `-y -frames:v 1 -f image2 /workspace/weights/x.png` 可以写任意路径。
+      3. 控制字符 / 空字节 / shell meta
+    """
+    import re
+    global _SAFE_FILENAME_RE
+    if _SAFE_FILENAME_RE is None:
+        # 允许 字母/数字/下划线/点/横杠 + 单个空格/(),  其他全删
+        _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._\- ()]+")
+    base = Path(name).name          # strip dirs
+    base = _SAFE_FILENAME_RE.sub("_", base)
+    base = base.lstrip("-.")         # 任何前导 - / . 都消掉（防 flag injection 和 hidden file）
+    if not base:
+        base = "video.mp4"
+    # 长度限制（Linux ext4 单文件名 ≤ 255 byte，留点余量）
+    if len(base) > 200:
+        stem, dot, ext = base.rpartition(".")
+        base = (stem[:180] + dot + ext) if dot else base[:200]
+    return base
 
 
 # ── Routes ───────────────────────────────────────────────────────────────────

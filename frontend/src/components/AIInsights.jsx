@@ -2,12 +2,18 @@ import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { HiSparkles, HiDocumentArrowDown, HiExclamationCircle } from 'react-icons/hi2';
 import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 import { generateFeature, pollTaskStatus } from '../services/api';
 import './AIInsights.css';
 
 // Render Qwen's markdown output to HTML so ** ## - render as bold/heading/list
 // instead of leaking through as literal characters in a <pre> block.
 marked.setOptions({ gfm: true, breaks: true });
+
+// XSS 防线：AI 的输入来自视频帧里的文字（jersey/scoreboard 等），
+// 攻击者可以通过控制视频内容让 LLM 输出 `<img src=x onerror=...>`，
+// 经 marked.parse 后变成可执行 HTML 注入页面（同源 = 偷 Supabase JWT）。
+const _renderMd = (md) => DOMPurify.sanitize(marked.parse(md || ''));
 
 const STAGE_LABELS = {
     loading_data:        '加载统计数据...',
@@ -161,7 +167,7 @@ export default function AIInsights({ sessionId }) {
                         <div className="ai-panel__report" ref={containerRef}>
                             <div
                                 className="ai-panel__text ai-panel__markdown"
-                                dangerouslySetInnerHTML={{ __html: marked.parse(displayedText || '') }}
+                                dangerouslySetInnerHTML={{ __html: _renderMd(displayedText) }}
                             />
                             {phase === 'streaming' && <span className="ai-panel__cursor" />}
                         </div>

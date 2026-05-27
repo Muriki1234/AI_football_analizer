@@ -159,19 +159,87 @@ def _download_video(url: str, dest: Path) -> None:
     )
 
 
+_MAX_DOWNLOAD_BYTES = int(os.environ.get("MAX_VIDEO_DOWNLOAD_BYTES", str(10 * 1024**3)))   # 10 GB
+
+
+def _is_allowed_video_url(url: str) -> bool:
+    """
+    SSRF防线：拒绝 file://、本地 / 内网地址、云元数据 IP 等。只放行 https
+    且 host 必须在白名单内（Supabase Storage、R2、CDN）。
+
+    没这个校验时，攻击者发 {"video_url": "file:///etc/passwd"} 或
+    "http://169.254.169.254/latest/meta-data/..." 后端会乐呵呵下载。
+    """
+    from urllib.parse import urlparse
+    try:
+        u = urlparse(url)
+    except Exception:
+        return False
+    if u.scheme not in ("http", "https"):
+        return False
+    if not u.hostname:
+        return False
+    host = u.hostname.lower()
+    # 拒绝任何 IP 直连（包括 169.254.169.254 元数据 / 127.0.0.1 / 内网）
+    if host.replace(".", "").isdigit() or ":" in host:  # IPv4 / IPv6
+        return False
+    if host in ("localhost",) or host.endswith(".local") or host.endswith(".internal"):
+        return False
+    # 显式白名单 — 默认放 Supabase / Cloudflare R2，其他靠 env 加
+    ALLOW = (
+        ".supabase.co",
+        ".supabase.in",
+        ".r2.cloudflarestorage.com",
+        ".r2.dev",
+    )
+    extra = os.environ.get("VIDEO_URL_ALLOWED_HOST_SUFFIXES", "")
+    if extra:
+        ALLOW = ALLOW + tuple(s.strip() for s in extra.split(",") if s.strip())
+    return any(host == s.lstrip(".") or host.endswith(s) for s in ALLOW)
+
+
 def _download_video_once(url: str, dest: Path) -> None:
     """Single download attempt — the retry loop is in _download_video()."""
     storage_key = _supabase_storage_key_from_url(url)
     supa = _get_supabase()
     if storage_key and supa is not None:
         data = supa.storage.from_("videos").download(storage_key)
+        # 容量校验：Supabase SDK 已经把整个 bytes 拉到内存了，所以这里只能
+        # 事后拦截。理想是流式下载 + 中途断开，但当前 SDK 没这个 API。
+        if len(data) > _MAX_DOWNLOAD_BYTES:
+            raise RuntimeError(
+                f"refused: video {len(data) // (1024**2)} MB exceeds "
+                f"max {_MAX_DOWNLOAD_BYTES // (1024**2)} MB"
+            )
         dest.write_bytes(data)
         return
 
-    # Fallback for non-Supabase URLs (e.g. R2, external CDN)
+    # Fallback for non-Supabase URLs (e.g. R2, external CDN) — SSRF 防线
+    if not _is_allowed_video_url(url):
+        raise RuntimeError(
+            f"refused: video_url host not in allowlist (got {url[:80]}…)"
+        )
     import urllib.request
-    with urllib.request.urlopen(url, timeout=300) as resp, dest.open("wb") as out:
-        shutil.copyfileobj(resp, out)
+    # 流式下载 + 容量上限：分块读，超过 _MAX_DOWNLOAD_BYTES 立刻中断 + 删本地半成品
+    req = urllib.request.Request(url, headers={"User-Agent": "pitchlogic/1.0"})
+    with urllib.request.urlopen(req, timeout=300) as resp, dest.open("wb") as out:
+        bytes_read = 0
+        chunk_size = 1024 * 1024  # 1 MB
+        while True:
+            chunk = resp.read(chunk_size)
+            if not chunk:
+                break
+            bytes_read += len(chunk)
+            if bytes_read > _MAX_DOWNLOAD_BYTES:
+                out.close()
+                try:
+                    dest.unlink()
+                except Exception:
+                    pass
+                raise RuntimeError(
+                    f"refused: download exceeded {_MAX_DOWNLOAD_BYTES // (1024**2)} MB cap"
+                )
+            out.write(chunk)
 
 
 def _ensure_local_video(session_id: str, video_url: str, sm: SessionManager) -> str:

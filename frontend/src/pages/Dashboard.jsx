@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 import toast from 'react-hot-toast';
 import {
     HiHome, HiArrowPath, HiBars3, HiXMark, HiExclamationCircle,
@@ -436,7 +437,10 @@ export default function Dashboard() {
     const aiMarkdown = useMemo(() => {
         const txt = taskTextResult(aiSummary);
         if (!txt) return '';
-        try { return marked.parse(txt); } catch { return txt; }
+        // XSS 防线：AI 内容可能含视频里的攻击者输入（jersey/scoreboard 文本），
+        // 走 DOMPurify 过一遍再注入到 DOM。
+        try { return DOMPurify.sanitize(marked.parse(txt)); }
+        catch { return DOMPurify.sanitize(txt); }
     }, [aiSummary]);
 
     const handleGenerateAI = async () => {
