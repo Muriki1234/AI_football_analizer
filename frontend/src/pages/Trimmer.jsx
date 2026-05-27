@@ -61,7 +61,15 @@ export default function Trimmer() {
     const videoRef = useRef(null);
 
     // periods: sorted by start, non-overlapping, in SECONDS (we send frames to backend)
-    const [periods, setPeriods] = useState([{ start: 0, end: 0 }]);
+    // 每个 period 带一个内部 _id 用来给 "remove break" 找到"最后加的那个 break"
+    // (不依赖数组下标，因为 addBreak 可能在数组中间 splice)
+    const _idCounter = useRef(0);
+    const _nextId = () => (++_idCounter.current);
+    const _withIds = (arr) => arr.map(p => (p._id != null ? p : { ...p, _id: _nextId() }));
+    const [periods, setPeriods] = useState(() => _withIds([{ start: 0, end: 0 }]));
+    // breakStack: 最近加的 break 在最后。每个元素是"右侧 period"的 _id；
+    // removeBreak 时 pop 它，找到该 period 跟前一个合并，撤销最后的 addBreak。
+    const [breakStack, setBreakStack] = useState([]);
     const [dragging, setDragging] = useState(null);   // { idx, edge: 'start'|'end' }
     const trackRef = useRef(null);
 
@@ -87,9 +95,13 @@ export default function Trimmer() {
 
                 const saved = Array.isArray(s?.match_periods_sec) ? s.match_periods_sec : null;
                 if (saved && saved.length > 0) {
-                    setPeriods(saved);
+                    // saved 数据来自后端，没有 _id；给每个补上。
+                    // 同时把 breakStack 重置 — 历史是从这次会话开始算。
+                    setPeriods(_withIds(saved));
+                    setBreakStack([]);
                 } else {
-                    setPeriods([{ start: 0, end: dur }]);
+                    setPeriods(_withIds([{ start: 0, end: dur }]));
+                    setBreakStack([]);
                 }
             } catch (e) {
                 toast.error('Failed to load video: ' + e.message);
@@ -127,24 +139,52 @@ export default function Trimmer() {
             toast(`Period too short to split (need ≥ ${Math.ceil(2 * minPeriodSec + gap)}s)`);
             return;
         }
-        next.splice(longestIdx, 1,
-            { start: p.start, end: mid - gap / 2 },
-            { start: mid + gap / 2, end: p.end },
-        );
+        // 新插入的两个 period 各拿一个新 _id；右侧那个 push 进 breakStack，
+        // 这样 removeBreak 能直接找到"最后加的那个 break"。
+        const leftP  = { start: p.start, end: mid - gap / 2, _id: _nextId() };
+        const rightP = { start: mid + gap / 2, end: p.end, _id: _nextId() };
+        next.splice(longestIdx, 1, leftP, rightP);
         setPeriods(next);
+        setBreakStack([...breakStack, rightP._id]);
     };
 
     const removeBreak = () => {
         if (periods.length <= 1) return;
+        // 优先用 breakStack：pop 最新的 break，找对应 period 跟前一个合并。
+        // 如果 breakStack 跟 periods 失同步（例如从后端 load 后未操作就点删，
+        // 或者 user drag 把 period 改得面目全非），回退到老逻辑（删最后一段）。
+        if (breakStack.length > 0) {
+            const targetId = breakStack[breakStack.length - 1];
+            const idx = periods.findIndex(p => p._id === targetId);
+            if (idx > 0) {
+                const merged = {
+                    start: periods[idx - 1].start,
+                    end:   periods[idx].end,
+                    _id:   _nextId(),
+                };
+                const next = [
+                    ...periods.slice(0, idx - 1),
+                    merged,
+                    ...periods.slice(idx + 1),
+                ];
+                setPeriods(next);
+                setBreakStack(breakStack.slice(0, -1));
+                return;
+            }
+            // 找不到 → stack 过期了，丢掉这一项继续走 fallback
+            setBreakStack(breakStack.slice(0, -1));
+        }
+        // Fallback：删数组最后一个 break（旧行为，兼容从后端 reload 的情形）
         const next = periods.slice(0, -2);
         const a = periods[periods.length - 2];
         const b = periods[periods.length - 1];
-        next.push({ start: a.start, end: b.end });
+        next.push({ start: a.start, end: b.end, _id: _nextId() });
         setPeriods(next);
     };
 
     const reset = () => {
-        setPeriods([{ start: 0, end: duration }]);
+        setPeriods(_withIds([{ start: 0, end: duration }]));
+        setBreakStack([]);
     };
 
     // ── Handle dragging ───────────────────────────────────────────────────
@@ -225,9 +265,11 @@ export default function Trimmer() {
                 return;
             }
         }
+        // Strip internal _id before sending — 后端 / 下一个页面只需要 start/end。
+        const cleanPeriods = periods.map(({ start, end }) => ({ start, end }));
         // Persist so "Back" works + re-pick flow remembers (point D)
         try {
-            await saveMatchPeriods(sessionId, periods);
+            await saveMatchPeriods(sessionId, cleanPeriods);
         } catch (e) {
             console.warn('Failed to persist match periods (continuing anyway):', e);
         }
@@ -235,7 +277,7 @@ export default function Trimmer() {
             state: {
                 sessionId,
                 videoId: sessionId,
-                matchPeriods: periods,
+                matchPeriods: cleanPeriods,
             },
         });
     };
