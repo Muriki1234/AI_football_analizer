@@ -2,6 +2,24 @@ import { supabase } from '../lib/supabase';
 import { addRecentSession } from '../lib/recentSessions';
 import { captureVideoFrame } from '../lib/captureVideoFrame';
 
+// authFetch: 给 /api/* 请求自动带上当前 Supabase JWT。Vercel 那边的
+// _authMiddleware.js 会校验这个 token，没 token 直接 401。匿名 session
+// 也 OK，所以普通用户流程不受影响。
+async function authFetch(url, opts = {}) {
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) {
+        throw new Error('Not authenticated — please refresh the page');
+    }
+    return fetch(url, {
+        ...opts,
+        headers: {
+            ...(opts.headers || {}),
+            Authorization: `Bearer ${token}`,
+        },
+    });
+}
+
 // Poll /api/status with exponential backoff: tight while warming up,
 // loose afterwards. Cuts Vercel function invocations ~60% versus a flat
 // 2.5s interval without sacrificing perceived responsiveness.
@@ -13,7 +31,7 @@ const pollJobResult = async (jobId, maxWaitMs = 120000) => {
     let n = 0;
     while (Date.now() < deadline) {
         await new Promise(r => setTimeout(r, intervalFor(n++)));
-        const res = await fetch(`/api/status?id=${jobId}`);
+        const res = await authFetch(`/api/status?id=${jobId}`);
         const data = await res.json();
         if (data.status === 'COMPLETED') return data.output;
         if (data.status === 'FAILED') throw new Error(data.error || 'RunPod job failed');
@@ -115,7 +133,7 @@ export const startAnalysis = async (sessionId) => {
     const session = await getSession(sessionId);
     
     // Call our Vercel Proxy instead of RunPod directly
-    const res = await fetch('/api/analyze', {
+    const res = await authFetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -143,7 +161,7 @@ export const startAnalysis = async (sessionId) => {
 export const startTracking = async (sessionId, bbox, frame = 0) => {
     const session = await getSession(sessionId);
 
-    const res = await fetch('/api/analyze', {
+    const res = await authFetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -221,7 +239,7 @@ export const startTrackingMulti = async (sessionId, segments, matchPeriodsFrames
         ]);
     }
 
-    const res = await fetch('/api/analyze', {
+    const res = await authFetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ input }),
@@ -259,7 +277,7 @@ export const analyzeFrame = async (sessionId, frameIndex = 0) => {
         const timeoutId = setTimeout(() => controller.abort(), 15000);
         let res;
         try {
-            res = await fetch('/api/detect_frame', {
+            res = await authFetch('/api/detect_frame', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ image_base64: base64 }),
@@ -288,7 +306,7 @@ export const analyzeFrame = async (sessionId, frameIndex = 0) => {
     } catch (e) {
         console.warn('Roboflow detect_frame failed, falling back to RunPod:', e);
         // Fallback: the original RunPod path
-        const res = await fetch('/api/analyze', {
+        const res = await authFetch('/api/analyze', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -317,7 +335,7 @@ export const analyzeFrame = async (sessionId, frameIndex = 0) => {
 };
 
 export const queueFeature = async (sessionId, feature) => {
-    const res = await fetch('/api/analyze', {
+    const res = await authFetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -23,3 +23,5 @@ server/uploads/
 server/sessions.db*
 server/.env
 server/samurai/
+uploads/
+samurai/sam2/checkpoints/

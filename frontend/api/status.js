@@ -1,8 +1,14 @@
+import { requireSupabaseUser } from './_authMiddleware.js';
+
 export default async function handler(req, res) {
   // We expect a GET request with ?id=xxxx
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
+
+  // Auth: 拒绝外部探测 (job id 是 UUID 但还是别让人随意 poll)
+  const user = await requireSupabaseUser(req, res);
+  if (!user) return;
 
   const jobId = req.query.id;
   if (!jobId) {

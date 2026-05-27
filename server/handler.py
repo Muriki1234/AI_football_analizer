@@ -6,6 +6,18 @@ Serverless workers spin up on demand, receive one job payload, and exit. The
 payload tells us what to do; we drive the same pipeline entry points that
 the REST routes call.
 
+⚠️  ORCHESTRATION DRIFT WARNING
+    This module and server/routes/ are two separate orchestration layers on
+    top of the same pipeline (pipeline/tasks.py) and store (storage/db.py).
+    They differ in shape:
+      - handler.py (Serverless, production frontend uses this):
+          one action runs SAMURAI + analysis CONCURRENTLY via a daemon thread.
+      - routes/analysis.py (Pod, dev/legacy):
+          separate POST /track and POST /analyze endpoints, run SEQUENTIALLY.
+    When you change high-level flow (status transitions, error handling,
+    auto-trigger of full_replay, etc.) — touch BOTH. There is no shared
+    "orchestrator" module yet; this comment is the only signpost.
+
 Full Serverless spec: https://docs.runpod.io/serverless/handlers/overview
 
 Supported actions:

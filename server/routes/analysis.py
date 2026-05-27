@@ -4,6 +4,14 @@ task state, serve artifacts.
 
 Feature dispatch table maps the short name the frontend uses (e.g. "heatmap")
 to the right pipeline task entry point.
+
+⚠️  ORCHESTRATION DRIFT WARNING — see also server/handler.py.
+    This module is the Pod / dev path: POST /track and POST /analyze are
+    separate endpoints, called sequentially. The production frontend talks
+    to server/handler.py (Serverless), which runs SAMURAI + analysis
+    concurrently in one action. Both share pipeline/tasks.py + storage/db.py
+    but their high-level shapes differ. Keep them in sync when changing
+    status transitions, error handling, or auto-trigger behaviour.
 """
 
 from __future__ import annotations

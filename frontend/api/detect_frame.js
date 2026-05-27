@@ -14,6 +14,8 @@ const MODEL_VERSION = 1;
 const CONFIDENCE = 40;
 const OVERLAP = 30;
 
+import { requireSupabaseUser } from './_authMiddleware.js';
+
 export const config = {
     api: {
         bodyParser: { sizeLimit: '4mb' },
@@ -24,6 +26,11 @@ export default async function handler(req, res) {
     if (req.method !== 'POST') {
         return res.status(405).json({ error: 'Method not allowed' });
     }
+
+    // Auth: 这个 endpoint 代理 Roboflow 检测，会消耗 Roboflow 额度。
+    // 同样要求 Supabase JWT 防止外部薅羊毛。
+    const user = await requireSupabaseUser(req, res);
+    if (!user) return;
 
     const apiKey = process.env.ROBOFLOW_API_KEY;
     if (!apiKey) {

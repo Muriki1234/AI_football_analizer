@@ -14,12 +14,14 @@ A step-by-step runbook to go from zero to a working, independent production depl
 | Container image | `ghcr.io/<you>/ai-football-assistant:v1` | **GitHub Container Registry** |
 | Frontend | Vite + React | Vercel / Netlify / any static host |
 
-Two RunPod deployment shapes are supported:
+Two RunPod deployment shapes are supported, **both live in production**:
 
-1. **Pod** (recommended for now) — always-on GPU worker serving the FastAPI HTTP API directly. Stable, simple, has SSE streaming.
-2. **Serverless** (future) — `server/handler.py` is a stub that can be registered as a RunPod Serverless worker. Not wired into the frontend yet.
+1. **Pod** — always-on GPU worker serving the FastAPI HTTP API directly via `server/routes/`. Stable, simple, has SSE streaming. Used by older / dev flows.
+2. **Serverless** — `server/handler.py` registered as a RunPod Serverless worker (image built from `Dockerfile.serverless`). **This is what the production frontend talks to** via the Vercel proxy at `frontend/api/analyze.js` → `https://api.runpod.ai/v2/<endpoint>/run`.
 
-This guide walks through the **Pod** path end to end.
+Note: the two paths share `pipeline/tasks.py` (analysis logic, SAMURAI scheduler) and `storage/db.py` (Supabase Postgres session store), but their orchestration layers differ — handler.py runs SAMURAI + analysis concurrently in one action; routes/ exposes separate `/track` and `/analyze` endpoints. When changing high-level flow, update both.
+
+This guide walks through the **Pod** path end to end. The Serverless path uses the same Hugging Face / Supabase / R2 wiring; only the entrypoint and container image differ.
 
 ---
 
