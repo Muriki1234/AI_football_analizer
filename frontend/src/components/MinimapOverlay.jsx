@@ -153,29 +153,35 @@ export default function MinimapOverlay({ dataUrl, videoRef, visible }) {
             ctx.strokeRect(PAD + drawW - pbW, pbY, pbW, pbH);
         };
 
-        // The exported JSON is downsampled (stride ~fps/5). data.sample_indices
-        // (if present) maps array index → ORIGINAL video frame, so we
-        // binary-search by frame to find the nearest sample.
+        // JSON 后端按 5Hz 降采样（每 200ms 一帧），如果按"最近样本"取，
+        // 球员位置就会每 200ms 跳一下 = 卡顿感。
+        // 改成：找 targetFrame 前后两个样本 + 插值比例 alpha ∈ [0, 1]，
+        // 让前端用 60fps 的 rAF 在两个样本之间平滑插值球员位置。
         const stride = data.sample_stride || 1;
         const sampleIndices = data.sample_indices;
-        const pickSample = (targetFrame) => {
+        const pickInterp = (targetFrame) => {
+            const N = data.frames.length;
             if (!sampleIndices || sampleIndices.length === 0) {
-                return Math.min(Math.max(0, targetFrame), data.frames.length - 1);
+                const idx = Math.min(Math.max(0, targetFrame), N - 1);
+                return { a: idx, b: idx, alpha: 0 };
             }
-            const approx = Math.min(
+            // 用 stride 估计一个起点，然后线性扫描找到 targetFrame 所在的区间。
+            // 因为 sample_indices 单调递增，常数次内必中。
+            let i = Math.min(
                 Math.max(0, Math.floor(targetFrame / stride)),
                 sampleIndices.length - 1,
             );
-            let best = approx;
-            let bestDelta = Math.abs(sampleIndices[approx] - targetFrame);
-            for (const step of [-1, 1]) {
-                const j = approx + step;
-                if (j >= 0 && j < sampleIndices.length) {
-                    const d = Math.abs(sampleIndices[j] - targetFrame);
-                    if (d < bestDelta) { best = j; bestDelta = d; }
-                }
-            }
-            return best;
+            // 调整 i 使 sampleIndices[i] <= targetFrame < sampleIndices[i+1]
+            while (i > 0 && sampleIndices[i] > targetFrame) i--;
+            while (i < sampleIndices.length - 1 && sampleIndices[i + 1] <= targetFrame) i++;
+            const a = i;
+            const b = Math.min(i + 1, sampleIndices.length - 1);
+            const fa = sampleIndices[a];
+            const fb = sampleIndices[b];
+            const alpha = (fa === fb)
+                ? 0
+                : Math.max(0, Math.min(1, (targetFrame - fa) / (fb - fa)));
+            return { a, b, alpha };
         };
 
         // ── Period-aware time mapping ──────────────────────────────────────
@@ -203,6 +209,13 @@ export default function MinimapOverlay({ dataUrl, videoRef, visible }) {
             return last[1] - 1;
         };
 
+        // Helper: 按 id 把帧的球员数组转 Map，方便后面 O(1) 找配对
+        const toMap = (arr) => {
+            const m = new Map();
+            for (const p of arr || []) m.set(p.id, p);
+            return m;
+        };
+
         let raf;
         const tick = () => {
             const v = videoRef?.current;
@@ -210,52 +223,69 @@ export default function MinimapOverlay({ dataUrl, videoRef, visible }) {
             const fps = data.fps || 25;
             const outputFrame = Math.max(0, Math.floor(v.currentTime * fps));
             const targetFrame = outputFrameToOriginal(outputFrame);
-            const sampleIdx = pickSample(targetFrame);
-            const frame = data.frames[sampleIdx] || [];
-            const ball = data.ball?.[sampleIdx];
+
+            // 取前后两帧 + 插值比例
+            const { a, b, alpha } = pickInterp(targetFrame);
+            const frameA = data.frames[a] || [];
+            const frameB = data.frames[b] || [];
+            const mapB = toMap(frameB);
+            const ballA = data.ball?.[a];
+            const ballB = data.ball?.[b];
             const teamColors = data.team_colors || {};
 
             ctx.clearRect(0, 0, W, H);
             drawPitch();
 
-            // Players — plain solid-colour dots. Draw the tracked one last
-            // so its purple ring lands on top of everybody else.
-            let trackedPlayer = null;
-            for (const p of frame) {
-                if (p.tr) {
-                    trackedPlayer = p;
+            // ── Players ─────────────────────────────────────────────────
+            // 用 frameA 里的球员作为基准（每个 id 在 frameA 都有就插值，
+            // 没有就只用 frameA 的位置不插值）。同样把追踪的球员留到最后
+            // 画，让紫圈盖在最上层。
+            let trackedPa = null, trackedPb = null;
+            for (const pa of frameA) {
+                if (pa.tr) {
+                    trackedPa = pa;
+                    trackedPb = mapB.get(pa.id) || null;
                     continue;
                 }
-                const [px, py] = toPx(p.x, p.y);
-                const color = teamColors[String(p.t)]
-                    || (p.t === 1 ? '#3498db' : p.t === 2 ? '#e74c3c' : '#94a3b8');
+                const pb = mapB.get(pa.id);
+                // 球员在 b 帧消失：原地停住而不是闪一下，更自然
+                const x = pb ? pa.x + (pb.x - pa.x) * alpha : pa.x;
+                const y = pb ? pa.y + (pb.y - pa.y) * alpha : pa.y;
+                const [px, py] = toPx(x, y);
+                const color = teamColors[String(pa.t)]
+                    || (pa.t === 1 ? '#3498db' : pa.t === 2 ? '#e74c3c' : '#94a3b8');
                 ctx.fillStyle = color;
                 ctx.beginPath();
                 ctx.arc(px, py, 3.2, 0, Math.PI * 2);
                 ctx.fill();
             }
 
-            // Tracked player: same colored dot, plus a thin purple border
-            if (trackedPlayer) {
-                const [px, py] = toPx(trackedPlayer.x, trackedPlayer.y);
-                const color = teamColors[String(trackedPlayer.t)]
-                    || (trackedPlayer.t === 1 ? '#3498db'
-                        : trackedPlayer.t === 2 ? '#e74c3c' : '#94a3b8');
+            // Tracked player + 紫色追踪环
+            if (trackedPa) {
+                const pb = trackedPb;
+                const x = pb ? trackedPa.x + (pb.x - trackedPa.x) * alpha : trackedPa.x;
+                const y = pb ? trackedPa.y + (pb.y - trackedPa.y) * alpha : trackedPa.y;
+                const [px, py] = toPx(x, y);
+                const color = teamColors[String(trackedPa.t)]
+                    || (trackedPa.t === 1 ? '#3498db'
+                        : trackedPa.t === 2 ? '#e74c3c' : '#94a3b8');
                 ctx.fillStyle = color;
                 ctx.beginPath();
                 ctx.arc(px, py, 3.6, 0, Math.PI * 2);
                 ctx.fill();
-                ctx.strokeStyle = '#a855f7';  // purple ring = the player we're tracking
+                ctx.strokeStyle = '#a855f7';
                 ctx.lineWidth = 2;
                 ctx.beginPath();
                 ctx.arc(px, py, 6, 0, Math.PI * 2);
                 ctx.stroke();
             }
 
-            // Ball — clear white circle with black outline so it stands out
-            // against both the pitch green AND the player dots.
-            if (ball) {
-                const [bx, by] = toPx(ball[0], ball[1]);
+            // ── Ball ────────────────────────────────────────────────────
+            // 同样插值。如果 b 帧没有球（识别丢失），就用 a 帧的位置
+            if (ballA) {
+                const x = ballB ? ballA[0] + (ballB[0] - ballA[0]) * alpha : ballA[0];
+                const y = ballB ? ballA[1] + (ballB[1] - ballA[1]) * alpha : ballA[1];
+                const [bx, by] = toPx(x, y);
                 ctx.fillStyle = '#ffffff';
                 ctx.strokeStyle = '#000000';
                 ctx.lineWidth = 1.5;
