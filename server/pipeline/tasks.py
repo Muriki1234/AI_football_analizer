@@ -356,6 +356,11 @@ def _run_samurai_segment(seg_idx: int, session_id: str, output_dir: Path,
         f"{samurai_root}:{samurai_root}/sam2:" + env.get("PYTHONPATH", "")
     )
     env["HYDRA_FULL_ERROR"] = "1"
+    # torch.compile 编译缓存共享：8 个 SAMURAI 子进程都用同一个 cache 目录，
+    # 第一个进程编译完后续直接读 cache 跳过。挂网络卷可跨 session 复用。
+    env["TORCHINDUCTOR_CACHE_DIR"] = os.environ.get(
+        "TORCHINDUCTOR_CACHE_DIR", "/workspace/.torch_inductor_cache"
+    )
     proc = subprocess.run(
         cmd, capture_output=True, text=True, timeout=None,
         env=env, cwd=samurai_root,

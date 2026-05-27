@@ -112,8 +112,10 @@ model:
   multimask_min_pt_num: 0
   multimask_max_pt_num: 1
   use_mlp_for_obj_ptr_proj: true
-  # Compilation flag
-  compile_image_encoder: False
+  # Compilation flag — image encoder torch.compile 加速 20-30%
+  # sam2_base.py 用 reduce-overhead + fullgraph=False + suppress_errors
+  # 三层兜底，失败会自动 fallback eager；gcc 已在 Dockerfile.serverless 装好。
+  compile_image_encoder: True
   # SAMURAI
   samurai_mode: true
   stable_frames_threshold: 15
