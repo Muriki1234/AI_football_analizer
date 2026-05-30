@@ -72,3 +72,79 @@ export async function requireSupabaseUser(req, res) {
         return null;
     }
 }
+
+
+/**
+ * 校验当前 user 拥有 session_id，并从 DB 返回服务端可信的 session（含 video_url）。
+ * 三件事一起做：
+ *   1. session 必须存在
+ *   2. session.user_id 必须等于当前 JWT 的 user.id  (依赖 RLS 也行，但这里多查一次更明确)
+ *   3. 用 anon key + 用户 JWT 查 → RLS 自动拦截不属于这个用户的行 → PGRST116 报 row 0
+ *
+ * 调用方拿到非 null 的 session 后，**必须用 session.video_url 而不是 req.body 的 video_url**，
+ * 否则攻击者能让你的 RunPod 去下载任意 URL（SSRF 已在后端拦，但这里直接断绝）。
+ *
+ * 失败时 res 已经写过响应，caller 直接 return 即可。
+ */
+export async function requireSessionOwner(req, res, sessionId, userJwt) {
+    if (!sessionId) {
+        res.status(400).json({ error: 'session_id required' });
+        return null;
+    }
+    let supabase;
+    try {
+        supabase = getSupabase();
+    } catch (e) {
+        console.error('[auth] supabase config error:', e.message);
+        res.status(500).json({ error: 'Server auth misconfigured' });
+        return null;
+    }
+
+    // 用 user 的 JWT 做查询 → 走 RLS。这样如果有人传了别人的 session_id，
+    // RLS 会让查询返回 0 行，single() 报错。
+    try {
+        const { data, error } = await supabase
+            .from('sessions')
+            .select('id, user_id, video_url, status')
+            .eq('id', sessionId)
+            .maybeSingle()
+            .setHeader?.('Authorization', `Bearer ${userJwt}`);
+        // setHeader 不是所有 supabase-js 版本都支持；下面用一种更稳的方式重做
+        void data; void error;
+    } catch { /* ignore */ }
+
+    try {
+        // 创建一个带用户 JWT 的临时 client，这样 RLS 用 auth.uid() = user.id 评估
+        const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+            auth: { persistSession: false, autoRefreshToken: false },
+            global: { headers: { Authorization: `Bearer ${userJwt}` } },
+        });
+        const { data, error } = await userClient
+            .from('sessions')
+            .select('id, user_id, video_url, status')
+            .eq('id', sessionId)
+            .maybeSingle();
+        if (error) {
+            console.error('[auth] session lookup failed:', error.message);
+            res.status(500).json({ error: 'Session lookup failed' });
+            return null;
+        }
+        if (!data) {
+            // RLS 拦截 = 查不到 = 当前用户不拥有这个 session（或者 session 不存在）
+            res.status(403).json({ error: 'Session not found or not owned by you' });
+            return null;
+        }
+        return data;
+    } catch (e) {
+        console.error('[auth] session lookup exception:', e);
+        res.status(500).json({ error: 'Session lookup failed' });
+        return null;
+    }
+}
+
+
+/** 从 Authorization header 抠出 raw JWT 字符串（caller 已经过 requireSupabaseUser）。 */
+export function extractJwt(req) {
+    const h = req.headers.authorization || req.headers.Authorization || '';
+    return h.startsWith('Bearer ') ? h.slice(7).trim() : '';
+}

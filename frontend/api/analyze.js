@@ -1,4 +1,8 @@
-import { requireSupabaseUser } from './_authMiddleware.js';
+import {
+  requireSupabaseUser,
+  requireSessionOwner,
+  extractJwt,
+} from './_authMiddleware.js';
 
 export default async function handler(req, res) {
   // Only allow POST requests
@@ -6,33 +10,48 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // Auth: 必须是 Supabase 已登录（含匿名）用户。防止外部直接打这个 endpoint
-  // 薅 RunPod GPU 羊毛。requireSupabaseUser 失败时已经写过 res，直接 return。
+  // 1) JWT 校验：必须是登录用户（包含匿名）
   const user = await requireSupabaseUser(req, res);
   if (!user) return;
 
-  // Get the secret keys from Vercel's environment variables
+  // 2) Ownership 校验：req.body.input.session_id 必须属于当前 user。
+  //    RLS 在数据库层会兜底，但这里显式查能给清晰的 403 报错。
+  const input = req.body?.input || {};
+  const sessionId = input.session_id;
+  if (!sessionId) {
+    return res.status(400).json({ error: 'input.session_id is required' });
+  }
+
+  const jwt = extractJwt(req);
+  const session = await requireSessionOwner(req, res, sessionId, jwt);
+  if (!session) return;
+
+  // 3) 不信任前端传来的 video_url：从 DB 取服务端可信版本。
+  //    之前用户 A 能 POST {input: {session_id: B 的 id, video_url: 任意 URL}} —
+  //    后端 SSRF 防线还会再拦一次，但这里直接断绝。
+  const serverInput = {
+    ...input,
+    session_id: sessionId,
+    video_url: session.video_url,
+  };
+
+  // 4) Forward to RunPod
   const runpodUrl = process.env.RUNPOD_ENDPOINT_URL;
   const runpodKey = process.env.RUNPOD_API_KEY;
-
   if (!runpodUrl || !runpodKey) {
     return res.status(500).json({ error: 'RunPod configuration is missing on the server.' });
   }
 
   try {
-    // Forward the request body to RunPod
     const response = await fetch(runpodUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${runpodKey}`
+        'Authorization': `Bearer ${runpodKey}`,
       },
-      body: JSON.stringify(req.body)
+      body: JSON.stringify({ input: serverInput }),
     });
-
     const data = await response.json();
-
-    // Return the RunPod response (like the Job ID) to our frontend
     return res.status(response.status).json(data);
   } catch (error) {
     console.error('RunPod proxy error:', error);

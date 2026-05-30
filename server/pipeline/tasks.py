@@ -1273,6 +1273,15 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         video_duration_sec = total / max(fps, 1.0)
         samurai_timeout_sec = max(600.0, 2.0 * video_duration_sec)
 
+        # 这次 analysis 是不是 tracking 模式（用户选了球员等 SAMURAI 出 bbox）
+        # —— 看 session 里有没有 SAMURAI 的指示物。如果是 tracking 模式但最终
+        # tracked_bboxes 还是空 → 不能继续假装成功，直接 raise，让 DB 状态写
+        # analysis_failed 而不是 analysis_done。
+        _is_tracking_mode = (
+            "_samurai_done_event" in session
+            or bool(session.get("samurai_cache_path"))
+        )
+
         if not tracked_bboxes:
             samurai_event = session.get("_samurai_done_event")
             samurai_pkl = (sm.get_session(session_id) or {}).get("samurai_cache_path")
@@ -1307,6 +1316,14 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                 tracked_bboxes = samurai_data.get("bboxes", {})
                 print(f"[INFO] SAMURAI bboxes loaded (post-analysis): "
                       f"{len(tracked_bboxes)} frames")
+
+        # tracking 模式 + 没拿到 bboxes = 任务实际失败。之前会硬走完 summary
+        # + 写 analysis_done，用户拿到没有追踪框的视频还以为是正常输出。
+        if _is_tracking_mode and not tracked_bboxes:
+            raise RuntimeError(
+                "SAMURAI tracking failed: no bboxes produced. Refusing to "
+                "write analysis_done; marking analysis_failed instead."
+            )
 
         sm.update_status(session_id, "analyzing", progress=92, stage="computing_summary")
         print(f"[INFO] Computing summary for session {session_id}…")

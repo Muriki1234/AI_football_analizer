@@ -38,6 +38,7 @@ Example input:
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 from pathlib import Path
 from typing import Any
@@ -198,48 +199,82 @@ def _is_allowed_video_url(url: str) -> bool:
     return any(host == s.lstrip(".") or host.endswith(s) for s in ALLOW)
 
 
+def _stream_download(url: str, dest: Path, headers: dict | None = None) -> None:
+    """流式 GET → 写盘。先校验 Content-Length，再分块读，超大就立刻断开 + 删文件。"""
+    import urllib.request
+    req = urllib.request.Request(url, headers=headers or {})
+    req.add_header("User-Agent", "pitchlogic/1.0")
+    with urllib.request.urlopen(req, timeout=300) as resp:
+        # 先看 Content-Length；服务器报多大就先拦
+        cl_str = resp.headers.get("Content-Length") or "0"
+        try:
+            content_length = int(cl_str)
+        except ValueError:
+            content_length = 0
+        if content_length and content_length > _MAX_DOWNLOAD_BYTES:
+            raise RuntimeError(
+                f"refused: Content-Length {content_length // (1024**2)} MB > "
+                f"{_MAX_DOWNLOAD_BYTES // (1024**2)} MB cap"
+            )
+        bytes_read = 0
+        with dest.open("wb") as out:
+            while True:
+                chunk = resp.read(1024 * 1024)
+                if not chunk:
+                    break
+                bytes_read += len(chunk)
+                if bytes_read > _MAX_DOWNLOAD_BYTES:
+                    out.close()
+                    try: dest.unlink()
+                    except Exception: pass
+                    raise RuntimeError(
+                        f"refused: stream exceeded {_MAX_DOWNLOAD_BYTES // (1024**2)} MB cap"
+                    )
+                out.write(chunk)
+
+
+def _supabase_host() -> str | None:
+    """从 settings.SUPABASE_URL 抠出 host，用于校验 video_url 是不是真的指向自己 Supabase。"""
+    try:
+        return urlparse(settings.SUPABASE_URL).hostname
+    except Exception:
+        return None
+
+
 def _download_video_once(url: str, dest: Path) -> None:
     """Single download attempt — the retry loop is in _download_video()."""
+    # 关键安全检查：先校验 scheme + host，再决定走 Supabase 路径还是公网 fallback。
+    # 之前的写法是先抠 storage key 再判断，攻击者只要在 path 里塞 /storage/v1/object/
+    # 字串就能跳过白名单，让我们用 service_role 去下任意 storage key（48-bit session id 可枚举）。
+    try:
+        u = urlparse(url)
+    except Exception:
+        raise RuntimeError(f"invalid video_url: {url[:80]}…")
+    if u.scheme not in ("http", "https") or not u.hostname:
+        raise RuntimeError(f"refused: bad scheme/host in video_url")
+
     storage_key = _supabase_storage_key_from_url(url)
-    supa = _get_supabase()
-    if storage_key and supa is not None:
-        data = supa.storage.from_("videos").download(storage_key)
-        # 容量校验：Supabase SDK 已经把整个 bytes 拉到内存了，所以这里只能
-        # 事后拦截。理想是流式下载 + 中途断开，但当前 SDK 没这个 API。
-        if len(data) > _MAX_DOWNLOAD_BYTES:
-            raise RuntimeError(
-                f"refused: video {len(data) // (1024**2)} MB exceeds "
-                f"max {_MAX_DOWNLOAD_BYTES // (1024**2)} MB"
-            )
-        dest.write_bytes(data)
+    supa_host = _supabase_host()
+
+    # 路径 1：真正的 Supabase Storage URL（host 必须匹配我们配置的 SUPABASE_URL）
+    if storage_key and supa_host and u.hostname == supa_host:
+        # 用 service_role bearer + 直接 HTTP GET 流式下载，避开 SDK 的 .download()
+        # 把整个文件预先读到内存（10GB 文件入内存 = 立刻 OOM）。
+        base = settings.SUPABASE_URL.rstrip("/")
+        storage_url = f"{base}/storage/v1/object/videos/{storage_key}"
+        _stream_download(
+            storage_url,
+            dest,
+            headers={"Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}"},
+        )
         return
 
-    # Fallback for non-Supabase URLs (e.g. R2, external CDN) — SSRF 防线
+    # 路径 2：外部 URL（R2 / CDN / 其他）— 必须过 host 白名单
     if not _is_allowed_video_url(url):
         raise RuntimeError(
             f"refused: video_url host not in allowlist (got {url[:80]}…)"
         )
-    import urllib.request
-    # 流式下载 + 容量上限：分块读，超过 _MAX_DOWNLOAD_BYTES 立刻中断 + 删本地半成品
-    req = urllib.request.Request(url, headers={"User-Agent": "pitchlogic/1.0"})
-    with urllib.request.urlopen(req, timeout=300) as resp, dest.open("wb") as out:
-        bytes_read = 0
-        chunk_size = 1024 * 1024  # 1 MB
-        while True:
-            chunk = resp.read(chunk_size)
-            if not chunk:
-                break
-            bytes_read += len(chunk)
-            if bytes_read > _MAX_DOWNLOAD_BYTES:
-                out.close()
-                try:
-                    dest.unlink()
-                except Exception:
-                    pass
-                raise RuntimeError(
-                    f"refused: download exceeded {_MAX_DOWNLOAD_BYTES // (1024**2)} MB cap"
-                )
-            out.write(chunk)
+    _stream_download(url, dest)
 
 
 def _ensure_local_video(session_id: str, video_url: str, sm: SessionManager) -> str:
