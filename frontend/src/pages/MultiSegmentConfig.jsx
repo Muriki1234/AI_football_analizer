@@ -7,24 +7,20 @@ import { analyzeFrame, getSession } from '../services/api';
 import StepNav from '../components/StepNav';
 import './Configuration.css';
 
-// Auto segment count.
-//
-//   < 20s  → 1 segment  (parallel overhead > savings; SAMURAI on 50 frames
-//                        is already fast, 4 parallel subprocesses just thrash)
-//   >= 20s → 4 segments (sweet spot on 16GB+ GPU — see notes in
-//                        run_samurai_tracking_multi)
-//
-// We don't expose a manual control to users — the choice doesn't carry
-// meaningful information for them, only adds confusion. The ?segments=N
-// URL override stays for power users testing the pipeline.
-// Per-period segment count. 4 is the sweet spot on 16GB+ GPU:
+// Auto segment count per period. 4 is the sweet spot on 24GB GPUs:
 //   1 period  × 4 = 4 picks total
 //   2 periods × 4 = 8 picks (e.g. first + second half)
-//   N periods × 4 = N*4 picks
-// Single-pick fallback for very short videos (no period > 20s).
+//   N periods × 4 = N*4 picks  (SAMURAI cap=8 means more queue up)
+//
+// 之前阈值是 20s — 30秒视频拆 2 段 (15s each) 反而每段只给 1 segment，用户
+// 加了 break 后预期 4→8 结果变 1→2，反直觉。降到 5s：
+//   - 5秒以下：1 segment（SAMURAI 在 100帧内开 4 进程并行 overhead 大于收益）
+//   - 5秒以上：4 segments
+// 30 秒视频 / 2 period × 15s = 各 4 segments = 8 picks，符合预期。
 const SEGS_PER_PERIOD = 4;
+const MIN_PERIOD_FOR_MULTI_SEG = 5;   // 秒
 function segCountForPeriod(periodSec) {
-    if (!Number.isFinite(periodSec) || periodSec < 20) return 1;
+    if (!Number.isFinite(periodSec) || periodSec < MIN_PERIOD_FOR_MULTI_SEG) return 1;
     return SEGS_PER_PERIOD;
 }
 

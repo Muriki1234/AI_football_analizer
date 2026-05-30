@@ -422,6 +422,76 @@ export const queueFeature = async (sessionId, feature) => {
     return data;
 };
 
+// ── Feature task helpers used by AIInsights.jsx ────────────────────────────
+//
+// AIInsights expects two functions that didn't actually exist in this file:
+//   1. generateFeature(sessionId, feature) → { task_id }
+//      Kicks off a feature task and returns its task_id so the caller can poll.
+//   2. pollTaskStatus(sessionId, taskId, onProgress) → final task row
+//      Polls the tasks table until status is 'done' or 'failed', firing
+//      onProgress with the latest row in between.
+//
+// queueFeature() already does the kick-off via /api/analyze; we wrap it to
+// return the task_id RunPod reports back. For the poll, hit the tasks table
+// directly via supabase-js (RLS scopes it to this session's owner).
+
+export const generateFeature = async (sessionId, feature) => {
+    const data = await queueFeature(sessionId, feature);
+    // RunPod async endpoint returns {id: "<runpod_job_id>"}. The actual
+    // task row in our `tasks` table is created server-side by the handler,
+    // keyed by feature + a short prefix. We look it up by querying recent
+    // running tasks for this session of the requested type.
+    // The single-shot RunPod job_id isn't directly our DB task_id, so the
+    // safest thing is: poll the tasks table for the most recent row of
+    // this type and use that.
+    let task_id = null;
+    // Race: the server may not have inserted the row yet. Quick poll for ~5s.
+    for (let i = 0; i < 25; i++) {
+        const { data: rows } = await supabase
+            .from('tasks')
+            .select('id, created_at')
+            .eq('session_id', sessionId)
+            .eq('task_type', feature)
+            .order('created_at', { ascending: false })
+            .limit(1);
+        if (rows && rows.length > 0) { task_id = rows[0].id; break; }
+        await new Promise(r => setTimeout(r, 200));
+    }
+    return { task_id, runpod: data };
+};
+
+export const pollTaskStatus = async (sessionId, taskId, onProgress) => {
+    if (!taskId) throw new Error('pollTaskStatus: task_id required');
+    // Polling cadence: 2s × 8 → 5s after. Cap at 30 min for slow AI tasks.
+    const deadline = Date.now() + 30 * 60 * 1000;
+    let n = 0;
+    while (Date.now() < deadline) {
+        const { data, error } = await supabase
+            .from('tasks')
+            .select('*')
+            .eq('id', taskId)
+            .maybeSingle();
+        if (error) throw error;
+        if (!data) {
+            // 任务被删了 (clear_tasks)，认为失败
+            throw new Error('Task disappeared from DB');
+        }
+        if (onProgress) {
+            try { onProgress(data); } catch { /* swallow callback errors */ }
+        }
+        if (data.status === 'done') return data;
+        if (data.status === 'failed' || data.status === 'error') {
+            throw new Error(data.error || `Task ${taskId} failed`);
+        }
+        // queued / running → keep polling
+        const wait = n < 8 ? 2000 : 5000;
+        n++;
+        await new Promise(r => setTimeout(r, wait));
+    }
+    throw new Error('Task timed out after 30 min');
+};
+
+
 // ── Tasks & Real-time ────────────────────────────────────────────────────────
 
 /**
@@ -532,6 +602,8 @@ export default {
     startTrackingMulti,
     analyzeFrame,
     queueFeature,
+    generateFeature,
+    pollTaskStatus,
     listTasks,
     subscribeSession
 };
