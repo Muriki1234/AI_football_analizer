@@ -87,7 +87,32 @@ const _refreshVideoUrl = async (storedUrl) => {
  * Upload a file directly to Supabase Storage.
  * Then creates a record in the 'sessions' table.
  */
+// 前端硬上限 —— uploadVideo 走 supabase.storage.upload() 直传，绕过后端 FastAPI
+// 的 _MAX_UPLOAD_BYTES 校验。这里 client-side 拦一次，给用户立即的反馈。
+// Supabase Storage 自己也有 policy 兜底（dashboard 设置 max file size），但本地
+// 拦能省一次失败的网络往返。
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024 * 1024; // 10 GB
+const ALLOWED_VIDEO_EXTS = ['.mp4', '.mov', '.m4v', '.mkv', '.webm', '.avi'];
+
 export const uploadVideo = async (file, onProgress) => {
+    // 客户端校验：大小 + 后缀。攻击者绕过校验也只能在自己的浏览器里。
+    if (!file || typeof file.size !== 'number') {
+        throw new Error('Invalid file');
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+        throw new Error(
+            `File is ${(file.size / 1024 ** 3).toFixed(1)} GB; max upload size is `
+            + `${(MAX_UPLOAD_BYTES / 1024 ** 3).toFixed(0)} GB`
+        );
+    }
+    const ext = (file.name.match(/\.[^.]+$/) || [''])[0].toLowerCase();
+    if (!ALLOWED_VIDEO_EXTS.includes(ext)) {
+        throw new Error(
+            `Unsupported file type "${ext || 'unknown'}". Allowed: `
+            + ALLOWED_VIDEO_EXTS.join(', ')
+        );
+    }
+
     // Try to get current user; if not logged in, auto sign-in anonymously
     let { data: { user } } = await supabase.auth.getUser();
     if (!user) {
@@ -97,7 +122,9 @@ export const uploadVideo = async (file, onProgress) => {
     }
 
     const sessionId = crypto.randomUUID();
-    const fileName = `${sessionId}/${file.name}`;
+    // 文件名只保留字母数字点横杠下划线，避免奇怪字符让后端 path 解析出错。
+    const safeName = file.name.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^[-.]+/, '');
+    const fileName = `${sessionId}/${safeName || 'video.mp4'}`;
 
     // 1. Upload to Supabase Storage
     const { error: uploadError } = await supabase.storage

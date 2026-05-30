@@ -1403,6 +1403,11 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                          error=str(exc), stage="analysis_error",
                          tracks_cache_path=None)
         _log_error("Global analysis", session_id, exc)
+        # 重新抛 —— 之前 catch 不 raise，调用方 (handler._action_track) 看不到
+        # 异常仍 return {"ok": true}，DB status 是 failed 但 HTTP 响应是 200。
+        # caller 的 try/finally 会先看到 sm.update_status 已经写了 failed，再被
+        # 这里的 raise 命中 → 显式失败响应。
+        raise
 
 
 def _summary_for_range(tracks: dict, tracked_bboxes: dict, team_control: list,

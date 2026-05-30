@@ -219,10 +219,24 @@ async def complete_upload(
     final_path = upload_dir / filename
     tmp_path = upload_dir / f".{filename}.tmp"
 
-    # Verify every chunk is present before starting — fail fast.
+    # Verify every chunk is present + 累加总大小再开始 assemble。之前注释里说
+    # 有 _MAX_UPLOAD_BYTES 兜底，但 complete 阶段从来不算总大小，理论上能
+    # 10000 chunks × 100MB = 1TB 撑爆磁盘。
+    total_size = 0
     for i in range(payload.total_chunks):
-        if not (chunks_dir / f"{i:06d}.part").exists():
+        part_path = chunks_dir / f"{i:06d}.part"
+        if not part_path.exists():
             raise HTTPException(status_code=400, detail=f"Missing chunk {i}")
+        total_size += part_path.stat().st_size
+        if total_size > _MAX_UPLOAD_BYTES:
+            # 立刻拒绝，并清掉 chunk 目录省磁盘。前端拿到 413 后该重新走流程。
+            shutil.rmtree(chunks_dir, ignore_errors=True)
+            raise HTTPException(
+                status_code=413,
+                detail=f"Assembled size would exceed "
+                       f"{_MAX_UPLOAD_BYTES // (1024**2)} MB cap "
+                       f"(current sum after chunk {i}: {total_size // (1024**2)} MB)",
+            )
 
     try:
         with tmp_path.open("wb") as out:
