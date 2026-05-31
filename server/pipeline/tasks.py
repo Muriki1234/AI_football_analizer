@@ -3226,7 +3226,7 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
                        stage="loading_data")
 
         # ── 1. 依赖检查 & 配置 ──
-        ai_backend = os.environ.get("AI_BACKEND", "qwen").strip().lower()
+        ai_backend = os.environ.get("AI_BACKEND", "gemini").strip().lower()
         if ai_backend not in ("gemini", "qwen"):
             raise RuntimeError(f"Unknown AI_BACKEND={ai_backend!r}; use 'gemini' or 'qwen'")
         # Qwen 路径用 DashScope，Gemini 路径用 GEMINI_API_KEY
