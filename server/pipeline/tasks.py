@@ -3394,7 +3394,12 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
             )
 
             # ── Helper：调用 LLM 看一段视频，返回 markdown 字符串 ─────────────
-            def _call_llm_on_chunk(chunk_path: Path, chunk_prompt: str) -> str:
+            #   ci_for_progress 用于在 Gemini PROCESSING 等待 / Qwen 抽帧时
+            #   写中途 stage，让用户看到 "uploading" "processing 30s" 等而不
+            #   是 30% 一直卡死。
+            def _call_llm_on_chunk(chunk_path: Path, chunk_prompt: str,
+                                    ci_for_progress: int) -> str:
+                _base_pct = 30 + int(55 * ci_for_progress / max(n_chunks, 1))
                 if ai_backend == "qwen":
                     # 抽帧 → image_url list（每段最多 60 帧）
                     _frame_dir = Path(_tf.mkdtemp())
@@ -3428,17 +3433,58 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
                     finally:
                         _sh.rmtree(_frame_dir, ignore_errors=True)
                 else:  # gemini
-                    _gemini_file = _gemini_client.files.upload(file=str(chunk_path))
+                    sm.update_task(session_id, task_id, progress=_base_pct,
+                                   stage=f"uploading_chunk_{ci_for_progress+1}_to_gemini")
+                    _t_upload = _time.perf_counter()
+                    _chunk_mb = chunk_path.stat().st_size / (1024 * 1024)
+                    print(f"[AI_SUMMARY] uploading {_chunk_mb:.1f} MB to Gemini Files API…")
+                    try:
+                        _gemini_file = _gemini_client.files.upload(file=str(chunk_path))
+                    except Exception as _ue:
+                        # 上传一挂就立刻报，别让用户卡10分钟
+                        raise RuntimeError(
+                            f"Gemini Files API upload failed: {_ue!r}. "
+                            f"Check GEMINI_API_KEY env + network."
+                        ) from _ue
+                    print(f"[AI_SUMMARY] uploaded in {_time.perf_counter() - _t_upload:.0f}s; "
+                          f"waiting for PROCESSING -> ACTIVE…")
                     try:
                         _t_wait = _time.perf_counter()
+                        _last_log = 0.0
                         while _gemini_file.state.name == "PROCESSING":
-                            if _time.perf_counter() - _t_wait > 600:
-                                raise RuntimeError("Gemini video processing > 10 min")
+                            _elapsed = _time.perf_counter() - _t_wait
+                            if _elapsed > 600:
+                                raise RuntimeError(
+                                    f"Gemini video processing > 10 min "
+                                    f"(stuck at PROCESSING for {_elapsed:.0f}s)"
+                                )
+                            # 每 3s 轮询一次状态，同时每 10s 给 DB 写一次进度，
+                            # 让前端能看到 "Gemini 处理视频中 30s..." 之类的提示
                             _time.sleep(3)
-                            _gemini_file = _gemini_client.files.get(name=_gemini_file.name)
+                            try:
+                                _gemini_file = _gemini_client.files.get(name=_gemini_file.name)
+                            except Exception as _pe:
+                                print(f"[AI_SUMMARY] files.get failed (retrying): {_pe!r}")
+                                continue
+                            if _elapsed - _last_log >= 10:
+                                _last_log = _elapsed
+                                sm.update_task(
+                                    session_id, task_id, progress=_base_pct,
+                                    stage=f"gemini_processing_{int(_elapsed)}s",
+                                )
+                                print(f"[AI_SUMMARY] still PROCESSING after {_elapsed:.0f}s "
+                                      f"(state={_gemini_file.state.name})")
                         if _gemini_file.state.name == "FAILED":
-                            raise RuntimeError(f"Gemini PROCESSING FAILED")
+                            raise RuntimeError(f"Gemini PROCESSING returned FAILED state")
+                        print(f"[AI_SUMMARY] Gemini ACTIVE after "
+                              f"{_time.perf_counter() - _t_wait:.0f}s; generating…")
+                        sm.update_task(
+                            session_id, task_id,
+                            progress=min(_base_pct + 10, 85),
+                            stage=f"gemini_reasoning_chunk_{ci_for_progress+1}",
+                        )
                         from google.genai import types as _g_types
+                        _t_gen = _time.perf_counter()
                         _resp = _gemini_client.models.generate_content(
                             model=model_name,
                             contents=[_gemini_file, chunk_prompt],
@@ -3446,6 +3492,8 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
                                 temperature=0.4, top_p=0.9, max_output_tokens=4096,
                             ),
                         )
+                        print(f"[AI_SUMMARY] generate_content done in "
+                              f"{_time.perf_counter() - _t_gen:.0f}s")
                         return (_resp.text or "").strip()
                     finally:
                         try: _gemini_client.files.delete(name=_gemini_file.name)
@@ -3482,7 +3530,7 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
                         "要求：纯粹观察，不做整体总结、不写改进建议。Markdown 简短列表，"
                         f"不超过 600 字。\n\n## 统计数据（整场参考）\n```json\n{stats_json}\n```"
                     )
-                _part = _call_llm_on_chunk(chunk_path, _chunk_prompt)
+                _part = _call_llm_on_chunk(chunk_path, _chunk_prompt, ci)
                 if _part:
                     partial_reports.append(
                         f"### 片段 {ci+1}/{n_chunks} "
