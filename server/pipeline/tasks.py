@@ -3019,7 +3019,62 @@ def _draw_defensive_line_chart(frame_data: list, penetrations: list,
     plt.close()
 
 
-# ── 3h. AI 总结（Gemini 多模态）──────────────────────────────────────────────
+# ── 3h. AI 总结（Gemini / Qwen 多模态）──────────────────────────────────────
+
+def _probe_video_duration_sec(video_path: str) -> float:
+    """ffprobe 拿视频时长（秒），失败返回 0。"""
+    import subprocess as _sp
+    try:
+        r = _sp.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", video_path],
+            capture_output=True, text=True, timeout=20,
+        )
+        return float(r.stdout.strip()) if r.returncode == 0 else 0.0
+    except Exception:
+        return 0.0
+
+
+def _split_video_by_duration(video_path: str, chunk_sec: int,
+                              out_dir: Path) -> list[tuple[Path, float, float]]:
+    """
+    把视频按 chunk_sec 切成 N 段（用 ffmpeg copy 模式，零重编码 → 几秒搞定）。
+    返回 [(chunk_path, start_sec, end_sec), ...]。
+    chunk_sec >= 视频时长时只切出一段 = 原视频 copy。
+    """
+    import subprocess as _sp
+    total = _probe_video_duration_sec(video_path)
+    if total <= 0:
+        # 失败兜底：当成单段视频
+        return [(Path(video_path), 0.0, 0.0)]
+
+    chunks: list[tuple[Path, float, float]] = []
+    idx = 0
+    cur = 0.0
+    while cur < total - 1.0:  # 留 1s 容差，避免最后段长度近 0
+        end = min(cur + chunk_sec, total)
+        chunk_path = out_dir / f"ai_chunk_{idx:02d}.mp4"
+        # -c copy 不重编码；-avoid_negative_ts 1 处理边界帧；-y 覆盖
+        cmd = [
+            "ffmpeg", "-y", "-ss", f"{cur:.3f}", "-i", video_path,
+            "-t", f"{end - cur:.3f}",
+            "-c", "copy", "-avoid_negative_ts", "1",
+            "-loglevel", "error",
+            str(chunk_path),
+        ]
+        r = _sp.run(cmd, capture_output=True, text=True, timeout=300)
+        if r.returncode != 0 or not chunk_path.exists() or chunk_path.stat().st_size < 1024:
+            # 单段切失败：用全段原文件兜底，避免整个流程崩
+            print(f"[AI_SUMMARY] chunk split failed for {cur}-{end}s: {r.stderr[:200]}")
+            break
+        chunks.append((chunk_path, cur, end))
+        cur = end
+        idx += 1
+
+    if not chunks:
+        return [(Path(video_path), 0.0, total)]
+    return chunks
+
 
 def _render_gemini_video(video_path: str, bboxes_dict: dict,
                           output_path: Path, stride: int = 5,
@@ -3171,7 +3226,7 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
                        stage="loading_data")
 
         # ── 1. 依赖检查 & 配置 ──
-        ai_backend = os.environ.get("AI_BACKEND", "gemini").strip().lower()
+        ai_backend = os.environ.get("AI_BACKEND", "qwen").strip().lower()
         if ai_backend not in ("gemini", "qwen"):
             raise RuntimeError(f"Unknown AI_BACKEND={ai_backend!r}; use 'gemini' or 'qwen'")
         # Qwen 路径用 DashScope，Gemini 路径用 GEMINI_API_KEY
@@ -3185,9 +3240,23 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
             raise RuntimeError(f"{env_var} not set in environment")
         model_name = os.environ.get(
             "AI_MODEL",
-            "gemini-2.0-flash" if ai_backend == "gemini" else "qwen3-vl-flash",
+            "gemini-2.0-flash" if ai_backend == "gemini" else "qwen3-vl-plus",
         )
-        print(f"[AI_SUMMARY] backend={ai_backend} model={model_name}")
+        # 每个 backend 的单视频时长上限（秒）
+        # Qwen3-VL Flash 10min / Plus & Max 40min / Gemini Flash 60min / Pro 2h
+        _PER_CHUNK_SEC_DEFAULTS = {
+            "qwen3-vl-flash":  9 * 60,
+            "qwen3-vl-plus":   35 * 60,    # 留 5min 余量
+            "qwen3-vl-max":    35 * 60,
+            "gemini-2.0-flash": 55 * 60,
+            "gemini-2.0-pro":  110 * 60,
+        }
+        per_chunk_sec = int(os.environ.get(
+            "AI_CHUNK_SEC",
+            str(_PER_CHUNK_SEC_DEFAULTS.get(model_name, 30 * 60)),
+        ))
+        print(f"[AI_SUMMARY] backend={ai_backend} model={model_name} "
+              f"per_chunk={per_chunk_sec}s")
 
         # 客户端只在用到时延迟构建，省 cold start
         _qwen_client = None
@@ -3278,164 +3347,197 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
                 video_source = "raw_video"
         print(f"[AI_SUMMARY] Video source: {video_source} → {video_for_ai}")
 
-        # ── 5. 准备视频输入 ─────────────────────────────────────────────────
+        # ── 5. Map-reduce：按模型上限切视频 → 每段独立调 LLM → 聚合 ────────────
         import time as _time, base64 as _b64, subprocess as _sp
         import tempfile as _tf, shutil as _sh
-        sm.update_task(session_id, task_id, progress=28, stage="preparing_video")
+        sm.update_task(session_id, task_id, progress=28, stage="splitting_video")
 
-        _img_parts = None        # Qwen 路径用
-        _gemini_video_file = None  # Gemini 路径用
-
-        if ai_backend == "qwen":
-            # Qwen-VL：base64 单 message 10MB / 视频 ≤10min，所以走抽帧路径
-            #   每秒 1 帧、最多 60 帧 = 看 60 秒。> 60s 的视频后面全看不到。
-            _frame_dir = Path(_tf.mkdtemp())
-            try:
-                _sp.run([
-                    "ffmpeg", "-y", "-i", video_for_ai,
-                    "-vf", "fps=1,scale=640:-2",
-                    "-q:v", "4", "-frames:v", "60",
-                    str(_frame_dir / "f%04d.jpg"),
-                ], check=True, capture_output=True)
-                _frame_files = sorted(_frame_dir.glob("f*.jpg"))[:60]
-                if not _frame_files:
-                    raise RuntimeError("ffmpeg produced no frames from AI video")
-                _img_parts = []
-                for _fp in _frame_files:
-                    _b64_frame = _b64.b64encode(_fp.read_bytes()).decode()
-                    _img_parts.append({
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{_b64_frame}"},
-                    })
-                print(f"[AI_SUMMARY] Extracted {len(_frame_files)} frames for Qwen-VL")
-            finally:
-                _sh.rmtree(_frame_dir, ignore_errors=True)
-        else:
-            # Gemini 2.0 Flash：通过 Files API 上传整段视频（最长 60 分钟）。
-            # 上传后等 state=ACTIVE 再调 generate_content。
-            print(f"[AI_SUMMARY] Uploading video to Gemini Files API: {video_for_ai}")
-            _gemini_video_file = _gemini_client.files.upload(file=video_for_ai)
-            # 等待视频处理完成（state 从 PROCESSING → ACTIVE）
-            _t_wait = _time.perf_counter()
-            while _gemini_video_file.state.name == "PROCESSING":
-                # 超时：90 min 视频实测处理大概 1-3 min；给 10 min 上限
-                if _time.perf_counter() - _t_wait > 600:
-                    raise RuntimeError("Gemini video processing exceeded 10 min")
-                sm.update_task(session_id, task_id, progress=32,
-                               stage="gemini_video_processing")
-                _time.sleep(3)
-                _gemini_video_file = _gemini_client.files.get(name=_gemini_video_file.name)
-            if _gemini_video_file.state.name == "FAILED":
-                raise RuntimeError(
-                    f"Gemini failed to process video: {_gemini_video_file.state}"
-                )
-            print(f"[AI_SUMMARY] Gemini video ready: {_gemini_video_file.uri} "
-                  f"({_time.perf_counter() - _t_wait:.0f}s to process)")
-
-        # ── 6. 组 prompt + 调用 LLM（附进度模拟线程，避免进度条冻结）────────────
-        sm.update_task(session_id, task_id, progress=40,
-                       stage="gemini_reasoning" if ai_backend == "gemini" else "qwen_reasoning")
-
-        import threading as _threading
-        _stop_sim = _threading.Event()
-        def _sim_progress():
-            t0 = _time.perf_counter()
-            while not _stop_sim.is_set():
-                elapsed = _time.perf_counter() - t0
-                # 40 → 93 linearly over 120 s，之后停在 93
-                sim_pct = min(93, int(40 + elapsed / 120 * 53))
-                sm.update_task(session_id, task_id,
-                               progress=sim_pct, stage="qwen_reasoning")
-                _time.sleep(4)
-        _sim_thread = _threading.Thread(target=_sim_progress, daemon=True)
-        _sim_thread.start()
-
-        # 根据实际视频源调整 prompt
-        if video_source == "raw_video":
-            _video_desc = (
-                "视频为原始比赛画面（无标注）。"
-                "由于渲染标注视频失败，请主要依据下方统计数据进行分析，"
-                "视频画面仅作辅助参考（无法识别具体追踪球员）。"
-            )
-            _player_section = (
-                "## 被追踪球员分析\n"
-                "本节请完全依据下方统计数据（max_speed / distance / possession_seconds 等）分析，"
-                "不要根据视频画面猜测球员身份。\n\n"
-            )
-        else:
-            # Qwen 走抽帧路径，1 fps；Gemini 直接吃整段视频（原帧率）
-            _fps_hint = ("约 1 fps 抽帧" if ai_backend == "qwen"
-                         else "全帧率原始视频")
-            _video_desc = (
-                f"视频为带标注的比赛画面（{_fps_hint}），"
-                + ("绿色高亮框（TRACKED）标注的是正在被追踪的核心球员。"
-                   if video_source == "full_res_annotated"
-                   else "SAM2 mask 叠加视频，绿框为被追踪球员。")
-            )
-            _player_section = (
-                "## 被追踪球员分析\n"
-                "重点分析视频中绿色框标注的那名球员：跑位、速度爆发、控球、影响力。\n\n"
-            )
-
-        system_text = (
-            f"你是一个专业足球战术分析师。{_video_desc}"
-            "结合以下统计数据和视频画面，生成一份**中文 Markdown 报告**，"
-            "包含以下章节（严格按顺序、标题用 ## 二级标题）：\n\n"
-            "## 比赛概览\n"
-            "简述双方控球对比、关键跑动数据、比赛节奏。\n\n"
-            + _player_section +
-            "## 战术观察\n"
-            "阵型特征、进攻模式、防守组织，基于画面实际观察。\n\n"
-            "## 改进建议\n"
-            "3 条具体可执行的训练/战术建议。\n\n"
-            "要求：语言简练，数据引用具体，不要泛泛而谈。"
-        )
-        _prompt_text = (
-            f"{system_text}\n\n## 统计数据\n```json\n{stats_json}\n```\n\n请生成报告："
-        )
-
-        result_data = None
-        report_path = None
-        report_md = ""
-
+        # 切片：视频时长 ≤ per_chunk_sec 时不切，返回单段 = 原视频
+        _chunk_dir = output_dir / "ai_chunks"
+        _chunk_dir.mkdir(parents=True, exist_ok=True)
         try:
-            if ai_backend == "qwen":
-                # Qwen: 多 image_url + 文字 prompt 走 OpenAI 兼容接口
-                _user_content = _img_parts + [{"type": "text", "text": _prompt_text}]
-                _resp = _qwen_client.chat.completions.create(
-                    model=model_name,
-                    messages=[{"role": "user", "content": _user_content}],
-                    temperature=0.4,
-                    top_p=0.9,
-                    max_tokens=4096,
+            chunks = _split_video_by_duration(video_for_ai, per_chunk_sec, _chunk_dir)
+            n_chunks = len(chunks)
+            total_dur_sec = _probe_video_duration_sec(video_for_ai)
+            print(f"[AI_SUMMARY] Video {total_dur_sec:.0f}s split into {n_chunks} chunk(s) "
+                  f"of ≤{per_chunk_sec}s each")
+
+            # ── prompt 公共部分 ─────────────────────────────────────────────
+            if video_source == "raw_video":
+                _video_desc = (
+                    "视频为原始比赛画面（无标注）。请主要依据下方统计数据进行分析，"
+                    "视频画面仅作辅助参考（无法识别具体追踪球员）。"
                 )
-                report_md = (_resp.choices[0].message.content or "").strip()
+                _player_section = (
+                    "## 被追踪球员分析\n"
+                    "本节请完全依据下方统计数据（max_speed / distance / possession_seconds 等）分析，"
+                    "不要根据视频画面猜测球员身份。\n\n"
+                )
             else:
-                # Gemini: 视频 File 对象 + 文字 prompt → generate_content
-                from google.genai import types as _g_types
-                _resp = _gemini_client.models.generate_content(
-                    model=model_name,
-                    contents=[_gemini_video_file, _prompt_text],
-                    config=_g_types.GenerateContentConfig(
-                        temperature=0.4,
-                        top_p=0.9,
-                        max_output_tokens=4096,
-                    ),
+                _fps_hint = ("约 1 fps 抽帧" if ai_backend == "qwen" else "全帧率原始视频")
+                _video_desc = (
+                    f"视频为带标注的比赛画面（{_fps_hint}），"
+                    + ("绿色高亮框（TRACKED）标注的是正在被追踪的核心球员。"
+                       if video_source == "full_res_annotated"
+                       else "SAM2 mask 叠加视频，绿框为被追踪球员。")
                 )
-                report_md = (_resp.text or "").strip()
+                _player_section = (
+                    "## 被追踪球员分析\n"
+                    "重点分析视频中绿色框标注的那名球员：跑位、速度爆发、控球、影响力。\n\n"
+                )
+
+            _final_sections = (
+                "## 比赛概览\n简述双方控球对比、关键跑动数据、比赛节奏。\n\n"
+                + _player_section
+                + "## 战术观察\n阵型特征、进攻模式、防守组织，基于画面实际观察。\n\n"
+                + "## 改进建议\n3 条具体可执行的训练/战术建议。\n\n"
+            )
+
+            # ── Helper：调用 LLM 看一段视频，返回 markdown 字符串 ─────────────
+            def _call_llm_on_chunk(chunk_path: Path, chunk_prompt: str) -> str:
+                if ai_backend == "qwen":
+                    # 抽帧 → image_url list（每段最多 60 帧）
+                    _frame_dir = Path(_tf.mkdtemp())
+                    try:
+                        # fps 按 chunk 时长自适应：保证不超 60 帧
+                        _chunk_dur = _probe_video_duration_sec(str(chunk_path))
+                        _fps_extract = min(1.0, 60 / max(_chunk_dur, 1.0))
+                        _sp.run([
+                            "ffmpeg", "-y", "-i", str(chunk_path),
+                            "-vf", f"fps={_fps_extract:.3f},scale=640:-2",
+                            "-q:v", "4", "-frames:v", "60",
+                            str(_frame_dir / "f%04d.jpg"),
+                        ], check=True, capture_output=True)
+                        _frame_files = sorted(_frame_dir.glob("f*.jpg"))[:60]
+                        if not _frame_files:
+                            raise RuntimeError("ffmpeg produced no frames")
+                        _img_parts = []
+                        for _fp in _frame_files:
+                            _b64_frame = _b64.b64encode(_fp.read_bytes()).decode()
+                            _img_parts.append({
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/jpeg;base64,{_b64_frame}"},
+                            })
+                        _user_content = _img_parts + [{"type": "text", "text": chunk_prompt}]
+                        _resp = _qwen_client.chat.completions.create(
+                            model=model_name,
+                            messages=[{"role": "user", "content": _user_content}],
+                            temperature=0.4, top_p=0.9, max_tokens=4096,
+                        )
+                        return (_resp.choices[0].message.content or "").strip()
+                    finally:
+                        _sh.rmtree(_frame_dir, ignore_errors=True)
+                else:  # gemini
+                    _gemini_file = _gemini_client.files.upload(file=str(chunk_path))
+                    try:
+                        _t_wait = _time.perf_counter()
+                        while _gemini_file.state.name == "PROCESSING":
+                            if _time.perf_counter() - _t_wait > 600:
+                                raise RuntimeError("Gemini video processing > 10 min")
+                            _time.sleep(3)
+                            _gemini_file = _gemini_client.files.get(name=_gemini_file.name)
+                        if _gemini_file.state.name == "FAILED":
+                            raise RuntimeError(f"Gemini PROCESSING FAILED")
+                        from google.genai import types as _g_types
+                        _resp = _gemini_client.models.generate_content(
+                            model=model_name,
+                            contents=[_gemini_file, chunk_prompt],
+                            config=_g_types.GenerateContentConfig(
+                                temperature=0.4, top_p=0.9, max_output_tokens=4096,
+                            ),
+                        )
+                        return (_resp.text or "").strip()
+                    finally:
+                        try: _gemini_client.files.delete(name=_gemini_file.name)
+                        except Exception as _e: print(f"[AI_SUMMARY] Gemini cleanup: {_e}")
+
+            # ── Map：每段独立分析 ────────────────────────────────────────────
+            partial_reports: list[str] = []
+            for ci, (chunk_path, c_start, c_end) in enumerate(chunks):
+                _pct = 30 + int(55 * ci / max(n_chunks, 1))
+                sm.update_task(session_id, task_id, progress=_pct,
+                               stage=f"analyzing_chunk_{ci+1}_of_{n_chunks}")
+
+                if n_chunks == 1:
+                    # 单段：直接生成最终报告
+                    _chunk_prompt = (
+                        f"你是一个专业足球战术分析师。{_video_desc}"
+                        "结合视频和下面的统计数据，生成一份**中文 Markdown 报告**，"
+                        "严格按顺序使用以下二级标题：\n\n"
+                        + _final_sections
+                        + "要求：语言简练、数据引用具体、不要泛泛而谈。\n\n"
+                        f"## 统计数据\n```json\n{stats_json}\n```\n\n请生成报告："
+                    )
+                else:
+                    # 多段：每段只生成"片段笔记"，最后聚合
+                    _chunk_prompt = (
+                        f"你是一个专业足球战术分析师。{_video_desc}\n\n"
+                        f"这是 90+ 分钟整场比赛的第 {ci+1}/{n_chunks} 段视频，"
+                        f"对应原视频 {c_start/60:.1f}–{c_end/60:.1f} 分钟。\n\n"
+                        f"请为这一段生成**简洁中文笔记**，只覆盖这段时间内你能观察到的内容：\n"
+                        "- 控球与节奏（这段里）\n"
+                        "- 战术亮点（具体进攻 / 防守 / 转换）\n"
+                        "- 追踪球员表现（如果画面里有绿框）\n"
+                        "- 关键事件（射门、丢失球、定位球、犯规等）\n\n"
+                        "要求：纯粹观察，不做整体总结、不写改进建议。Markdown 简短列表，"
+                        f"不超过 600 字。\n\n## 统计数据（整场参考）\n```json\n{stats_json}\n```"
+                    )
+                _part = _call_llm_on_chunk(chunk_path, _chunk_prompt)
+                if _part:
+                    partial_reports.append(
+                        f"### 片段 {ci+1}/{n_chunks} "
+                        f"({c_start/60:.1f}–{c_end/60:.1f} 分钟)\n\n{_part}"
+                    )
+                print(f"[AI_SUMMARY] chunk {ci+1}/{n_chunks} done: {len(_part)} chars")
+
+            if not partial_reports:
+                raise RuntimeError(f"{ai_backend} returned empty for all chunks")
+
+            # ── Reduce：单段直接用，多段调一次纯文本 LLM 聚合 ────────────────
+            if n_chunks == 1:
+                report_md = partial_reports[0]
+                # 把单段时的标题前缀去掉
+                if report_md.startswith("### 片段"):
+                    report_md = "\n".join(report_md.split("\n")[2:]).strip()
+            else:
+                sm.update_task(session_id, task_id, progress=90,
+                               stage="aggregating_reports")
+                _aggregator_prompt = (
+                    "你收到了多段视频笔记（一场 90 分钟比赛被切成了 N 段，每段独立观察）。"
+                    "请综合所有片段笔记 + 整场统计数据，生成一份最终中文 Markdown 报告，"
+                    "严格按顺序使用以下二级标题：\n\n"
+                    + _final_sections
+                    + "要求：跨片段把同一战术线索串起来，数据引用具体，不复述每段流水账。\n\n"
+                    f"## 整场统计数据\n```json\n{stats_json}\n```\n\n"
+                    "## 各片段笔记\n\n" + "\n\n---\n\n".join(partial_reports)
+                    + "\n\n请生成最终报告："
+                )
+                if ai_backend == "qwen":
+                    _resp = _qwen_client.chat.completions.create(
+                        model=model_name,
+                        messages=[{"role": "user", "content": _aggregator_prompt}],
+                        temperature=0.4, top_p=0.9, max_tokens=4096,
+                    )
+                    report_md = (_resp.choices[0].message.content or "").strip()
+                else:
+                    from google.genai import types as _g_types
+                    _resp = _gemini_client.models.generate_content(
+                        model=model_name,
+                        contents=[_aggregator_prompt],
+                        config=_g_types.GenerateContentConfig(
+                            temperature=0.4, top_p=0.9, max_output_tokens=4096,
+                        ),
+                    )
+                    report_md = (_resp.text or "").strip()
         finally:
-            _stop_sim.set()
-            _sim_thread.join(timeout=2)
-            # 删除 Gemini 临时文件（48h 自动过期，但显式清理省配额）
-            if _gemini_video_file is not None:
-                try:
-                    _gemini_client.files.delete(name=_gemini_video_file.name)
-                except Exception as _del_exc:
-                    print(f"[AI_SUMMARY] Gemini files.delete failed (non-fatal): {_del_exc}")
+            # 清理切出来的临时 chunks
+            try: _sh.rmtree(_chunk_dir, ignore_errors=True)
+            except Exception: pass
 
         if not report_md:
-            raise RuntimeError(f"{ai_backend} returned empty response")
-        print(f"[AI_SUMMARY] {ai_backend} response: {len(report_md)} chars")
+            raise RuntimeError(f"{ai_backend} returned empty final response")
+        print(f"[AI_SUMMARY] {ai_backend} final report: {len(report_md)} chars "
+              f"({n_chunks} chunk(s) processed)")
 
         # ── 7. 落盘 + 完成任务 ──
         sm.update_task(session_id, task_id, progress=95, stage="saving_report")
@@ -3446,7 +3548,9 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
         result_data = {
             "report_markdown": report_md,
             "video_source":    video_source,
+            "backend":         ai_backend,
             "model":           model_name,
+            "n_chunks":        n_chunks,
             "char_count":      len(report_md),
         }
         _finish_task(sm, session_id, task_id, report_path, result=result_data)
