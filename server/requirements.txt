@@ -34,6 +34,10 @@ sports @ git+https://github.com/roboflow/sports.git@main
 
 # ── AI summary (DashScope intl, OpenAI-compatible) ───────────────────────────
 openai==1.58.1
+# Gemini SDK — used by ai_summary for long-video understanding.
+# Qwen3-VL Flash caps at ~10min/80 frames per video; Gemini 2.0 Flash handles
+# 60 min natively (Pro 2h) and can ingest video files via the Files API.
+google-genai==0.7.0
 
 # ── Dev tools ────────────────────────────────────────────────────────────────
 httpx==0.28.1

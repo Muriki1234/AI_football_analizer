@@ -3152,15 +3152,17 @@ def _render_gemini_video(video_path: str, bboxes_dict: dict,
 
 def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionManager):
     """
-    多模态 AI 战术分析：把全分辨率标注视频 + 统计 JSON 送给 Qwen-VL 生成报告。
+    多模态 AI 战术分析：默认走 Gemini 2.0 Flash（直接喂视频，支持 60min+），
+    AI_BACKEND=qwen 切回老的 Qwen3-VL Flash 路径（≤10min 视频，抽帧分析）。
 
     工作流：
       1. 加载 tracks.pkl（统计数据 + 分段 + 颜色）
       2. 拼装统计 JSON（控球率 / 速度 / 分段 / 球员 summary）
       3. 渲染 ai_video.mp4：原始分辨率 + stride=5 ≈ 5fps + 追踪框（CUDA 加速）
          fallback → samurai_temp.mp4（低质但已存在）
-      4. ffmpeg 抽帧（1fps，≤60 帧）→ image_url × N（每帧 ~100KB，无大小限制）
-      5. 调用 Qwen-VL（DashScope 国际版 OpenAI-compat API）生成 markdown 报告
+      4a. [Gemini] 上传完整视频文件 → wait until ACTIVE → 直接 generate_content
+      4b. [Qwen]   ffmpeg 抽帧 (1fps, ≤60 帧) → 多 image_url
+      5. 生成 markdown 报告
       6. 写入 task.result + 落盘 ai_summary.md
     """
     try:
@@ -3169,22 +3171,46 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
                        stage="loading_data")
 
         # ── 1. 依赖检查 & 配置 ──
-        api_key = os.environ.get("DASHSCOPE_API_KEY", "").strip()
-        if not api_key:
-            raise RuntimeError("DASHSCOPE_API_KEY not set in environment")
-        model_name = os.environ.get("DASHSCOPE_MODEL", "qwen3-vl-flash")
-
-        try:
-            from openai import OpenAI as _OpenAI
-        except ImportError as ie:
-            raise RuntimeError(
-                "openai not installed. "
-                "Run: pip install openai>=1.0.0") from ie
-
-        _qwen_client = _OpenAI(
-            api_key=api_key,
-            base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        ai_backend = os.environ.get("AI_BACKEND", "gemini").strip().lower()
+        if ai_backend not in ("gemini", "qwen"):
+            raise RuntimeError(f"Unknown AI_BACKEND={ai_backend!r}; use 'gemini' or 'qwen'")
+        # Qwen 路径用 DashScope，Gemini 路径用 GEMINI_API_KEY
+        api_key = (
+            os.environ.get("GEMINI_API_KEY", "").strip()
+            if ai_backend == "gemini"
+            else os.environ.get("DASHSCOPE_API_KEY", "").strip()
         )
+        if not api_key:
+            env_var = "GEMINI_API_KEY" if ai_backend == "gemini" else "DASHSCOPE_API_KEY"
+            raise RuntimeError(f"{env_var} not set in environment")
+        model_name = os.environ.get(
+            "AI_MODEL",
+            "gemini-2.0-flash" if ai_backend == "gemini" else "qwen3-vl-flash",
+        )
+        print(f"[AI_SUMMARY] backend={ai_backend} model={model_name}")
+
+        # 客户端只在用到时延迟构建，省 cold start
+        _qwen_client = None
+        _gemini_client = None
+        if ai_backend == "qwen":
+            try:
+                from openai import OpenAI as _OpenAI
+            except ImportError as ie:
+                raise RuntimeError(
+                    "openai not installed. Run: pip install openai>=1.0.0"
+                ) from ie
+            _qwen_client = _OpenAI(
+                api_key=api_key,
+                base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+            )
+        else:  # gemini
+            try:
+                from google import genai as _genai
+            except ImportError as ie:
+                raise RuntimeError(
+                    "google-genai not installed. Run: pip install google-genai"
+                ) from ie
+            _gemini_client = _genai.Client(api_key=api_key)
 
         # ── 2. 加载统计数据 ──
         data           = _load_cache(session)
@@ -3252,37 +3278,63 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
                 video_source = "raw_video"
         print(f"[AI_SUMMARY] Video source: {video_source} → {video_for_ai}")
 
-        # ── 5. ffmpeg 抽帧 → 多张 image_url（OpenAI-compat 兼容方式）────────────
-        # video_url base64 有 10MB 单项限制，整段视频超标。
-        # 改为每秒抽 1 帧（最多 60 帧），每张 JPEG ~50-150KB，完全在限制内。
+        # ── 5. 准备视频输入 ─────────────────────────────────────────────────
         import time as _time, base64 as _b64, subprocess as _sp
         import tempfile as _tf, shutil as _sh
-        sm.update_task(session_id, task_id, progress=28, stage="extracting_frames")
+        sm.update_task(session_id, task_id, progress=28, stage="preparing_video")
 
-        _frame_dir = Path(_tf.mkdtemp())
-        try:
-            _sp.run([
-                "ffmpeg", "-y", "-i", video_for_ai,
-                "-vf", "fps=1,scale=640:-2",
-                "-q:v", "4", "-frames:v", "60",
-                str(_frame_dir / "f%04d.jpg"),
-            ], check=True, capture_output=True)
-            _frame_files = sorted(_frame_dir.glob("f*.jpg"))[:60]
-            if not _frame_files:
-                raise RuntimeError("ffmpeg produced no frames from AI video")
-            _img_parts = []
-            for _fp in _frame_files:
-                _b64_frame = _b64.b64encode(_fp.read_bytes()).decode()
-                _img_parts.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{_b64_frame}"},
-                })
-            print(f"[AI_SUMMARY] Extracted {len(_frame_files)} frames for Qwen-VL")
-        finally:
-            _sh.rmtree(_frame_dir, ignore_errors=True)
+        _img_parts = None        # Qwen 路径用
+        _gemini_video_file = None  # Gemini 路径用
 
-        # ── 6. 组 prompt + 调用 Qwen（附进度模拟线程，避免进度条冻结）────────────
-        sm.update_task(session_id, task_id, progress=40, stage="qwen_reasoning")
+        if ai_backend == "qwen":
+            # Qwen-VL：base64 单 message 10MB / 视频 ≤10min，所以走抽帧路径
+            #   每秒 1 帧、最多 60 帧 = 看 60 秒。> 60s 的视频后面全看不到。
+            _frame_dir = Path(_tf.mkdtemp())
+            try:
+                _sp.run([
+                    "ffmpeg", "-y", "-i", video_for_ai,
+                    "-vf", "fps=1,scale=640:-2",
+                    "-q:v", "4", "-frames:v", "60",
+                    str(_frame_dir / "f%04d.jpg"),
+                ], check=True, capture_output=True)
+                _frame_files = sorted(_frame_dir.glob("f*.jpg"))[:60]
+                if not _frame_files:
+                    raise RuntimeError("ffmpeg produced no frames from AI video")
+                _img_parts = []
+                for _fp in _frame_files:
+                    _b64_frame = _b64.b64encode(_fp.read_bytes()).decode()
+                    _img_parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{_b64_frame}"},
+                    })
+                print(f"[AI_SUMMARY] Extracted {len(_frame_files)} frames for Qwen-VL")
+            finally:
+                _sh.rmtree(_frame_dir, ignore_errors=True)
+        else:
+            # Gemini 2.0 Flash：通过 Files API 上传整段视频（最长 60 分钟）。
+            # 上传后等 state=ACTIVE 再调 generate_content。
+            print(f"[AI_SUMMARY] Uploading video to Gemini Files API: {video_for_ai}")
+            _gemini_video_file = _gemini_client.files.upload(file=video_for_ai)
+            # 等待视频处理完成（state 从 PROCESSING → ACTIVE）
+            _t_wait = _time.perf_counter()
+            while _gemini_video_file.state.name == "PROCESSING":
+                # 超时：90 min 视频实测处理大概 1-3 min；给 10 min 上限
+                if _time.perf_counter() - _t_wait > 600:
+                    raise RuntimeError("Gemini video processing exceeded 10 min")
+                sm.update_task(session_id, task_id, progress=32,
+                               stage="gemini_video_processing")
+                _time.sleep(3)
+                _gemini_video_file = _gemini_client.files.get(name=_gemini_video_file.name)
+            if _gemini_video_file.state.name == "FAILED":
+                raise RuntimeError(
+                    f"Gemini failed to process video: {_gemini_video_file.state}"
+                )
+            print(f"[AI_SUMMARY] Gemini video ready: {_gemini_video_file.uri} "
+                  f"({_time.perf_counter() - _t_wait:.0f}s to process)")
+
+        # ── 6. 组 prompt + 调用 LLM（附进度模拟线程，避免进度条冻结）────────────
+        sm.update_task(session_id, task_id, progress=40,
+                       stage="gemini_reasoning" if ai_backend == "gemini" else "qwen_reasoning")
 
         import threading as _threading
         _stop_sim = _threading.Event()
@@ -3311,8 +3363,11 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
                 "不要根据视频画面猜测球员身份。\n\n"
             )
         else:
+            # Qwen 走抽帧路径，1 fps；Gemini 直接吃整段视频（原帧率）
+            _fps_hint = ("约 1 fps 抽帧" if ai_backend == "qwen"
+                         else "全帧率原始视频")
             _video_desc = (
-                "视频为带标注的比赛画面（约 5fps），"
+                f"视频为带标注的比赛画面（{_fps_hint}），"
                 + ("绿色高亮框（TRACKED）标注的是正在被追踪的核心球员。"
                    if video_source == "full_res_annotated"
                    else "SAM2 mask 叠加视频，绿框为被追踪球员。")
@@ -3339,27 +3394,48 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
             f"{system_text}\n\n## 统计数据\n```json\n{stats_json}\n```\n\n请生成报告："
         )
 
-        # 构建消息内容：帧图片列表 + 文字 prompt
-        _user_content = _img_parts + [{"type": "text", "text": _prompt_text}]
-
         result_data = None
         report_path = None
+        report_md = ""
+
         try:
-            _resp = _qwen_client.chat.completions.create(
-                model=model_name,
-                messages=[{"role": "user", "content": _user_content}],
-                temperature=0.4,
-                top_p=0.9,
-                max_tokens=4096,
-            )
+            if ai_backend == "qwen":
+                # Qwen: 多 image_url + 文字 prompt 走 OpenAI 兼容接口
+                _user_content = _img_parts + [{"type": "text", "text": _prompt_text}]
+                _resp = _qwen_client.chat.completions.create(
+                    model=model_name,
+                    messages=[{"role": "user", "content": _user_content}],
+                    temperature=0.4,
+                    top_p=0.9,
+                    max_tokens=4096,
+                )
+                report_md = (_resp.choices[0].message.content or "").strip()
+            else:
+                # Gemini: 视频 File 对象 + 文字 prompt → generate_content
+                from google.genai import types as _g_types
+                _resp = _gemini_client.models.generate_content(
+                    model=model_name,
+                    contents=[_gemini_video_file, _prompt_text],
+                    config=_g_types.GenerateContentConfig(
+                        temperature=0.4,
+                        top_p=0.9,
+                        max_output_tokens=4096,
+                    ),
+                )
+                report_md = (_resp.text or "").strip()
         finally:
             _stop_sim.set()
             _sim_thread.join(timeout=2)
+            # 删除 Gemini 临时文件（48h 自动过期，但显式清理省配额）
+            if _gemini_video_file is not None:
+                try:
+                    _gemini_client.files.delete(name=_gemini_video_file.name)
+                except Exception as _del_exc:
+                    print(f"[AI_SUMMARY] Gemini files.delete failed (non-fatal): {_del_exc}")
 
-        report_md = (_resp.choices[0].message.content or "").strip()
         if not report_md:
-            raise RuntimeError("Qwen returned empty response")
-        print(f"[AI_SUMMARY] Qwen response: {len(report_md)} chars")
+            raise RuntimeError(f"{ai_backend} returned empty response")
+        print(f"[AI_SUMMARY] {ai_backend} response: {len(report_md)} chars")
 
         # ── 7. 落盘 + 完成任务 ──
         sm.update_task(session_id, task_id, progress=95, stage="saving_report")
