@@ -3238,16 +3238,24 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
         if not api_key:
             env_var = "GEMINI_API_KEY" if ai_backend == "gemini" else "DASHSCOPE_API_KEY"
             raise RuntimeError(f"{env_var} not set in environment")
+        # gemini-2.0-flash 在 2026 中已对新账号下架（404 NOT_FOUND）。
+        # 默认改成 2.5-flash —— 同 Flash 档、更新、价格相近、新账号可用。
+        # 想用别的：AI_MODEL=gemini-2.5-pro / gemini-1.5-flash / 等
         model_name = os.environ.get(
             "AI_MODEL",
-            "gemini-2.0-flash" if ai_backend == "gemini" else "qwen3-vl-plus",
+            "gemini-2.5-flash" if ai_backend == "gemini" else "qwen3-vl-plus",
         )
         # 每个 backend 的单视频时长上限（秒）
-        # Qwen3-VL Flash 10min / Plus & Max 40min / Gemini Flash 60min / Pro 2h
+        # Qwen3-VL Flash 10min / Plus & Max 40min / Gemini Flash/Pro 各档不同
         _PER_CHUNK_SEC_DEFAULTS = {
-            "qwen3-vl-flash":  9 * 60,
+            "qwen3-vl-flash":   9 * 60,
             "qwen3-vl-plus":   35 * 60,    # 留 5min 余量
             "qwen3-vl-max":    35 * 60,
+            "gemini-2.5-flash": 55 * 60,   # 默认值，跟 2.0-flash 相当
+            "gemini-2.5-pro":  110 * 60,   # 长上下文 Pro 档
+            "gemini-1.5-flash": 55 * 60,
+            "gemini-1.5-pro":  110 * 60,
+            # 保留向后兼容（如果你的环境还能跑老 model）
             "gemini-2.0-flash": 55 * 60,
             "gemini-2.0-pro":  110 * 60,
         }
