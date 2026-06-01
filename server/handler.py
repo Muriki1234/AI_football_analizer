@@ -77,7 +77,11 @@ def _get_supabase():
 def _get_sm() -> SessionManager:
     global _sm
     if _sm is None:
-        ensure_weights()
+        # CPU pool 不跑任何模型推理（只做 ai_summary + matplotlib 图表），
+        # 不需要 YOLO / keypoint 权重。跳过下载省 cold start + 不需要 HF_TOKEN。
+        # GPU pool (默认) 保持原样 —— 启动时拉权重，下游 Tracker 才能加载。
+        if os.environ.get("WORKER_MODE", "gpu").strip().lower() != "cpu":
+            ensure_weights()
         _sm = SessionManager(output_root=settings.output_root)
     return _sm
 
