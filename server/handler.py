@@ -804,8 +804,12 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
         return {"error": str(exc)}
 
 
+# 打印版本 + worker mode：方便从 RunPod 日志确认部署的是哪个 commit。
+# 每次 git push 都会改这个常量 → 看到老值就知道 image 没 rebuild。
+HANDLER_VERSION = "2026-06-01-needs-video-fix"   # bump this on every relevant push
+
 # Print worker mode on import so RunPod logs make it obvious which pool we're on.
-print(f"[HANDLER] WORKER_MODE={WORKER_MODE} "
+print(f"[HANDLER] WORKER_MODE={WORKER_MODE} version={HANDLER_VERSION} "
       f"({'feature-only (ai_summary + charts)' if WORKER_MODE == 'cpu' else 'all actions'})",
       flush=True)
 

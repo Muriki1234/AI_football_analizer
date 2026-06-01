@@ -3347,6 +3347,44 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
                 video_source = "raw_video"
         print(f"[AI_SUMMARY] Video source: {video_source} → {video_for_ai}")
 
+        # 兜底：CPU pool 上 handler 可能没拉视频。如果文件不存在，自己下一次。
+        # 出错也好 fallback 也好都不该把 AI summary 整个崩在这。
+        if not video_for_ai or not Path(video_for_ai).exists():
+            print(f"[AI_SUMMARY] Local video missing ({video_for_ai}); attempting fallback download from session.video_url")
+            _vurl = session.get("video_url") or ""
+            if _vurl:
+                from supabase import create_client as _create_client
+                _supa_url = os.environ.get("SUPABASE_URL", "")
+                _supa_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
+                if _supa_url and _supa_key:
+                    try:
+                        # 从 Supabase URL 抠 storage key, 用 service-role 下载
+                        from urllib.parse import urlparse as _urlparse
+                        _path = _urlparse(_vurl).path
+                        _marker = "/storage/v1/object/"
+                        _idx = _path.find(_marker)
+                        if _idx != -1:
+                            _tail = _path[_idx + len(_marker):]
+                            _parts = _tail.split("/", 2)
+                            if len(_parts) >= 3:
+                                _bucket, _key = _parts[1], _parts[2]
+                                _client = _create_client(_supa_url, _supa_key)
+                                _bytes = _client.storage.from_(_bucket).download(_key)
+                                _dest = Path(video_for_ai or
+                                              (output_dir / "video.mp4"))
+                                _dest.parent.mkdir(parents=True, exist_ok=True)
+                                _dest.write_bytes(_bytes)
+                                video_for_ai = str(_dest)
+                                print(f"[AI_SUMMARY] Fallback download OK: "
+                                      f"{len(_bytes)/(1024*1024):.1f} MB -> {_dest}")
+                    except Exception as _de:
+                        print(f"[AI_SUMMARY] Fallback download failed: {_de!r}")
+            if not video_for_ai or not Path(video_for_ai).exists():
+                raise RuntimeError(
+                    f"AI summary needs the video file on disk but "
+                    f"{video_for_ai!r} doesn't exist (session.video_url={_vurl[:60]!r})"
+                )
+
         # ── 5. Map-reduce：按模型上限切视频 → 每段独立调 LLM → 聚合 ────────────
         import time as _time, base64 as _b64, subprocess as _sp
         import tempfile as _tf, shutil as _sh
