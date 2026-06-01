@@ -90,12 +90,25 @@ def _supabase_storage_key_from_url(url: str) -> str | None:
     Signed URL shape:  https://<proj>.supabase.co/storage/v1/object/sign/<bucket>/<key>?token=...
     Returns the <key> portion (everything after <bucket>/), or None if the URL
     doesn't look like Supabase Storage.
+
+    安全：必须先校验 host 是不是我们配置的 SUPABASE_URL —— 否则攻击者构造
+    https://attacker.example.com/storage/v1/object/public/videos/victim/x.mp4
+    时仅看 path 就会被当成 Supabase URL，让我们用 service_role 去下别人 bucket 里的对象。
+    深度防御层（_download_video_once 里也校验过一次 host）。
     """
     try:
-        path = urlparse(url).path
+        parsed = urlparse(url)
+        path = parsed.path
         marker = "/storage/v1/object/"
         idx = path.find(marker)
         if idx == -1:
+            return None
+        # Host 必须匹配 SUPABASE_URL 的 host。任一侧异常都拒绝。
+        try:
+            expected_host = urlparse(os.environ["SUPABASE_URL"]).hostname
+        except Exception:
+            return None
+        if not expected_host or parsed.hostname != expected_host:
             return None
         # path tail: public/<bucket>/<key...>  or  sign/<bucket>/<key...>
         tail = path[idx + len(marker):]
@@ -199,13 +212,50 @@ def _is_allowed_video_url(url: str) -> bool:
     return any(host == s.lstrip(".") or host.endswith(s) for s in ALLOW)
 
 
-def _stream_download(url: str, dest: Path, headers: dict | None = None) -> None:
-    """流式 GET → 写盘。先校验 Content-Length，再分块读，超大就立刻断开 + 删文件。"""
+def _head_probe_size(url: str, headers: dict | None = None) -> int | None:
+    """
+    HEAD 预探 Content-Length。命中就能在握手阶段就拒掉超大文件，比开 GET 再
+    看 response header 更早断开 —— 部分对象存储（含 Supabase）会真返回 size。
+    返回 None 表示拿不到 / HEAD 不支持，调用方应回退到 GET 流式 + post-check。
+    """
     import urllib.request
+    try:
+        req = urllib.request.Request(url, headers=headers or {}, method="HEAD")
+        req.add_header("User-Agent", "pitchlogic/1.0")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            cl_str = resp.headers.get("Content-Length") or ""
+            if not cl_str:
+                return None
+            try:
+                return int(cl_str)
+            except ValueError:
+                return None
+    except Exception:
+        return None
+
+
+def _stream_download(url: str, dest: Path, headers: dict | None = None) -> None:
+    """流式 GET → 写盘。HEAD 预探 + GET Content-Length + 边读边校验，三层防护。
+
+    P1.2 修复：之前若服务器不返回 Content-Length，唯一防线是边读边校验大小；
+    Supabase SDK `.download()` 是把整个对象一次性读进内存，10GB 恶意文件可以
+    在我们 cap 还没生效之前就把 worker OOM。这里改成自己用 urllib 流式下载，
+    并先 HEAD 预探（Supabase Storage 真的会返回 Content-Length），命中就在
+    握手阶段就拒掉。
+    """
+    import urllib.request
+    # 第 1 层：HEAD 预探。失败 / 不支持就 fall through，不阻塞下载。
+    head_size = _head_probe_size(url, headers=headers)
+    if head_size is not None and head_size > _MAX_DOWNLOAD_BYTES:
+        raise RuntimeError(
+            f"refused: HEAD Content-Length {head_size // (1024**2)} MB > "
+            f"{_MAX_DOWNLOAD_BYTES // (1024**2)} MB cap"
+        )
+
     req = urllib.request.Request(url, headers=headers or {})
     req.add_header("User-Agent", "pitchlogic/1.0")
     with urllib.request.urlopen(req, timeout=300) as resp:
-        # 先看 Content-Length；服务器报多大就先拦
+        # 第 2 层：GET response header 的 Content-Length（HEAD 不支持时的兜底）
         cl_str = resp.headers.get("Content-Length") or "0"
         try:
             content_length = int(cl_str)
@@ -216,6 +266,7 @@ def _stream_download(url: str, dest: Path, headers: dict | None = None) -> None:
                 f"refused: Content-Length {content_length // (1024**2)} MB > "
                 f"{_MAX_DOWNLOAD_BYTES // (1024**2)} MB cap"
             )
+        # 第 3 层：边读边累加 —— 服务器撒谎 / chunked 无 Content-Length 时唯一防线
         bytes_read = 0
         with dest.open("wb") as out:
             while True:
@@ -225,12 +276,20 @@ def _stream_download(url: str, dest: Path, headers: dict | None = None) -> None:
                 bytes_read += len(chunk)
                 if bytes_read > _MAX_DOWNLOAD_BYTES:
                     out.close()
-                    try: dest.unlink()
-                    except Exception: pass
+                    try:
+                        dest.unlink()
+                    except Exception:
+                        pass
                     raise RuntimeError(
                         f"refused: stream exceeded {_MAX_DOWNLOAD_BYTES // (1024**2)} MB cap"
                     )
                 out.write(chunk)
+        if head_size is None and content_length == 0:
+            # 服务器既无 HEAD 也无 Content-Length —— 记一笔便于后续排查
+            log.warning(
+                "Video download had no Content-Length (HEAD probe also failed); "
+                "relied solely on streaming cap. URL=%s…", url[:80],
+            )
 
 
 def _supabase_host() -> str | None:
@@ -302,7 +361,19 @@ def _ensure_local_video(session_id: str, video_url: str, sm: SessionManager) -> 
 
 
 def _run_auto_full_replay(session_id: str, sm: SessionManager) -> None:
-    """Generate the showcase replay once analysis finishes, unless it exists."""
+    """Generate the showcase replay once analysis finishes, unless it exists.
+
+    P2.3 修复：之前是在当前 Serverless job 内 inline 跑 run_full_replay()，5-15min
+    的 GPU 渲染会把当前 job wall-clock 顶爆，导致 Vercel proxy 拿到 502。改成
+    递归 enqueue 一个新的 RunPod Serverless job：当前 job 立刻返回 analysis 结果，
+    渲染任务在新 worker 上独立跑。前端用 SSE / 轮询 task 状态即可。
+
+    安全：递归调用用的是 RunPod 自己的 API，不会触发外部 SSRF；endpoint URL 和
+    API key 都是 worker 自己环境变量里的，攻击者控制不到。
+
+    本地 dev 环境（没配 RUNPOD_ENDPOINT_URL / RUNPOD_API_KEY）会 fall back
+    到 inline 执行，保留之前的行为。
+    """
     existing = [
         t for t in sm.list_tasks(session_id)
         if t.get("task_type") == "full_replay"
@@ -316,7 +387,61 @@ def _run_auto_full_replay(session_id: str, sm: SessionManager) -> None:
         return
 
     task_id = sm.create_task(session_id, "full_replay")
-    log.info("[auto-full-replay] queued %s for session %s", task_id, session_id)
+
+    # 优先：异步 enqueue 新 RunPod job。失败 / 本地 dev → fall back 到 inline。
+    runpod_endpoint = os.environ.get("RUNPOD_ENDPOINT_URL", "").strip()
+    runpod_api_key = os.environ.get("RUNPOD_API_KEY", "").strip()
+    if runpod_endpoint and runpod_api_key:
+        try:
+            import json as _json
+            import urllib.request as _urlreq
+            # RunPod Serverless 的 /run endpoint 接受 {"input": {...}}，异步排队。
+            run_url = runpod_endpoint.rstrip("/")
+            if not run_url.endswith("/run"):
+                run_url = run_url + "/run"
+            body = _json.dumps({
+                "input": {
+                    "action": "feature",
+                    "feature": "full_replay",
+                    "session_id": session_id,
+                },
+            }).encode("utf-8")
+            req = _urlreq.Request(
+                run_url,
+                data=body,
+                method="POST",
+                headers={
+                    "Authorization": f"Bearer {runpod_api_key}",
+                    "Content-Type": "application/json",
+                },
+            )
+            with _urlreq.urlopen(req, timeout=30) as resp:
+                status_code = resp.status
+                if 200 <= status_code < 300:
+                    log.info(
+                        "[auto-full-replay] enqueued NEW RunPod job for session %s "
+                        "(task %s) — current job returning early",
+                        session_id, task_id,
+                    )
+                    return
+                body_text = resp.read(512).decode("utf-8", errors="replace")
+                log.warning(
+                    "[auto-full-replay] RunPod enqueue returned %s: %s — falling back to inline",
+                    status_code, body_text,
+                )
+        except Exception as exc:
+            log.warning(
+                "[auto-full-replay] RunPod enqueue failed (%s) — falling back to inline",
+                exc,
+            )
+    else:
+        log.warning(
+            "[auto-full-replay] RUNPOD_ENDPOINT_URL / RUNPOD_API_KEY not set; "
+            "running full_replay inline (may exceed Serverless wall-clock cap)"
+        )
+
+    # Fallback: inline 执行（原行为）。仅在本地 dev / env 缺失时进。
+    log.info("[auto-full-replay] inline run %s for session %s", task_id, session_id)
     pipeline_tasks.run_full_replay(session_id, session, task_id, sm)
 
 
@@ -534,9 +659,21 @@ def _action_track(session_id: str, s: dict, payload: dict, sm: SessionManager) -
     # Daemon thread 超时后仍可能 is_alive=True：上一版直接 return ok，等于
     # 静默丢任务，DB 里 status=analysis_done 但 SAMURAI 还在背后跑 / 没结果。
     # 现在显式检查、写入失败状态、return error。
+    #
+    # ⚠️ P2.4 已知缺陷（暂未修）：abandon 的 daemon thread 里 SAMURAI 是用
+    # ProcessPoolExecutor 起的子进程跑的 —— Python interpreter 退出时这些
+    # 子进程不一定能被回收，可能继续在 GPU 上跑直到 RunPod 杀掉整个容器。
+    # 真正的修法是让 run_samurai_tracking_multi 周期性检查
+    # session["_samurai_kill_event"] 并主动 shutdown executor，跨层改动较大，
+    # 单次 audit 不展开。下一轮 reliability pass 处理。短期靠 RunPod 的
+    # job idle timeout 兜底（worker 退出时 SIGKILL 全部子进程）。
     if samurai_thread.is_alive():
         err = f"SAMURAI exceeded {join_timeout/60:.1f} min — abandoning thread"
         log.error(err)
+        log.error(
+            "[samurai-leak] daemon thread still alive — subprocess workers may "
+            "continue eating GPU until container shutdown. See P2.4 comment."
+        )
         try:
             sm.update_status(session_id, "tracking_failed", error=err)
         except Exception:
