@@ -3476,8 +3476,15 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
                     _t_upload = _time.perf_counter()
                     _chunk_mb = chunk_path.stat().st_size / (1024 * 1024)
                     print(f"[AI_SUMMARY] uploading {_chunk_mb:.1f} MB to Gemini Files API…")
+                    # google-genai SDK 0.x 用 path=, 1.x+ 用 file=。我们 pin 的是 0.7.0
+                    # (requirements.cpu.txt + requirements.txt) 用 path=。两种都试一遍，
+                    # 升 SDK 后也能继续跑。
                     try:
-                        _gemini_file = _gemini_client.files.upload(file=str(chunk_path))
+                        try:
+                            _gemini_file = _gemini_client.files.upload(path=str(chunk_path))
+                        except TypeError:
+                            # 新 SDK：file= 参数
+                            _gemini_file = _gemini_client.files.upload(file=str(chunk_path))
                     except Exception as _ue:
                         # 上传一挂就立刻报，别让用户卡10分钟
                         raise RuntimeError(
