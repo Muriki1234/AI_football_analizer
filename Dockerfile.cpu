@@ -1,0 +1,60 @@
+# CPU-only image for the lightweight RunPod Serverless endpoint.
+#
+# What it runs:
+#   - ai_summary       (ffmpeg + Gemini Files API; no local model inference)
+#   - heatmap          (matplotlib + pandas only)
+#   - speed_chart      (matplotlib)
+#   - possession       (matplotlib)
+#   - sprint_analysis  (matplotlib)
+#   - defensive_line   (matplotlib)
+#
+# What it does NOT run (those stay on the GPU endpoint via Dockerfile.serverless):
+#   - detect_frame, track, analyze   (need YOLO + SAM2 on a GPU)
+#   - full_replay, minimap_replay    (need ffmpeg NVENC for fast encoding)
+#
+# Why: AI summary takes 1-3 min during which the GPU sits idle. A GPU worker
+# at $0.50/hr × 3 min = $0.025 of pure waste per call. On a CPU worker
+# (~$0.05/hr) the same job costs $0.0025 — 10x cheaper. The matplotlib chart
+# tasks have the same shape.
+#
+# Image size: ~600MB vs ~5GB for the GPU image. Cold start 2s vs 10s.
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# System deps:
+#  - ffmpeg: ai_summary uses ffmpeg -c copy to split videos before sending
+#    to Gemini Files API. Slim image doesn't ship it.
+#  - libgl1, libglib2.0-0: opencv-python-headless still pulls in libGL even
+#    though headless wheel claims to be self-contained.
+#  - build-essential + gcc: a few pip wheels (pandas, scipy) trigger source
+#    builds on slim if the wheel arch doesn't match. ~150MB but reliable.
+#  - git: pip install of `sports` package from git.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    libgl1 \
+    libglib2.0-0 \
+    git \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Verify ffmpeg has libx264 (debian ffmpeg should). The CPU endpoint doesn't
+# encode but ai_summary chunking uses -c copy so it's fine either way.
+RUN ffmpeg -version | head -1
+
+# Lighter requirements — same minor versions as requirements.txt for the deps
+# we keep, but no torch / ultralytics / sam2.
+COPY server/requirements.cpu.txt /app/server/requirements.cpu.txt
+RUN pip install --no-cache-dir -r server/requirements.cpu.txt
+
+# Server code only (no samurai/ — saves another ~200MB of vendored package).
+COPY server /app/server
+
+ENV PYTHONPATH=/app
+# Marks this worker as the CPU pool. handler.py dispatch rejects GPU-only
+# actions when WORKER_MODE=cpu so a misrouted request fails fast and clear
+# instead of crashing on an import the way it would silently otherwise.
+ENV WORKER_MODE=cpu
+
+CMD ["python", "-m", "server.handler"]

@@ -714,6 +714,29 @@ ACTIONS = {
     "feature":      _action_feature,
 }
 
+# ── Worker-pool dispatch ────────────────────────────────────────────────────
+# Two RunPod Serverless endpoints share this handler:
+#   - GPU endpoint (WORKER_MODE=gpu, the default): runs every action.
+#   - CPU endpoint (WORKER_MODE=cpu, Dockerfile.cpu image): runs only the
+#     no-GPU feature tasks listed below. Cheaper worker hours + faster cold
+#     start. Reject GPU actions fast and clear so misrouted requests don't
+#     silently crash on a missing torch import.
+WORKER_MODE = os.environ.get("WORKER_MODE", "gpu").strip().lower()
+
+# Features that don't need GPU compute. They can run on the CPU endpoint.
+# Keep this in sync with the routing table in frontend/api/analyze.js.
+_CPU_FEATURES = frozenset({
+    "ai_summary",
+    "heatmap",
+    "speed_chart",
+    "possession",
+    "sprint_analysis",
+    "defensive_line",
+})
+
+# Actions a CPU worker is allowed to run at all (everything else short-circuits).
+_CPU_ACTIONS = frozenset({"feature"})
+
 
 def handler(event: dict[str, Any]) -> dict[str, Any]:
     """Entry point called by the RunPod Serverless runtime."""
@@ -727,6 +750,25 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
     if not fn:
         return {"error": f"unknown action {action!r}"}
 
+    # CPU pool guard: drop anything we can't serve here so the caller knows
+    # to retry on the GPU pool (Vercel proxy decides routing, but a misroute
+    # shouldn't bring down the worker on an ImportError).
+    if WORKER_MODE == "cpu":
+        if action not in _CPU_ACTIONS:
+            return {
+                "error": f"action {action!r} not supported on CPU worker; "
+                         f"use the GPU endpoint",
+                "worker_mode": "cpu",
+            }
+        if action == "feature":
+            feat = payload.get("feature", "")
+            if feat not in _CPU_FEATURES:
+                return {
+                    "error": f"feature {feat!r} not supported on CPU worker; "
+                             f"use the GPU endpoint",
+                    "worker_mode": "cpu",
+                }
+
     video_url = payload.get("video_url", "")
     sm = _get_sm()
 
@@ -739,13 +781,25 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
             else:
                 return {"error": f"no session {session_id!r} and no video_url"}
 
-        _ensure_local_video(session_id, video_url or s.get("video_url", ""), sm)
-        s = sm.get_session(session_id)
+        # CPU feature tasks read from R2 tracks.pkl + may download the
+        # annotated video themselves (ai_summary calls _ensure_local_video
+        # via the existing flow). The detect_frame / track / analyze actions
+        # do need the raw video on disk first, so keep the pre-fetch for the
+        # GPU pool. CPU pool defers and lets the feature task decide.
+        if WORKER_MODE != "cpu":
+            _ensure_local_video(session_id, video_url or s.get("video_url", ""), sm)
+            s = sm.get_session(session_id)
 
         return fn(session_id, s, payload, sm)
     except Exception as exc:
         log.exception("handler failed")
         return {"error": str(exc)}
+
+
+# Print worker mode on import so RunPod logs make it obvious which pool we're on.
+print(f"[HANDLER] WORKER_MODE={WORKER_MODE} "
+      f"({'feature-only (ai_summary + charts)' if WORKER_MODE == 'cpu' else 'all actions'})",
+      flush=True)
 
 
 # RunPod Serverless boilerplate (only imports when actually running serverless).

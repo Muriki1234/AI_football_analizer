@@ -1,0 +1,46 @@
+# CPU endpoint dependencies — see Dockerfile.cpu for context.
+#
+# Differences from requirements.txt:
+#   - REMOVED: ultralytics (depends on torch)
+#   - REMOVED: torch is not installed at all (the GPU image installs a CUDA wheel
+#     via the pytorch base image; here we'd need the CPU wheel which is ~200MB
+#     and we don't use it anyway since CPU endpoint never instantiates Tracker /
+#     KeypointDetector classes).
+#   - REMOVED: huggingface_hub (no weights download needed for CPU tasks)
+#   - REMOVED: apscheduler (cleanup is handled by Supabase cron)
+#   - KEPT everything else at the same pinned versions to avoid drift.
+
+# ── Web framework (some modules import these at top-level even though we don't serve REST here)
+fastapi==0.115.6
+pydantic==2.10.4
+pydantic-settings==2.7.1
+
+# ── Storage / scheduling
+boto3==1.35.81
+runpod==1.7.4
+supabase>=2.0.0
+
+# ── CV reading (analysis_core imports cv2 unconditionally)
+opencv-python-headless==4.10.0.84
+
+# ── Data + plotting (the matplotlib chart tasks need all of these)
+scikit-learn==1.6.0
+scipy==1.14.1
+pandas==2.2.3
+numpy==1.26.4
+Pillow==11.0.0
+matplotlib==3.10.0
+seaborn==0.13.2
+
+# ── Pitch annotators used by minimap rendering helpers in analysis_core.
+# Imports are try/except-wrapped, so leaving it out would set HAS_SPORTS=False.
+# We DO want pitch rendering for heatmap/possession charts, so include it.
+sports @ git+https://github.com/roboflow/sports.git@main
+supervision==0.25.1
+
+# ── AI summary clients
+openai==1.58.1
+google-genai==0.7.0
+
+# ── HTTP
+httpx==0.28.1

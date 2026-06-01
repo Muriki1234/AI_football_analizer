@@ -35,9 +35,34 @@ export default async function handler(req, res) {
     video_url: session.video_url,
   };
 
-  // 4) Forward to RunPod
-  const runpodUrl = process.env.RUNPOD_ENDPOINT_URL;
+  // 4) Forward to RunPod —— 路由到 GPU 或 CPU pool。
+  //
+  // CPU pool 处理 ai_summary + 几个 matplotlib 图表 (heatmap / charts)。这些
+  // 任务在 GPU worker 上跑会让 GPU 闲置 1-3 min，烧钱。CPU worker $0.05/hr
+  // vs GPU $0.50/hr = 省 90%。
+  //
+  // 如果 RUNPOD_CPU_ENDPOINT_URL 没设，全部 fallback 到 GPU endpoint（保持
+  // 向后兼容；只有一个 endpoint 的部署不受影响）。
+  // 这个集合必须跟 server/handler.py 里的 _CPU_FEATURES 保持一致。
+  const CPU_FEATURES = new Set([
+    'ai_summary',
+    'heatmap',
+    'speed_chart',
+    'possession',
+    'sprint_analysis',
+    'defensive_line',
+  ]);
+
+  const isCpuTask =
+    serverInput.action === 'feature' &&
+    CPU_FEATURES.has(serverInput.feature);
+
+  const gpuUrl  = process.env.RUNPOD_ENDPOINT_URL;
+  const cpuUrl  = process.env.RUNPOD_CPU_ENDPOINT_URL;
   const runpodKey = process.env.RUNPOD_API_KEY;
+
+  const runpodUrl = isCpuTask && cpuUrl ? cpuUrl : gpuUrl;
+
   if (!runpodUrl || !runpodKey) {
     return res.status(500).json({ error: 'RunPod configuration is missing on the server.' });
   }
