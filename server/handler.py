@@ -785,12 +785,16 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
             else:
                 return {"error": f"no session {session_id!r} and no video_url"}
 
-        # CPU feature tasks read from R2 tracks.pkl + may download the
-        # annotated video themselves (ai_summary calls _ensure_local_video
-        # via the existing flow). The detect_frame / track / analyze actions
-        # do need the raw video on disk first, so keep the pre-fetch for the
-        # GPU pool. CPU pool defers and lets the feature task decide.
-        if WORKER_MODE != "cpu":
+        # 大部分任务都需要本地视频文件：
+        #   - GPU: detect_frame / track / analyze 直接读帧
+        #   - CPU: ai_summary 用 ffmpeg 切片再上传 Gemini
+        # 只有少数 CPU feature 任务（heatmap/charts 等）只读 tracks.pkl
+        # 不碰视频。简单起见：除了那些纯 stats 的 feature 之外，全部走下载。
+        _STATS_ONLY_FEATURES = {"heatmap", "speed_chart", "possession",
+                                "sprint_analysis", "defensive_line"}
+        _feat = (payload.get("feature") or "").strip()
+        _needs_video = not (action == "feature" and _feat in _STATS_ONLY_FEATURES)
+        if _needs_video:
             _ensure_local_video(session_id, video_url or s.get("video_url", ""), sm)
             s = sm.get_session(session_id)
 
