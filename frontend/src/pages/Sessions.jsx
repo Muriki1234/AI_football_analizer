@@ -54,21 +54,38 @@ export default function Sessions() {
 
     const filtered = useMemo(() => {
         const q = search.trim().toLowerCase();
-        return sessions.filter((s) => {
-            if (statusFilter !== 'all' && s.status !== statusFilter) {
-                // group "failed" together
-                if (statusFilter === 'failed' &&
-                    !['analysis_failed', 'tracking_failed'].includes(s.status)) {
-                    return false;
-                }
-                if (statusFilter !== 'failed' && s.status !== statusFilter) return false;
+        const IN_PROGRESS = new Set([
+            'uploading', 'queued', 'uploaded',
+            'tracking', 'tracking_done', 'samurai_multi_pending', 'samurai_done',
+            'analyzing',
+        ]);
+
+        const matchesStatus = (status) => {
+            switch (statusFilter) {
+                case 'all':
+                    return true;
+                case 'analysis_done':
+                case 'done':
+                    return status === 'analysis_done';
+                case 'analyzing':
+                case 'in_progress':
+                    return IN_PROGRESS.has(status);
+                case 'failed':
+                    return typeof status === 'string' && status.endsWith('_failed');
+                default:
+                    return status === statusFilter;
             }
+        };
+
+        const matchesSearch = (s) => {
             if (!q) return true;
             return (
                 (s.fileName || '').toLowerCase().includes(q) ||
                 s.id.toLowerCase().includes(q)
             );
-        });
+        };
+
+        return sessions.filter((s) => matchesStatus(s.status) && matchesSearch(s));
     }, [sessions, search, statusFilter]);
 
     const open = (id) => navigate(`/dashboard?sessionId=${encodeURIComponent(id)}`, {

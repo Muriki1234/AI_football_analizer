@@ -1,9 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import toast from 'react-hot-toast';
 import { IoFootball } from 'react-icons/io5';
-import { HiArrowRight, HiUserGroup, HiArrowRightOnRectangle, HiClock, HiXMark } from 'react-icons/hi2';
+import { HiArrowRight, HiArrowRightOnRectangle, HiClock, HiXMark } from 'react-icons/hi2';
 import { getRecentSessions, removeRecentSession } from '../lib/recentSessions';
 import { getSession } from '../services/api';
 import './Welcome.css';
@@ -38,7 +37,6 @@ function sessionStage(s) {
 
 export default function Welcome() {
     const navigate = useNavigate();
-    const showInDevelopment = () => toast('Feature in development');
 
     const [recents, setRecents] = useState(() => getRecentSessions());
     // Live status fetched once per recent session (keyed by id)
@@ -47,14 +45,27 @@ export default function Welcome() {
 
     // Fetch live session data for each recent item on mount so we can show
     // up-to-date status badges without the user having to click anything.
+    // Uses Promise.allSettled so one failure doesn't drop the rest, and an
+    // AbortController-style flag to skip setState after unmount.
     useEffect(() => {
-        if (recents.length === 0) return;
-        recents.forEach(({ id }) => {
-            getSession(id)
-                .then((s) => setSessionMeta((prev) => ({ ...prev, [id]: s })))
-                .catch(() => {});  // stale / deleted — badge stays hidden
+        if (recents.length === 0) return undefined;
+        let cancelled = false;
+        const ids = recents.map((r) => r.id);
+
+        Promise.allSettled(ids.map((id) => getSession(id))).then((results) => {
+            if (cancelled) return;
+            setSessionMeta((prev) => {
+                const next = { ...prev };
+                results.forEach((res, i) => {
+                    if (res.status === 'fulfilled') next[ids[i]] = res.value;
+                    // rejected → stale / deleted; leave badge hidden
+                });
+                return next;
+            });
         });
-    }, [recents.length]);  // re-fetch only when list length changes
+
+        return () => { cancelled = true; };
+    }, [recents]);
 
     const handleOpenRecent = async (sessionId) => {
         setOpeningId(sessionId);
@@ -114,10 +125,7 @@ export default function Welcome() {
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.3 }}
             >
-                <button className="btn btn-ghost" onClick={showInDevelopment}>
-                    <HiUserGroup /> Player Library
-                </button>
-                <button className="btn btn-ghost" onClick={showInDevelopment}>
+                <button className="btn btn-ghost" onClick={() => navigate('/login')}>
                     <HiArrowRightOnRectangle /> Login
                 </button>
             </motion.div>
