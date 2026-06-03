@@ -3286,6 +3286,68 @@ def _split_video_by_duration(video_path: str, chunk_sec: int,
     return chunks
 
 
+def _split_video_by_periods(video_path: str, periods_sec: list[tuple[float, float]],
+                              max_chunk_sec: int,
+                              out_dir: Path) -> list[tuple[Path, float, float]]:
+    """
+    按用户的 period 切片，而不是按固定时长。每个 period 出一个 chunk；
+    若某个 period > max_chunk_sec，再按 max_chunk_sec 拆。
+    输入 periods_sec 是 OUTPUT 视频空间的时间区间（gemini_video.mp4 已经
+    跳掉了非 match 帧，所以 caller 传的是累加后的输出时间段）。
+    返回 [(chunk_path, start_sec, end_sec), ...]
+    """
+    import subprocess as _sp
+    chunks: list[tuple[Path, float, float]] = []
+    idx = 0
+    for p_idx, (ps, pe) in enumerate(periods_sec):
+        cur = ps
+        while cur < pe - 0.5:
+            seg_end = min(cur + max_chunk_sec, pe)
+            chunk_path = out_dir / f"ai_chunk_p{p_idx:02d}_{idx:02d}.mp4"
+            cmd = [
+                "ffmpeg", "-y", "-ss", f"{cur:.3f}", "-i", video_path,
+                "-t", f"{seg_end - cur:.3f}",
+                "-c", "copy", "-avoid_negative_ts", "1",
+                "-loglevel", "error",
+                str(chunk_path),
+            ]
+            r = _sp.run(cmd, capture_output=True, text=True, timeout=300)
+            if (r.returncode != 0 or not chunk_path.exists()
+                    or chunk_path.stat().st_size < 1024):
+                print(f"[AI_SUMMARY] period chunk split failed "
+                      f"({cur}-{seg_end}s): {r.stderr[:200]}")
+                break
+            chunks.append((chunk_path, cur, seg_end))
+            cur = seg_end
+            idx += 1
+    if not chunks:
+        # 兜底：当成单段
+        total = _probe_video_duration_sec(video_path)
+        return [(Path(video_path), 0.0, total)]
+    return chunks
+
+
+# 启动时探测一次 CUDA hwaccel 解码可用性，CPU pool 上自动避开。
+# 每次跑 _render_gemini_video 都试一次 CUDA 再 fallback 浪费 ~5 秒解码 +
+# stderr 噪声，启动时探一次能干净跳过。
+def _probe_cuda_decode() -> bool:
+    try:
+        r = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-hwaccels"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5,
+        )
+        return b"cuda" in (r.stdout or b"")
+    except Exception:
+        return False
+
+
+_CUDA_DECODE_AVAILABLE = _probe_cuda_decode() and (
+    os.environ.get("WORKER_MODE", "gpu").strip().lower() != "cpu"
+)
+print(f"[DECODE] CUDA hwaccel available: {_CUDA_DECODE_AVAILABLE} "
+      f"(WORKER_MODE={os.environ.get('WORKER_MODE', 'gpu')})", flush=True)
+
+
 def _render_gemini_video(video_path: str, bboxes_dict: dict,
                           output_path: Path, stride: int = 5,
                           match_periods: list[tuple[int, int]] | None = None,
@@ -3355,8 +3417,10 @@ def _render_gemini_video(video_path: str, bboxes_dict: dict,
         frames_written = 0
 
         # CUDA/CPU 重试必须把 encoder 也重建——否则 CUDA 半途失败时，
-        # 已写入 encoder stdin 的 N 帧会和 CPU 重试的帧 0..M 拼成错位视频
-        for use_cuda in (True, False):
+        # 已写入 encoder stdin 的 N 帧会和 CPU 重试的帧 0..M 拼成错位视频。
+        # 启动时已经探过 hwaccel，CPU pool 直接跳过 CUDA 尝试。
+        _try_modes = (True, False) if _CUDA_DECODE_AVAILABLE else (False,)
+        for use_cuda in _try_modes:
             if output_path.exists():
                 try: output_path.unlink()
                 except Exception: pass
@@ -3688,13 +3752,57 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
         import tempfile as _tf, shutil as _sh
         sm.update_task(session_id, task_id, progress=28, stage="splitting_video")
 
-        # 切片：视频时长 ≤ per_chunk_sec 时不切，返回单段 = 原视频
+        # 切片策略（按优先级）：
+        #   1. user 在 Trim 页选过 match_periods → 按 period 切，每段独立 → AI
+        #      看到的每个 chunk 都对齐 "上半场" / "下半场" 概念
+        #   2. user 没设但 SceneChangeDetector 自动识别出 segments（first_half /
+        #      halftime / second_half 等）→ 用 match 类型的 segments 当 period
+        #   3. 都没有 → 退回按时长 per_chunk_sec 切
+        # period 太长（> per_chunk_sec）的会在 _split_video_by_periods 内部继续拆。
         _chunk_dir = output_dir / "ai_chunks"
         _chunk_dir.mkdir(parents=True, exist_ok=True)
         try:
-            chunks = _split_video_by_duration(video_for_ai, per_chunk_sec, _chunk_dir)
-            n_chunks = len(chunks)
             total_dur_sec = _probe_video_duration_sec(video_for_ai)
+
+            # ── 找出可用的 period 时间表 (output 视频时间轴) ──
+            # gemini_video.mp4 已经把非 match 帧跳掉了 —— 输出视频里时间是
+            # 累加的，第 N 个 period 的输出区间 = [前 N-1 个 period 时长之和,
+            # + 第 N 个 period 时长]
+            _periods_for_chunk: list[tuple[float, float]] = []
+            _src_periods_raw = session.get("match_periods_frames")
+            if _src_periods_raw:
+                _src_kind = "user"
+                _src = [(int(p[0]), int(p[1])) for p in _src_periods_raw]
+            else:
+                # 兜底：auto-detected segments 里的 match-like 类型
+                _src_kind = "auto"
+                _MATCH_TYPES = {"first_half", "second_half", "match"}
+                _src = [(int(s["start_frame"]), int(s["end_frame"]))
+                        for s in (segments or [])
+                        if s.get("type") in _MATCH_TYPES]
+
+            if _src and video_source == "full_res_annotated":
+                # gemini_video 跳了非 match → period 在输出视频里累加
+                _cur = 0.0
+                for ps_fr, pe_fr in _src:
+                    p_dur = max(0.0, (pe_fr - ps_fr) / max(fps, 1))
+                    if p_dur < 1.0:
+                        continue
+                    _periods_for_chunk.append((_cur, _cur + p_dur))
+                    _cur += p_dur
+
+            if _periods_for_chunk:
+                print(f"[AI_SUMMARY] Splitting by {_src_kind}-defined periods: "
+                      f"{len(_periods_for_chunk)} period(s)")
+                chunks = _split_video_by_periods(
+                    video_for_ai, _periods_for_chunk, per_chunk_sec, _chunk_dir,
+                )
+            else:
+                print(f"[AI_SUMMARY] No periods → falling back to duration split")
+                chunks = _split_video_by_duration(
+                    video_for_ai, per_chunk_sec, _chunk_dir,
+                )
+            n_chunks = len(chunks)
             print(f"[AI_SUMMARY] Video {total_dur_sec:.0f}s split into {n_chunks} chunk(s) "
                   f"of ≤{per_chunk_sec}s each")
 
