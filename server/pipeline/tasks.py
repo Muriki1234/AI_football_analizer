@@ -3288,6 +3288,7 @@ def _split_video_by_duration(video_path: str, chunk_sec: int,
 
 def _render_gemini_video(video_path: str, bboxes_dict: dict,
                           output_path: Path, stride: int = 5,
+                          match_periods: list[tuple[int, int]] | None = None,
                           progress_cb=None) -> bool:
     """
     为 Gemini 生成全分辨率带框视频（不重跑检测，直接复用 bboxes_dict）。
@@ -3299,6 +3300,9 @@ def _render_gemini_video(video_path: str, bboxes_dict: dict,
       分辨率完全保留原始（1080p）。
 
     Args:
+        match_periods: [(start_frame, end_frame), ...] 用户在 Trim 页选的实际
+            比赛时段。提供时只渲染落在这些区间内的帧（中场休息 / 赛前赛后跳掉），
+            输出视频是各 period 首尾相连。None = 渲染整段。
         progress_cb: (frames_written, total_to_write) → None，用于外层更新进度
     Returns:
         True 成功，False 失败（调用方 fallback 到 samurai_temp.mp4）
@@ -3312,8 +3316,16 @@ def _render_gemini_video(video_path: str, bboxes_dict: dict,
             h    = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
 
+        # 用户没传 periods 时，把整段当作一个 period
+        _periods = (
+            [(max(0, int(ps)), min(total_frames, int(pe))) for ps, pe in match_periods]
+            if match_periods else [(0, total_frames)]
+        )
+        # 算总比赛帧数（用于进度估算）
+        _match_total = sum(max(0, pe - ps) for ps, pe in _periods)
+
         out_fps = max(1.0, fps / stride)
-        total_out = (total_frames + stride - 1) // stride  # 预估输出帧数
+        total_out = (_match_total + stride - 1) // stride  # 预估输出帧数
 
         # ── FFmpeg 解码端（优先 CUDA，失败自动降级 CPU）──
         def _make_decode_cmd(hwaccel: bool) -> list:
@@ -3356,12 +3368,29 @@ def _render_gemini_video(video_path: str, bboxes_dict: dict,
                                    stdout=_sp.PIPE, stderr=_sp.DEVNULL) as decode_proc:
                         try:
                             frames_written = 0
+                            frames_skipped = 0
                             orig_idx       = 0   # 对应原始视频帧号
                             ok = True
+                            # 闭包：判断当前帧是否落在 user 选的 match period 里
+                            def _in_match(idx: int) -> bool:
+                                for ps, pe in _periods:
+                                    if ps <= idx < pe:
+                                        return True
+                                return False
                             while True:
                                 raw = decode_proc.stdout.read(frame_size)
                                 if len(raw) < frame_size:
                                     break
+
+                                # 不在任何 period 内 → 跳过：只 advance orig_idx，
+                                # 不读 buffer、不画框、不喂 encoder。中场休息 / 赛前
+                                # 赛后帧被直接吞掉，输出视频是 first_half + second_half
+                                # 首尾相接。
+                                if not _in_match(orig_idx):
+                                    frames_skipped += 1
+                                    orig_idx       += stride
+                                    continue
+
                                 frame = np.frombuffer(raw, dtype=np.uint8).reshape((h, w, 3)).copy()
 
                                 # 叠加追踪框（bboxes_dict 已插值到每帧原始分辨率）
@@ -3374,7 +3403,8 @@ def _render_gemini_video(video_path: str, bboxes_dict: dict,
                                                 (x1, max(y1 - 10, 20)),
                                                 cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
 
-                                # 时间戳左上角
+                                # 时间戳左上角（原始视频时间，不是输出时间，让 LLM
+                                # 报告里写 mm:ss 跟统计数据的时间点对得上）
                                 secs = orig_idx / fps
                                 cv2.putText(frame,
                                             f"{int(secs // 60):02d}:{secs % 60:04.1f}",
@@ -3405,9 +3435,14 @@ def _render_gemini_video(video_path: str, bboxes_dict: dict,
                 print("[AI_SUMMARY] CUDA decode failed, retrying with CPU (rebuilding encoder)...")
 
         success = output_path.exists() and output_path.stat().st_size > 0
-        print(f"[AI_SUMMARY] gemini_video: {frames_written} frames written, "
-              f"size={output_path.stat().st_size // 1024 // 1024}MB" if success else
-              f"[AI_SUMMARY] gemini_video render failed")
+        if success:
+            _skipped_note = (f", {frames_skipped} non-match frames skipped"
+                             if match_periods else "")
+            print(f"[AI_SUMMARY] gemini_video: {frames_written} frames written"
+                  f"{_skipped_note}, "
+                  f"size={output_path.stat().st_size // 1024 // 1024}MB")
+        else:
+            print(f"[AI_SUMMARY] gemini_video render failed")
         return success
 
     except Exception as exc:
@@ -3574,9 +3609,26 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
             sm.update_task(session_id, task_id, progress=pct,
                            stage="rendering_ai_video")
 
+        # 把用户在 Trim 页选的比赛时段传给渲染器，让 AI 视频只包含比赛画面
+        # （跳过中场休息 / 赛前 / 赛后）。频道字段已经是 frame 单位。
+        _match_periods_raw = session.get("match_periods_frames")
+        _match_periods = (
+            [(int(p[0]), int(p[1])) for p in _match_periods_raw]
+            if _match_periods_raw else None
+        )
+        if _match_periods:
+            _skipped_sec = round(
+                (total_frames - sum(pe - ps for ps, pe in _match_periods)) / max(fps, 1),
+                1,
+            )
+            print(f"[AI_SUMMARY] match_periods provided: {len(_match_periods)} period(s), "
+                  f"~{_skipped_sec}s of non-match content will be skipped from gemini_video")
+
         rendered = _render_gemini_video(
             session["video_path"], tracked_bboxes, gemini_vid_path,
-            stride=5, progress_cb=_render_progress,
+            stride=5,
+            match_periods=_match_periods,
+            progress_cb=_render_progress,
         )
 
         if rendered:
