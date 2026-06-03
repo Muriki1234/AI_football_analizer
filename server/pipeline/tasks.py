@@ -935,7 +935,10 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                       "team sample frames")
                 parallel_ok = True
             except Exception as par_exc:
-                import sys
+                # 注意：不要在这里 `import sys` —— Python 会把 sys 标成
+                # run_global_analysis 的局部变量，连带嵌套的 _capture_exc
+                # 闭包都拿不到 sys，触发 NameError 并吞掉真正的异常。
+                # 模块顶部已经 import sys 了，直接用即可。
                 print(f"[YOLO-PAR] parallel pipeline crashed: {par_exc!r}", flush=True)
                 traceback.print_exc(file=sys.stderr)
                 sys.stderr.flush()
@@ -977,7 +980,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                       "team sample frames during merged pipeline")
                 merged_ok = True
             except Exception as merged_exc:
-                import sys
+                # 同上：不要 `import sys`，用模块顶部的 import。
                 print(f"[MERGED] pipeline crashed: {merged_exc!r}", flush=True)
                 traceback.print_exc(file=sys.stderr)
                 sys.stderr.flush()
@@ -1205,6 +1208,19 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         for _exc in (_speed_exc[0], _team_exc[0], _scene_exc[0]):
             if _exc is not None:
                 raise _exc
+
+        # Sanity check: 即使没有 captured exc，结果 dict 也必须填满。
+        # 这种情况之前出过 —— _capture_exc 自己崩了把异常吞了 ——
+        # 给个明确报错而不是后面解包 KeyError。
+        _missing = []
+        if "team_assigner" not in _team_result:    _missing.append("_thread_team")
+        if "segments"     not in _scene_result:    _missing.append("_thread_scene")
+        if _missing:
+            raise RuntimeError(
+                f"post-YOLO parallel threads finished but didn't populate results: "
+                f"{_missing}. This usually means a silent crash inside _capture_exc "
+                f"or the thread body itself; check earlier traceback prints."
+            )
 
         # 解包结果
         team_assigner          = _team_result["team_assigner"]
