@@ -10,15 +10,29 @@ import { listMySessions, deleteSession } from '../services/api';
 import './Sessions.css';
 
 const STATUS_META = {
-    uploaded:         { label: 'Uploaded',   icon: HiClock,                color: '#94a3b8' },
-    queued:           { label: 'Queued',     icon: HiClock,                color: '#94a3b8' },
-    tracking:         { label: 'Tracking',   icon: HiArrowPath,            color: '#fbbf24' },
-    tracking_done:    { label: 'Tracking ✓', icon: HiArrowPath,            color: '#fbbf24' },
-    analyzing:        { label: 'Analyzing',  icon: HiArrowPath,            color: '#60a5fa' },
-    analysis_done:    { label: 'Done',       icon: HiCheckCircle,          color: '#4ade80' },
-    analysis_failed:  { label: 'Failed',     icon: HiExclamationTriangle,  color: '#f87171' },
-    tracking_failed:  { label: 'Failed',     icon: HiExclamationTriangle,  color: '#f87171' },
+    uploaded:         { label: 'Uploaded',     icon: HiClock,                color: '#94a3b8' },
+    queued:           { label: 'Queued',       icon: HiClock,                color: '#94a3b8' },
+    tracking:         { label: 'Tracking',     icon: HiArrowPath,            color: '#fbbf24' },
+    tracking_done:    { label: 'Tracking ✓',   icon: HiArrowPath,            color: '#fbbf24' },
+    analyzing:        { label: 'Analyzing',    icon: HiArrowPath,            color: '#60a5fa' },
+    analysis_done:    { label: 'Done',         icon: HiCheckCircle,          color: '#4ade80' },
+    analysis_failed:  { label: 'Failed',       icon: HiExclamationTriangle,  color: '#f87171' },
+    tracking_failed:  { label: 'Failed',       icon: HiExclamationTriangle,  color: '#f87171' },
 };
+
+// 后端只有一个 'uploaded' 状态，但用户能停在三个不同的页面：
+//   - 没设过半场时间 → "Set periods"   (Trim 页)
+//   - 设了半场没追踪人 → "Pick players" (MultiSegmentConfig 页)
+//   - 其他 / 老数据    → "Uploaded"
+function resolveMeta(s) {
+    const base = STATUS_META[s.status] || STATUS_META.uploaded;
+    if (s.status !== 'uploaded') return base;
+    const periods = Array.isArray(s.match_periods_sec) ? s.match_periods_sec : null;
+    if (!periods || periods.length === 0) {
+        return { ...base, label: 'Set periods', color: '#a78bfa' };
+    }
+    return { ...base, label: 'Pick players', color: '#22d3ee' };
+}
 
 const formatRelative = (ts) => {
     const d = new Date(ts).getTime();
@@ -186,7 +200,7 @@ export default function Sessions() {
                     transition={{ delay: 0.15 }}
                 >
                     {filtered.map((s, i) => {
-                        const meta = STATUS_META[s.status] || STATUS_META.uploaded;
+                        const meta = resolveMeta(s);
                         const Icon = meta.icon;
                         return (
                             <motion.button

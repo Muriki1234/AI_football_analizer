@@ -344,6 +344,13 @@ def _ensure_local_video(session_id: str, video_url: str, sm: SessionManager) -> 
     """
     Make sure the video exists on local disk. If not, download it from
     Supabase Storage. Returns the local path.
+
+    Important: this function may be called LATE in the lifecycle —
+    e.g. when an ai_summary feature task runs on a CPU worker for a
+    session that already finished analysis. In that case we MUST NOT
+    overwrite the session.status back to "uploaded" (which would route
+    the user back to the pick-player screen). Preserve whatever status
+    the session already has and only patch in video_path.
     """
     local_dir = settings.upload_root / session_id
     local_dir.mkdir(parents=True, exist_ok=True)
@@ -359,8 +366,16 @@ def _ensure_local_video(session_id: str, video_url: str, sm: SessionManager) -> 
     _download_video(video_url, local_path)
     log.info("Downloaded %d MB", local_path.stat().st_size // (1024 * 1024))
 
-    # Store the local path in the session so pipeline code can find it
-    sm.update_status(session_id, "uploaded", video_path=str(local_path))
+    # 不要无脑把 status 设成 "uploaded" — 那会把已经 analysis_done 的
+    # session 拖回 pick-player 页面。读当前 status 再回写同一个值（实际上
+    # 只是为了顺带把 video_path 字段更新到 DB）。新 session 第一次进来时
+    # status 还没设，就当作 "uploaded"。
+    try:
+        current = sm.get_session(session_id) or {}
+        preserved_status = current.get("status") or "uploaded"
+    except Exception:
+        preserved_status = "uploaded"
+    sm.update_status(session_id, preserved_status, video_path=str(local_path))
     return str(local_path)
 
 
@@ -806,7 +821,7 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
 
 # 打印版本 + worker mode：方便从 RunPod 日志确认部署的是哪个 commit。
 # 每次 git push 都会改这个常量 → 看到老值就知道 image 没 rebuild。
-HANDLER_VERSION = "2026-06-01-gemini-2.5-flash"   # bump this on every relevant push
+HANDLER_VERSION = "2026-06-01-preserve-status"   # bump this on every relevant push
 
 # Print worker mode on import so RunPod logs make it obvious which pool we're on.
 print(f"[HANDLER] WORKER_MODE={WORKER_MODE} version={HANDLER_VERSION} "

@@ -507,7 +507,8 @@ export const listMySessions = async ({ limit = 50, query: q = '' } = {}) => {
     if (!user) return [];
     let req = supabase
         .from('sessions')
-        .select('id, status, created_at, updated_at, video_url, progress, stage, error')
+        // extra 用来识别 'uploaded' 的子状态（Set periods / Pick players）
+        .select('id, status, created_at, updated_at, video_url, progress, stage, error, extra')
         .eq('user_id', user.id)
         // updated_at, not created_at — so a session that's currently being
         // re-analysed bubbles to the top, and the user sees activity at a
@@ -520,7 +521,7 @@ export const listMySessions = async ({ limit = 50, query: q = '' } = {}) => {
     }
     const { data, error } = await req;
     if (error) throw error;
-    return (data || []).map((row) => ({
+    return (data || []).map((row) => _flattenSession({
         ...row,
         fileName: decodeURIComponent(
             (row.video_url || '').split('/').pop()?.split('?')[0] || row.id.slice(0, 8)
