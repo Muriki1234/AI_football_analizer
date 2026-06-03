@@ -3051,6 +3051,200 @@ def _probe_video_duration_sec(video_path: str) -> float:
         return 0.0
 
 
+# ── AI summary 用的统计 helper（不依赖按需任务，直接 inline 算出来塞 prompt）─
+
+def _fmt_mmss(sec: float) -> str:
+    """秒数 → mm:ss 字符串，给 prompt 里事件时间用。"""
+    s = max(0, int(sec))
+    return f"{s // 60:02d}:{s % 60:02d}"
+
+
+def _compute_sprint_stats_for_ai(tracks: dict, tracked_bboxes: dict, fps: float) -> dict:
+    """复用 run_sprint_analysis 的判定规则（>25 km/h 持续 ≥ 2s）但不出图，
+    返回轻量 JSON 给 LLM。"""
+    SPRINT_KMH     = 25.0
+    MIN_SPRINT_SEC = 2.0
+    min_frames     = int(MIN_SPRINT_SEC * fps) if fps else 50
+
+    speeds: list[float] = []
+    for i in range(len(tracks["players"])):
+        info = None
+        if i in tracked_bboxes:
+            sx, sy, sw, sh = tracked_bboxes[i]
+            info = _find_matched_player(tracks["players"][i], (sx + sw / 2, sy + sh / 2))
+        speeds.append(float(info.get("speed", 0)) if info else 0.0)
+
+    segments: list[tuple[int, int, float]] = []  # (start, end, peak_kmh)
+    in_sprint, sprint_start, peak = False, 0, 0.0
+    for i, spd in enumerate(speeds):
+        if spd >= SPRINT_KMH:
+            if not in_sprint:
+                in_sprint, sprint_start, peak = True, i, spd
+            else:
+                peak = max(peak, spd)
+        else:
+            if in_sprint:
+                if (i - sprint_start) >= min_frames:
+                    segments.append((sprint_start, i - 1, peak))
+                in_sprint, peak = False, 0.0
+    if in_sprint and (len(speeds) - sprint_start) >= min_frames:
+        segments.append((sprint_start, len(speeds) - 1, peak))
+
+    durations_s = [(e - s) / max(fps, 1) for s, e, _ in segments]
+    events = [
+        {
+            "start_sec":   round(s / max(fps, 1), 1),
+            "end_sec":     round(e / max(fps, 1), 1),
+            "time_mm_ss":  _fmt_mmss(s / max(fps, 1)),
+            "duration_s":  round(d, 1),
+            "peak_kmh":    round(float(pk), 1),
+        }
+        for (s, e, pk), d in zip(segments, durations_s)
+    ]
+    return {
+        "count":          len(segments),
+        "avg_duration_s": round(float(np.mean(durations_s)), 2) if durations_s else 0.0,
+        "max_duration_s": round(float(np.max(durations_s)),  2) if durations_s else 0.0,
+        "peak_kmh":       round(float(max(speeds)), 1) if speeds else 0.0,
+        "events":         events[:30],   # 防 token 爆炸；30 次冲刺差不多够看
+    }
+
+
+def _compute_pitch_zones_for_ai(tracks: dict, tracked_bboxes: dict) -> dict:
+    """统计被追踪球员在球场前/中/后三档的帧占比。
+    pitch length = 12000 cm (SoccerPitchConfiguration)；按 x 三等分。
+    用对方平均位置判断追踪球员朝哪边进攻，决定 attacking/defensive 方向。
+    """
+    PITCH_LEN = 12000.0
+    THIRDS = PITCH_LEN / 3.0
+
+    my_xs: list[float] = []
+    opp_xs_all: list[float] = []
+    tracked_teams: list[int] = []
+    for i in range(len(tracks["players"])):
+        if i not in tracked_bboxes:
+            continue
+        sx, sy, sw, sh = tracked_bboxes[i]
+        me = _find_matched_player(tracks["players"][i], (sx + sw / 2, sy + sh / 2))
+        if not me:
+            continue
+        pos = me.get("position_minimap") or me.get("position_transformed")
+        if not (pos and len(pos) == 2 and not any(np.isnan(p) for p in pos)):
+            continue
+        my_xs.append(float(pos[0]))
+        if me.get("team"):
+            tracked_teams.append(int(me["team"]))
+        my_team = me.get("team")
+        for pid, info in tracks["players"][i].items():
+            if not info or info.get("team") == my_team:
+                continue
+            pp = info.get("position_minimap") or info.get("position_transformed")
+            if pp and len(pp) == 2 and not any(np.isnan(v) for v in pp):
+                opp_xs_all.append(float(pp[0]))
+
+    if not my_xs:
+        return {
+            "defensive_third_pct": 0, "middle_third_pct": 0, "attacking_third_pct": 0,
+            "samples": 0,
+        }
+
+    # 判断朝哪边进攻：对方平均 x > 我平均 x → 我朝大 x 方向进攻；反之亦然
+    attacking_toward_high_x = (
+        (np.mean(opp_xs_all) if opp_xs_all else PITCH_LEN / 2) > np.mean(my_xs)
+    )
+
+    def_cnt = mid_cnt = att_cnt = 0
+    for x in my_xs:
+        if attacking_toward_high_x:
+            if   x < THIRDS:       def_cnt += 1
+            elif x < 2 * THIRDS:   mid_cnt += 1
+            else:                  att_cnt += 1
+        else:
+            if   x > 2 * THIRDS:   def_cnt += 1
+            elif x > THIRDS:       mid_cnt += 1
+            else:                  att_cnt += 1
+
+    total = max(1, def_cnt + mid_cnt + att_cnt)
+    return {
+        "defensive_third_pct":  round(def_cnt / total * 100, 1),
+        "middle_third_pct":     round(mid_cnt / total * 100, 1),
+        "attacking_third_pct":  round(att_cnt / total * 100, 1),
+        "samples":              total,
+        "attacking_direction":  "high_x" if attacking_toward_high_x else "low_x",
+    }
+
+
+def _compute_defensive_breakthroughs_for_ai(tracks: dict, tracked_bboxes: dict,
+                                              fps: float) -> dict:
+    """复用 run_defensive_line 的"越过对方最深 4 人均值"判定，
+    返回每次穿透的时间点（mm:ss）给 LLM。"""
+    # 确定追踪球员队伍
+    tracked_teams: list[int] = []
+    for i in range(len(tracks["players"])):
+        if i not in tracked_bboxes:
+            continue
+        sx, sy, sw, sh = tracked_bboxes[i]
+        info = _find_matched_player(tracks["players"][i], (sx + sw / 2, sy + sh / 2))
+        if info and info.get("team"):
+            tracked_teams.append(int(info["team"]))
+    if not tracked_teams:
+        return {"count": 0, "events": []}
+    tracked_team = int(np.median(tracked_teams))
+    opponent_team = 2 if tracked_team == 1 else 1
+
+    # 逐帧拿 (tracked_x, defense_x)
+    frame_data: list[tuple[float, float] | None] = []
+    for i in range(len(tracks["players"])):
+        tx = None
+        if i in tracked_bboxes:
+            sx, sy, sw, sh = tracked_bboxes[i]
+            info = _find_matched_player(tracks["players"][i], (sx + sw / 2, sy + sh / 2))
+            if info:
+                pos = info.get("position_minimap") or info.get("position_transformed")
+                if pos and len(pos) == 2 and not any(np.isnan(p) for p in pos):
+                    tx = float(pos[0])
+        opp_xs = []
+        for pid, info in tracks["players"][i].items():
+            if not info or info.get("team") != opponent_team:
+                continue
+            pp = info.get("position_minimap") or info.get("position_transformed")
+            if pp and len(pp) == 2 and not any(np.isnan(v) for v in pp):
+                opp_xs.append(float(pp[0]))
+        if tx is not None and opp_xs:
+            opp_xs.sort()
+            deepest = opp_xs[:4] if tx < np.mean(opp_xs) else opp_xs[-4:]
+            frame_data.append((tx, float(np.mean(deepest))))
+        else:
+            frame_data.append(None)
+
+    # 检测穿透：> 防线 持续 ≥ 3 帧
+    events_frames: list[int] = []
+    behind, consec = False, 0
+    for i, fd in enumerate(frame_data):
+        if fd is None:
+            consec, behind = 0, False
+            continue
+        tx, dx = fd
+        if tx > dx:
+            consec += 1
+            if consec >= 3 and not behind:
+                events_frames.append(i)
+                behind = True
+        else:
+            consec, behind = 0, False
+
+    events = [
+        {"time_sec": round(f / max(fps, 1), 1),
+         "time_mm_ss": _fmt_mmss(f / max(fps, 1))}
+        for f in events_frames
+    ]
+    return {
+        "count":         len(events_frames),
+        "tracked_team":  tracked_team,
+        "events":        events[:30],
+    }
+
+
 def _split_video_by_duration(video_path: str, chunk_sec: int,
                               out_dir: Path) -> list[tuple[Path, float, float]]:
     """
@@ -3320,7 +3514,32 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
         neu = int(np.sum(team_control == 0)) if team_control.size else 0
         total_ctrl = t1 + t2 + neu or 1
 
-        # ── 3. 组织给 Qwen 的 JSON ──
+        # ── 3. 组织给 LLM 的 JSON ──
+        tracks_for_ai         = data.get("tracks", {})
+        tracked_bboxes_for_ai = data.get("tracked_bboxes", {})
+
+        # 三个 inline 计算：之前都只在按需任务里出图，AI prompt 看不到
+        # 数字。这里直接算出来塞进 prompt，AI 写报告时引用具体数据。
+        try:
+            sprint_stats = _compute_sprint_stats_for_ai(
+                tracks_for_ai, tracked_bboxes_for_ai, fps)
+        except Exception as _e:
+            print(f"[AI_SUMMARY] sprint stats failed (non-fatal): {_e!r}")
+            sprint_stats = {"count": 0, "events": []}
+        try:
+            zone_stats = _compute_pitch_zones_for_ai(
+                tracks_for_ai, tracked_bboxes_for_ai)
+        except Exception as _e:
+            print(f"[AI_SUMMARY] zone stats failed (non-fatal): {_e!r}")
+            zone_stats = {"defensive_third_pct": 0, "middle_third_pct": 0,
+                          "attacking_third_pct": 0}
+        try:
+            def_line_stats = _compute_defensive_breakthroughs_for_ai(
+                tracks_for_ai, tracked_bboxes_for_ai, fps)
+        except Exception as _e:
+            print(f"[AI_SUMMARY] defensive line stats failed (non-fatal): {_e!r}")
+            def_line_stats = {"count": 0, "events": []}
+
         stats_payload = {
             "video": {
                 "total_frames":   total_frames,
@@ -3335,8 +3554,11 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
                 "team2_color":    hex_colors.get(2, "#e74c3c"),
                 "switches":       int(data.get("possession_switches", 0)),
             },
-            "segments":       segments,
-            "tracked_player": player_summary,
+            "segments":               segments,
+            "tracked_player":         player_summary,
+            "sprints":                sprint_stats,
+            "pitch_zones":            zone_stats,
+            "defensive_breakthroughs": def_line_stats,
         }
         stats_json = json.dumps(stats_payload, ensure_ascii=False, indent=2)
 
@@ -3451,8 +3673,17 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
             _final_sections = (
                 "## 比赛概览\n简述双方控球对比、关键跑动数据、比赛节奏。\n\n"
                 + _player_section
+                + "## 冲刺与爆发\n"
+                "依据下方统计数据里的 `sprints`，给出冲刺次数、平均/最长持续时间、"
+                "峰值速度，并指出若干次冲刺发生的时间点 (events[].time_mm_ss)。\n\n"
+                + "## 场区分布\n"
+                "依据 `pitch_zones`（前/中/后场占比），说明被追踪球员主要活动区域，"
+                "并据此判断角色（边锋/前腰/后腰/中卫 等）。\n\n"
+                + "## 防线穿透时刻\n"
+                "依据 `defensive_breakthroughs.events`（每次穿透的 mm:ss 时间），"
+                "**列出每次穿透的具体时间点**并简评战术意义；count=0 时直接说明本场未观察到突破对方防线。\n\n"
                 + "## 战术观察\n阵型特征、进攻模式、防守组织，基于画面实际观察。\n\n"
-                + "## 改进建议\n3 条具体可执行的训练/战术建议。\n\n"
+                + "## 改进建议\n3 条具体可执行的训练/战术建议，必须引用上面任意一项具体数据 / 时间点。\n\n"
             )
 
             # ── Helper：调用 LLM 看一段视频，返回 markdown 字符串 ─────────────
