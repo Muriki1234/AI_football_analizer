@@ -3,8 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { IoFootball } from 'react-icons/io5';
 import { HiArrowRight, HiArrowRightOnRectangle, HiClock, HiXMark } from 'react-icons/hi2';
-import { getRecentSessions, removeRecentSession } from '../lib/recentSessions';
-import { getSession } from '../services/api';
+import { getRecentSessions, removeRecentSession, addRecentSession } from '../lib/recentSessions';
+import { getSession, listMySessions } from '../services/api';
 import './Welcome.css';
 
 const formatRelative = (ts) => {
@@ -42,6 +42,36 @@ export default function Welcome() {
     // Live status fetched once per recent session (keyed by id)
     const [sessionMeta, setSessionMeta] = useState({});
     const [openingId, setOpeningId] = useState(null);  // which card is loading
+
+    // 兜底：localStorage 里没有 recents 时（新浏览器/清过缓存/匿名 token
+    // 翻新），从 DB 直接拉最近 5 条 session 灌进 recents，让用户能看到
+    // 自己之前传过的视频，而不是面对一个空主页。
+    useEffect(() => {
+        if (recents.length > 0) return undefined;
+        let cancelled = false;
+        listMySessions({ limit: 5 }).then((rows) => {
+            if (cancelled || !rows || rows.length === 0) return;
+            const seeded = rows.map((row) => ({
+                id: row.id,
+                fileName: row.fileName,
+                videoUrl: row.video_url,
+                size: 0,
+                addedAt: new Date(row.updated_at || row.created_at).getTime(),
+            }));
+            // 写回 localStorage，下次进 home 不需要再查 DB
+            seeded.forEach((r) => addRecentSession(r));
+            setRecents(getRecentSessions());
+            // 同时把 row 自己当 meta 填进去，省一次 getSession 往返
+            setSessionMeta((prev) => {
+                const next = { ...prev };
+                rows.forEach((row) => { next[row.id] = row; });
+                return next;
+            });
+        }).catch((e) => {
+            console.warn('Failed to seed recents from DB:', e);
+        });
+        return () => { cancelled = true; };
+    }, [recents.length]);
 
     // Fetch live session data for each recent item on mount so we can show
     // up-to-date status badges without the user having to click anything.
