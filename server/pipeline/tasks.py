@@ -3820,14 +3820,17 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
             else:
                 _fps_hint = ("约 1 fps 抽帧" if ai_backend == "qwen" else "全帧率原始视频")
                 _video_desc = (
-                    f"视频为带标注的比赛画面（{_fps_hint}），"
-                    + ("绿色高亮框（TRACKED）标注的是正在被追踪的核心球员。"
-                       if video_source == "full_res_annotated"
-                       else "SAM2 mask 叠加视频，绿框为被追踪球员。")
+                    f"视频为带标注的比赛画面（{_fps_hint}）。"
+                    "视频里**绿色高亮框（TRACKED 字样）**仅用于在画面中**给你识别**应该聚焦哪名球员；"
+                    "这是分析工具的内部标记，**普通观众看不到也不需要知道**。\n"
+                    "**写报告时绝对不要提到「绿色框」「TRACKED」「高亮」「标注」「框」等实现细节**——"
+                    "用自然语言描述这名球员，例如「黄色球衣 2 号球员」「防守型后腰」「右路边后卫」等。\n"
                 )
                 _player_section = (
                     "## 被追踪球员分析\n"
-                    "重点分析视频中绿色框标注的那名球员：跑位、速度爆发、控球、影响力。\n\n"
+                    "聚焦那名被标注的球员（但**不要在文字里提到绿框 / TRACKED / 标注 / 高亮**），"
+                    "分析跑位、速度爆发、控球、影响力。开头用一句自然语言介绍这名球员"
+                    "（球衣颜色 + 号码 + 场上位置）即可。\n\n"
                 )
 
             _final_sections = (
