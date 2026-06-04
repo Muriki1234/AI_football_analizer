@@ -68,8 +68,13 @@ export default function Sessions() {
 
     const filtered = useMemo(() => {
         const q = search.trim().toLowerCase();
+        // 'uploaded' 不算 in_progress —— resolveMeta() 已经把它分成
+        // "Set periods" 和 "Pick players" 两种子状态，意义是「等用户操作」
+        // 而不是「服务端在跑」。继续算 in_progress 会让 Running tab 里塞
+        // 一堆等 user 点的 session，跟标签名不符。
+        // 'uploading' 保留 —— 上传中是真在传字节。
         const IN_PROGRESS = new Set([
-            'uploading', 'queued', 'uploaded',
+            'uploading', 'queued',
             'tracking', 'tracking_done', 'samurai_multi_pending', 'samurai_done',
             'analyzing',
         ]);

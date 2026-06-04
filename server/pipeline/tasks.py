@@ -3177,7 +3177,15 @@ def _compute_pitch_zones_for_ai(tracks: dict, tracked_bboxes: dict) -> dict:
 def _compute_defensive_breakthroughs_for_ai(tracks: dict, tracked_bboxes: dict,
                                               fps: float) -> dict:
     """复用 run_defensive_line 的"越过对方最深 4 人均值"判定，
-    返回每次穿透的时间点（mm:ss）给 LLM。"""
+    返回每次穿透的时间点（mm:ss）给 LLM。
+
+    旧实现的 bug：判定逻辑 `tx > defense_x` 只对"朝大 x 方向进攻"的球员
+    成立。对朝小 x 方向进攻的球员（即原视频里朝左推进），这个条件反过来
+    成了"球员退到自己防守端"，导致 100% 防守三区的中后卫 30 秒被检测到
+    6 次"突破"。
+    现在先全局算追踪球员朝哪边进攻（用整段时长的平均 x 跟对方平均 x 对比），
+    然后判定条件按方向翻转。
+    """
     # 确定追踪球员队伍
     tracked_teams: list[int] = []
     for i in range(len(tracks["players"])):
@@ -3191,6 +3199,26 @@ def _compute_defensive_breakthroughs_for_ai(tracks: dict, tracked_bboxes: dict,
         return {"count": 0, "events": []}
     tracked_team = int(np.median(tracked_teams))
     opponent_team = 2 if tracked_team == 1 else 1
+
+    # 全局判定追踪球员的进攻方向：追踪球员平均 x < 对方平均 x → 我方
+    # 大本营在左，朝右进攻（attacking_right=True）；反之朝左。
+    all_my_xs: list[float] = []
+    all_opp_xs: list[float] = []
+    for i in range(len(tracks["players"])):
+        for pid, info in tracks["players"][i].items():
+            if not info:
+                continue
+            pos = info.get("position_minimap") or info.get("position_transformed")
+            if not (pos and len(pos) == 2 and not any(np.isnan(p) for p in pos)):
+                continue
+            tm = info.get("team")
+            if tm == tracked_team:
+                all_my_xs.append(float(pos[0]))
+            elif tm == opponent_team:
+                all_opp_xs.append(float(pos[0]))
+    if not all_my_xs or not all_opp_xs:
+        return {"count": 0, "tracked_team": tracked_team, "events": []}
+    attacking_right = float(np.mean(all_my_xs)) < float(np.mean(all_opp_xs))
 
     # 逐帧拿 (tracked_x, defense_x)
     frame_data: list[tuple[float, float] | None] = []
@@ -3212,12 +3240,16 @@ def _compute_defensive_breakthroughs_for_ai(tracks: dict, tracked_bboxes: dict,
                 opp_xs.append(float(pp[0]))
         if tx is not None and opp_xs:
             opp_xs.sort()
-            deepest = opp_xs[:4] if tx < np.mean(opp_xs) else opp_xs[-4:]
+            # 对方防线 = 对方最深 4 人均值。朝大 x 进攻 → 防线是 4 个最大
+            # x（对方守门员附近）。朝小 x 进攻 → 防线是 4 个最小 x。
+            deepest = opp_xs[-4:] if attacking_right else opp_xs[:4]
             frame_data.append((tx, float(np.mean(deepest))))
         else:
             frame_data.append(None)
 
-    # 检测穿透：> 防线 持续 ≥ 3 帧
+    # 检测穿透：球员越过对方防线持续 ≥ 3 帧。
+    # 朝右进攻：tx > defense_x = 突破。
+    # 朝左进攻：tx < defense_x = 突破。
     events_frames: list[int] = []
     behind, consec = False, 0
     for i, fd in enumerate(frame_data):
@@ -3225,7 +3257,8 @@ def _compute_defensive_breakthroughs_for_ai(tracks: dict, tracked_bboxes: dict,
             consec, behind = 0, False
             continue
         tx, dx = fd
-        if tx > dx:
+        broke = (tx > dx) if attacking_right else (tx < dx)
+        if broke:
             consec += 1
             if consec >= 3 and not behind:
                 events_frames.append(i)
@@ -3239,9 +3272,10 @@ def _compute_defensive_breakthroughs_for_ai(tracks: dict, tracked_bboxes: dict,
         for f in events_frames
     ]
     return {
-        "count":         len(events_frames),
-        "tracked_team":  tracked_team,
-        "events":        events[:30],
+        "count":              len(events_frames),
+        "tracked_team":       tracked_team,
+        "attacking_direction": "right" if attacking_right else "left",
+        "events":             events[:30],
     }
 
 
@@ -3433,6 +3467,7 @@ def _render_gemini_video(video_path: str, bboxes_dict: dict,
                         try:
                             frames_written = 0
                             frames_skipped = 0
+                            _bbox_frames_count = [0]   # list 是为了在闭包/循环里改
                             orig_idx       = 0   # 对应原始视频帧号
                             ok = True
                             # 闭包：判断当前帧是否落在 user 选的 match period 里
@@ -3455,17 +3490,36 @@ def _render_gemini_video(video_path: str, bboxes_dict: dict,
                                     orig_idx       += stride
                                     continue
 
-                                frame = np.frombuffer(raw, dtype=np.uint8).reshape((h, w, 3)).copy()
+                                # OpenCV 4.11 起 rectangle/putText 偶尔会把 frombuffer
+                                # 出来的数组当成 UMat (Expected Ptr<cv::UMat> for argument
+                                # 'img')。np.ascontiguousarray + uint8 显式 cast 保证
+                                # cv2 拿到的是标准 Mat。
+                                frame = np.ascontiguousarray(
+                                    np.frombuffer(raw, dtype=np.uint8).reshape((h, w, 3)),
+                                    dtype=np.uint8,
+                                )
 
                                 # 叠加追踪框（bboxes_dict 已插值到每帧原始分辨率）
+                                bbox_drawn = False
                                 if orig_idx in bboxes_dict:
                                     bx, by, bw_, bh_ = bboxes_dict[orig_idx]
                                     x1, y1 = int(bx), int(by)
                                     x2, y2 = int(bx + bw_), int(by + bh_)
-                                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 4)
-                                    cv2.putText(frame, "TRACKED",
-                                                (x1, max(y1 - 10, 20)),
-                                                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+                                    try:
+                                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 4)
+                                        cv2.putText(frame, "TRACKED",
+                                                    (x1, max(y1 - 10, 20)),
+                                                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+                                        bbox_drawn = True
+                                    except cv2.error as _cve:
+                                        # 之前 try/except 在外层吞掉了，整段视频静默无框，
+                                        # AI 不知道盯谁。现在直接 raise 让上层 fallback
+                                        # 到 samurai_temp.mp4 而不是输出无框视频。
+                                        raise RuntimeError(
+                                            f"cv2.rectangle failed at frame {orig_idx}: "
+                                            f"{_cve!r}. Frame shape={frame.shape}, "
+                                            f"dtype={frame.dtype}, contiguous={frame.flags['C_CONTIGUOUS']}"
+                                        ) from _cve
 
                                 # 时间戳左上角（原始视频时间，不是输出时间，让 LLM
                                 # 报告里写 mm:ss 跟统计数据的时间点对得上）
@@ -3473,6 +3527,8 @@ def _render_gemini_video(video_path: str, bboxes_dict: dict,
                                 cv2.putText(frame,
                                             f"{int(secs // 60):02d}:{secs % 60:04.1f}",
                                             (10, 36), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+                                if bbox_drawn:
+                                    _bbox_frames_count[0] = _bbox_frames_count[0] + 1
 
                                 try:
                                     encode_proc.stdin.write(frame.tobytes())
@@ -3502,9 +3558,18 @@ def _render_gemini_video(video_path: str, bboxes_dict: dict,
         if success:
             _skipped_note = (f", {frames_skipped} non-match frames skipped"
                              if match_periods else "")
+            _bbox_pct = (
+                100 * _bbox_frames_count[0] / frames_written
+                if frames_written else 0
+            )
             print(f"[AI_SUMMARY] gemini_video: {frames_written} frames written"
                   f"{_skipped_note}, "
-                  f"size={output_path.stat().st_size // 1024 // 1024}MB")
+                  f"size={output_path.stat().st_size // 1024 // 1024}MB, "
+                  f"bbox drawn on {_bbox_frames_count[0]}/{frames_written} "
+                  f"frames ({_bbox_pct:.0f}%)")
+            if _bbox_frames_count[0] == 0:
+                print("[AI_SUMMARY] WARNING: rendered video has NO tracking boxes! "
+                      "AI will have to guess which player to focus on.")
         else:
             print(f"[AI_SUMMARY] gemini_video render failed")
         return success
