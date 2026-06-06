@@ -25,7 +25,7 @@ import './Trimmer.css';
 const REAL_MATCH_THRESHOLD_SEC = 300;  // 5 minutes
 const MIN_PERIOD_SEC_REAL = 30;
 const MIN_PERIOD_SEC_TEST = 3;
-const MAX_PERIODS = 4;           // 4 periods × 4 segs = 16 picks ceiling
+const MAX_PERIODS = 2;           // 2 periods × 4 segs = 8 picks ceiling
 const HANDLE_PX = 7;             // half the handle CSS width (14px) — for centering
 
 function fmt(sec) {
