@@ -488,21 +488,56 @@
     text-transform: uppercase;
 }
 
-/* Scene-segment timeline strip below hero video */
+/* Replay progress bar below hero video */
 .video-markers {
-    margin-top: 0.75rem;
+    margin-top: 0.8rem;
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    gap: 0.55rem;
 }
 
-.video-markers__strip {
+.video-markers__controls {
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.7rem;
+}
+
+.video-markers__play {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(96, 165, 250, 0.45);
+    background: rgba(59, 130, 246, 0.14);
+    color: #dbeafe;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, transform 0.15s;
+}
+.video-markers__play:hover {
+    background: rgba(59, 130, 246, 0.24);
+    border-color: rgba(96, 165, 250, 0.75);
+    transform: translateY(-1px);
+}
+.video-markers__play svg { font-size: 1.1rem; }
+
+.video-markers__track {
     position: relative;
-    height: 22px;
-    background: rgba(15, 23, 42, 0.6);
-    border-radius: 6px;
+    height: 28px;
+    padding: 0;
+    background: rgba(15, 23, 42, 0.65);
+    border-radius: 8px;
     overflow: hidden;
-    border: 1px solid rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    cursor: pointer;
+}
+
+.video-markers__segments {
+    position: absolute;
+    inset: 0;
+    display: block;
 }
 
 .video-markers__seg {
@@ -510,14 +545,14 @@
     top: 0;
     bottom: 0;
     border: none;
-    cursor: pointer;
-    opacity: 0.7;
-    transition: opacity 0.15s, transform 0.15s;
+    opacity: 0.85;
     overflow: hidden;
     color: white;
-    font-size: 0.7rem;
+    font-size: 0.8rem;
     padding: 0 4px;
-    text-align: left;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     white-space: nowrap;
     text-overflow: ellipsis;
 }
@@ -527,11 +562,42 @@
 }
 
 .video-markers__seg-label {
+    position: relative;
+    z-index: 2;
+    line-height: 28px;
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
     pointer-events: none;
 }
 
-.video-markers__legend {
+.video-markers__progress {
+    position: absolute;
+    inset: 0 auto 0 0;
+    background: rgba(255, 255, 255, 0.25);
+    pointer-events: none;
+    z-index: 3;
+}
+
+.video-markers__thumb {
+    position: absolute;
+    top: -2px;
+    bottom: -2px;
+    width: 4px;
+    border-radius: 2px;
+    transform: translateX(-50%);
+    background: #ffffff;
+    box-shadow: 0 0 4px rgba(0, 0, 0, 0.8);
+    pointer-events: none;
+    z-index: 4;
+}
+
+.video-markers__time {
+    color: #94a3b8;
+    font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.video-markers__chapters {
     display: flex;
     flex-wrap: wrap;
     gap: 0.6rem;
@@ -539,7 +605,7 @@
     color: #94a3b8;
 }
 
-.video-markers__legend-item {
+.video-markers__chapter {
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;
@@ -552,7 +618,7 @@
     transition: background 0.15s, border-color 0.15s;
 }
 
-.video-markers__legend-item:hover {
+.video-markers__chapter:hover {
     background: rgba(59, 130, 246, 0.15);
     border-color: rgba(59, 130, 246, 0.4);
     color: #e2e8f0;
@@ -567,6 +633,24 @@
 .video-markers__legend-time {
     font-variant-numeric: tabular-nums;
     color: #64748b;
+}
+
+/* Hide native video progress bar to avoid redundancy with the custom timeline */
+.hero-video-card__player::-webkit-media-controls-timeline {
+    display: none !important;
+}
+.hero-video-card__player::-webkit-media-controls-current-time-display,
+.hero-video-card__player::-webkit-media-controls-time-remaining-display {
+    display: none !important;
+}
+
+@media (max-width: 640px) {
+    .video-markers__controls {
+        grid-template-columns: 36px minmax(0, 1fr);
+    }
+    .video-markers__time {
+        grid-column: 2;
+    }
 }
 
 /* Markdown styling for AI summary blocks */
@@ -797,6 +881,7 @@
     height: 100%;
     object-fit: contain;
     background: #000;
+    cursor: pointer;
 }
 
 .hero-video-card__placeholder {
@@ -1009,6 +1094,8 @@
 .poss-bar {}
 .poss-bar__header {
     display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.7rem;
     justify-content: space-between;
     font-size: 0.78rem;
     color: #cbd5e1;
@@ -1023,6 +1110,7 @@
 }
 .poss-dot--t1 { background: #3498db; }
 .poss-dot--t2 { background: #e74c3c; }
+.poss-dot--neutral { background: #94a3b8; }
 
 .poss-bar__track {
     display: flex;
@@ -1034,6 +1122,7 @@
 }
 .poss-bar__fill--t1 { background: linear-gradient(90deg, #3498db, #60a5fa); }
 .poss-bar__fill--t2 { background: linear-gradient(90deg, #ef4444, #f87171); }
+.poss-bar__fill--neutral { background: linear-gradient(90deg, #64748b, #94a3b8); }
 
 .seg-table {
     width: 100%;
@@ -1119,6 +1208,17 @@
 }
 .drawer__empty-cta p { margin: 0; font-size: 0.85rem; }
 
+.drawer__note {
+    margin: 0.65rem 0 0;
+    padding: 0.55rem 0.7rem;
+    border: 1px solid rgba(245, 158, 11, 0.28);
+    border-radius: 8px;
+    background: rgba(245, 158, 11, 0.1);
+    color: #fbbf24;
+    font-size: 0.78rem;
+    line-height: 1.4;
+}
+
 /* Recharts wrappers + possession donut layout */
 .chart-wrap {
     width: 100%;
@@ -1152,6 +1252,38 @@
     color: #e2e8f0;
     margin-left: 0.3rem;
     font-variant-numeric: tabular-nums;
+}
+
+.chart-tooltip {
+    min-width: 120px;
+    padding: 0.55rem 0.65rem;
+    border-radius: 8px;
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    background: rgba(8, 13, 26, 0.96);
+    color: #e2e8f0;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.36);
+}
+.chart-tooltip__label {
+    margin-bottom: 0.35rem;
+    color: #94a3b8;
+    font-size: 0.75rem;
+}
+.chart-tooltip__row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.78rem;
+}
+.chart-tooltip__row strong {
+    margin-left: auto;
+    color: #f8fafc;
+    font-variant-numeric: tabular-nums;
+}
+.chart-tooltip__dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
 }
 
 /* StepNav centered inside the stage so it stays visually balanced

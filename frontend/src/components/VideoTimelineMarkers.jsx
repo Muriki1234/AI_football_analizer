@@ -1,43 +1,89 @@
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { HiPause, HiPlay } from 'react-icons/hi2';
 
 const SEGMENT_STYLES = {
     first_half: { color: '#3498db', label: 'First Half' },
     second_half: { color: '#e74c3c', label: 'Second Half' },
     halftime: { color: '#94a3b8', label: 'Halftime' },
+    pre_match: { color: '#64748b', label: 'Pre Match' },
+    post_match: { color: '#64748b', label: 'Post Match' },
+    match: { color: '#3498db', label: 'Full Match' },
+    full_match: { color: '#3498db', label: 'Full Match' },
 };
 
 const formatTime = (sec) => {
-    const m = Math.floor(sec / 60);
-    const s = Math.floor(sec % 60).toString().padStart(2, '0');
+    const safeSec = Number.isFinite(sec) ? Math.max(0, sec) : 0;
+    const m = Math.floor(safeSec / 60);
+    const s = Math.floor(safeSec % 60).toString().padStart(2, '0');
     return `${m}:${s}`;
 };
 
-/**
- * Renders a segment strip below the video that lets the user jump to
- * scene boundaries (first_half / halftime / second_half).
- *
- * Falls back to nothing if segments / fps / total_frames aren't available
- * (e.g. session created before scene_segmentation ran).
- */
 export default function VideoTimelineMarkers({ segments, fps, totalFrames, videoRef }) {
     const containerRef = useRef(null);
+    const [currentTime, setCurrentTime] = useState(0);
+    const [duration, setDuration] = useState(0);
+    const [isPlaying, setIsPlaying] = useState(false);
+
+    useEffect(() => {
+        const video = videoRef?.current;
+        if (!video) return undefined;
+
+        const syncTime = () => {
+            setCurrentTime(video.currentTime || 0);
+            setDuration(video.duration || 0);
+        };
+        const syncPlaying = () => setIsPlaying(!video.paused && !video.ended);
+
+        syncTime();
+        syncPlaying();
+        video.addEventListener('timeupdate', syncTime);
+        video.addEventListener('loadedmetadata', syncTime);
+        video.addEventListener('durationchange', syncTime);
+        video.addEventListener('play', syncPlaying);
+        video.addEventListener('pause', syncPlaying);
+        video.addEventListener('ended', syncPlaying);
+
+        return () => {
+            video.removeEventListener('timeupdate', syncTime);
+            video.removeEventListener('loadedmetadata', syncTime);
+            video.removeEventListener('durationchange', syncTime);
+            video.removeEventListener('play', syncPlaying);
+            video.removeEventListener('pause', syncPlaying);
+            video.removeEventListener('ended', syncPlaying);
+        };
+    }, [videoRef]);
 
     const items = useMemo(() => {
-        if (!segments?.length || !fps || !totalFrames) return [];
-        const totalSec = totalFrames / fps;
-        return segments.map((seg) => {
+        const totalSec = fps && totalFrames ? totalFrames / fps : duration;
+        if (!totalSec) return [];
+
+        const source = segments?.length
+            ? segments
+            : [{
+                type: 'full_match',
+                start_frame: 0,
+                end_frame: totalFrames || Math.round(totalSec * (fps || 1)),
+                start_sec: 0,
+                end_sec: totalSec,
+            }];
+
+        return source.map((seg) => {
             const startSec = seg.start_frame / fps;
             const endSec = seg.end_frame / fps;
+            const fallbackStart = Number(seg.start_sec ?? 0);
+            const fallbackEnd = Number(seg.end_sec ?? totalSec);
+            const safeStart = Number.isFinite(startSec) ? startSec : fallbackStart;
+            const safeEnd = Number.isFinite(endSec) ? endSec : fallbackEnd;
             return {
                 ...seg,
                 style: SEGMENT_STYLES[seg.type] || { color: '#64748b', label: seg.type },
-                startSec,
-                endSec,
-                widthPct: ((endSec - startSec) / totalSec) * 100,
-                leftPct: (startSec / totalSec) * 100,
+                startSec: safeStart,
+                endSec: safeEnd,
+                widthPct: Math.max(0, ((safeEnd - safeStart) / totalSec) * 100),
+                leftPct: Math.max(0, (safeStart / totalSec) * 100),
             };
         });
-    }, [segments, fps, totalFrames]);
+    }, [segments, fps, totalFrames, duration]);
 
     if (items.length === 0) return null;
 
@@ -48,33 +94,73 @@ export default function VideoTimelineMarkers({ segments, fps, totalFrames, video
         v.play?.().catch(() => { });
     };
 
+    const togglePlay = () => {
+        const v = videoRef?.current;
+        if (!v) return;
+        if (v.paused) v.play?.().catch(() => { });
+        else v.pause?.();
+    };
+
+    const seekFromPointer = (event) => {
+        const v = videoRef?.current;
+        const track = event.currentTarget;
+        if (!v || !track || !duration) return;
+        const rect = track.getBoundingClientRect();
+        const pct = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+        v.currentTime = pct * duration;
+    };
+
+    const progressPct = duration ? Math.max(0, Math.min(100, (currentTime / duration) * 100)) : 0;
+
     return (
         <div className="video-markers" ref={containerRef}>
-            <div className="video-markers__strip">
-                {items.map((seg, i) => (
-                    <button
-                        key={`${seg.type}-${i}`}
-                        type="button"
-                        className="video-markers__seg"
-                        style={{
-                            left: `${seg.leftPct}%`,
-                            width: `${seg.widthPct}%`,
-                            background: seg.style.color,
-                        }}
-                        onClick={() => seekTo(seg.startSec)}
-                        title={`${seg.style.label} • ${formatTime(seg.startSec)}–${formatTime(seg.endSec)}`}
-                    >
-                        <span className="video-markers__seg-label">{seg.style.label}</span>
-                    </button>
-                ))}
+            <div className="video-markers__controls">
+                <button
+                    type="button"
+                    className="video-markers__play"
+                    onClick={togglePlay}
+                    aria-label={isPlaying ? 'Pause replay' : 'Play replay'}
+                    title={isPlaying ? 'Pause' : 'Play'}
+                >
+                    {isPlaying ? <HiPause /> : <HiPlay />}
+                </button>
+                <button
+                    type="button"
+                    className="video-markers__track"
+                    onClick={seekFromPointer}
+                    aria-label="Replay progress"
+                >
+                    <span className="video-markers__segments">
+                        {items.map((seg, i) => (
+                            <span
+                                key={`${seg.type}-${i}`}
+                                className="video-markers__seg"
+                                style={{
+                                    left: `${seg.leftPct}%`,
+                                    width: `${seg.widthPct}%`,
+                                    background: seg.style.color,
+                                }}
+                                title={`${seg.style.label} • ${formatTime(seg.startSec)}-${formatTime(seg.endSec)}`}
+                            >
+                                <span className="video-markers__seg-label">{seg.style.label}</span>
+                            </span>
+                        ))}
+                    </span>
+                    <span className="video-markers__progress" style={{ width: `${progressPct}%` }} />
+                    <span className="video-markers__thumb" style={{ left: `${progressPct}%` }} />
+                </button>
+                <span className="video-markers__time">
+                    {formatTime(currentTime)} / {formatTime(duration || items.at(-1)?.endSec || 0)}
+                </span>
             </div>
-            <div className="video-markers__legend">
+            <div className="video-markers__chapters">
                 {items.map((seg, i) => (
                     <button
-                        key={`legend-${i}`}
+                        key={`chapter-${seg.type}-${i}`}
                         type="button"
-                        className="video-markers__legend-item"
+                        className="video-markers__chapter"
                         onClick={() => seekTo(seg.startSec)}
+                        title={`${seg.style.label} • ${formatTime(seg.startSec)}`}
                     >
                         <span
                             className="video-markers__legend-dot"

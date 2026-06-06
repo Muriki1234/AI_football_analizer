@@ -1344,7 +1344,7 @@ class ViewTransformer:
 # ═══════════════════════════════════════════════════════════════════════
 
 class AccurateSpeedEstimator:
-    def __init__(self, fps: float = 24.0, frame_window: int = 5, max_speed: float = 38.0):
+    def __init__(self, fps: float = 24.0, frame_window: int = 5, max_speed: float = 34.0):
         # Caller should pass the real video fps. Falling back to 24 only if the
         # metadata probe failed, but that yields systemic speed error on 25/30/60 fps
         # footage, so the call site should always specify.
@@ -1368,13 +1368,12 @@ class AccurateSpeedEstimator:
                     elapsed = (fi - prev) / self.fps
                     if elapsed == 0: continue
                     raw = (dist / elapsed) * 3.6
-                    if raw <= self.max_speed:
-                        self._history.setdefault(tid, []).append(raw)
-                        if len(self._history[tid]) > 7: self._history[tid].pop(0)
-                    smoothed = min(
-                        float(np.median(self._history[tid])) if tid in self._history else raw,
-                        self.max_speed
-                    )
+                    if raw > self.max_speed:
+                        info["speed_rejected"] = round(float(raw), 1)
+                        continue
+                    self._history.setdefault(tid, []).append(raw)
+                    if len(self._history[tid]) > 7: self._history[tid].pop(0)
+                    smoothed = float(np.median(self._history[tid]))
                     total_dist.setdefault(obj, {}).setdefault(tid, 0)
                     total_dist[obj][tid] += dist
                     info["speed"]    = smoothed

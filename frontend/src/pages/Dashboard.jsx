@@ -95,18 +95,69 @@ const StatRow = ({ icon, label, value, sub }) => (
     </div>
 );
 
-const PossessionBar = ({ team1, team2 }) => {
+const numberOrNull = (value) => {
+    if (value === null || value === undefined || value === '') return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+};
+
+const formatMetric = (value, suffix = '', decimals = 1) => {
+    const n = numberOrNull(value);
+    if (n == null) return '-';
+    return `${n.toFixed(decimals).replace(/\.0$/, '')}${suffix}`;
+};
+
+const ChartTooltip = ({ active, payload, label, suffix = '', decimals = 1 }) => {
+    if (!active || !payload?.length) return null;
+    return (
+        <div className="chart-tooltip">
+            {label ? <div className="chart-tooltip__label">{label}</div> : null}
+            {payload.map((item) => (
+                <div className="chart-tooltip__row" key={`${item.name}-${item.dataKey}`}>
+                    <span
+                        className="chart-tooltip__dot"
+                        style={{ background: item.color || item.payload?.fill || '#94a3b8' }}
+                    />
+                    <span>{item.name || item.payload?.name}</span>
+                    <strong>{formatMetric(item.value, suffix, decimals)}</strong>
+                </div>
+            ))}
+        </div>
+    );
+};
+
+const PossessionTooltip = ({ active, payload }) => {
+    if (!active || !payload?.length) return null;
+    const item = payload[0];
+    return (
+        <div className="chart-tooltip">
+            <div className="chart-tooltip__row">
+                <span
+                    className="chart-tooltip__dot"
+                    style={{ background: item.payload?.fill || '#94a3b8' }}
+                />
+                <span>{item.name}</span>
+                <strong>{formatMetric(item.value, '%')}</strong>
+            </div>
+        </div>
+    );
+};
+
+const PossessionBar = ({ team1, team2, neutral }) => {
     const t1 = Math.max(0, Math.min(100, team1 ?? 0));
     const t2 = Math.max(0, Math.min(100, team2 ?? 0));
+    const neu = Math.max(0, Math.min(100, neutral ?? Math.max(0, 100 - t1 - t2)));
     return (
         <div className="poss-bar">
             <div className="poss-bar__header">
                 <span><span className="poss-dot poss-dot--t1" /> Team 1 · {t1.toFixed(1)}%</span>
                 <span><span className="poss-dot poss-dot--t2" /> Team 2 · {t2.toFixed(1)}%</span>
+                {neu > 0 && <span><span className="poss-dot poss-dot--neutral" /> Neutral · {neu.toFixed(1)}%</span>}
             </div>
             <div className="poss-bar__track">
                 <div className="poss-bar__fill poss-bar__fill--t1" style={{ width: `${t1}%` }} />
                 <div className="poss-bar__fill poss-bar__fill--t2" style={{ width: `${t2}%` }} />
+                {neu > 0 && <div className="poss-bar__fill poss-bar__fill--neutral" style={{ width: `${neu}%` }} />}
             </div>
         </div>
     );
@@ -121,32 +172,40 @@ const DataAnalysisPanel = ({ playerSummary }) => {
 
     const t1 = Number(overall.team1_possession_pct ?? 0);
     const t2 = Number(overall.team2_possession_pct ?? 0);
+    const neutral = Number(overall.neutral_possession_pct ?? Math.max(0, 100 - t1 - t2));
     const possessionData = [
         { name: 'Team 1', value: t1, fill: '#3498db' },
         { name: 'Team 2', value: t2, fill: '#e74c3c' },
-    ];
+        ...(neutral > 0 ? [{ name: 'Neutral', value: neutral, fill: '#94a3b8' }] : []),
+    ].filter((item) => item.value > 0);
 
     const speedData = [
-        { name: 'Avg', value: Number(overall.avg_speed_kmh ?? 0), fill: '#60a5fa' },
-        { name: 'Max', value: Number(overall.max_speed_kmh ?? 0), fill: '#f59e0b' },
+        { name: 'Avg', value: numberOrNull(overall.avg_speed_kmh) ?? 0, fill: '#60a5fa' },
+        { name: 'Max', value: numberOrNull(overall.max_speed_kmh) ?? 0, fill: '#f59e0b' },
     ];
 
     const periodData = segments.map((seg, i) => ({
         name: (seg.segment_type || `Seg ${i + 1}`).replace('_', ' '),
-        distance: Number(seg.total_distance_m ?? 0),
-        avg: Number(seg.avg_speed_kmh ?? 0),
-        max: Number(seg.max_speed_kmh ?? 0),
+        distance: numberOrNull(seg.total_distance_m) ?? 0,
+        avg: numberOrNull(seg.avg_speed_kmh),
+        max: numberOrNull(seg.max_speed_kmh),
     }));
+    const speedFlag = overall.speed_reliability === 'suspect' || Number(overall.max_speed_kmh) >= 37.5;
 
     return (
         <div className="drawer__section-body">
             <div className="stat-grid">
-                <StatRow icon="⚡" label="Max Speed" value={`${overall.max_speed_kmh ?? '-'} km/h`} />
-                <StatRow icon="🏃" label="Avg Speed" value={`${overall.avg_speed_kmh ?? '-'} km/h`} />
-                <StatRow icon="📏" label="Distance" value={`${overall.total_distance_m ?? '-'} m`} />
-                <StatRow icon="⚽" label="Possession" value={`${overall.possession_seconds ?? '-'} s`} />
+                <StatRow icon="⚡" label="Max Speed" value={formatMetric(overall.max_speed_kmh, ' km/h')} sub={speedFlag ? 'verify' : null} />
+                <StatRow icon="🏃" label="Avg Speed" value={formatMetric(overall.avg_speed_kmh, ' km/h')} />
+                <StatRow icon="📏" label="Distance" value={formatMetric(overall.total_distance_m, ' m', 0)} />
+                <StatRow icon="⚽" label="Possession" value={formatMetric(overall.possession_seconds, ' s')} />
                 <StatRow icon="🔄" label="Switches" value={overall.possession_switches ?? '-'} />
             </div>
+            {speedFlag && (
+                <p className="drawer__note">
+                    Peak speed is flagged as likely tracking/camera-motion noise.
+                </p>
+            )}
 
             <h4 className="drawer__subhead">Speed (km/h)</h4>
             <div className="chart-wrap" style={{ height: 140 }}>
@@ -154,8 +213,12 @@ const DataAnalysisPanel = ({ playerSummary }) => {
                     <BarChart data={speedData} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
                         <XAxis dataKey="name" stroke="#94a3b8" fontSize={12} />
                         <YAxis stroke="#94a3b8" fontSize={11} />
-                        <Tooltip contentStyle={chartTooltipStyle} cursor={{ fill: 'rgba(255,255,255,0.04)' }} />
-                        <Bar dataKey="value" radius={[6, 6, 0, 0]} />
+                        <Tooltip content={(props) => <ChartTooltip {...props} suffix=" km/h" />} cursor={{ fill: 'rgba(255,255,255,0.04)' }} />
+                        <Bar dataKey="value" radius={[6, 6, 0, 0]}>
+                            {speedData.map((entry) => (
+                                <Cell key={entry.name} fill={entry.fill} />
+                            ))}
+                        </Bar>
                     </BarChart>
                 </ResponsiveContainer>
             </div>
@@ -177,19 +240,17 @@ const DataAnalysisPanel = ({ playerSummary }) => {
                                     <Cell key={i} fill={entry.fill} />
                                 ))}
                             </Pie>
-                            <Tooltip
-                                contentStyle={chartTooltipStyle}
-                                formatter={(v) => `${Number(v).toFixed(1)}%`}
-                            />
+                            <Tooltip content={(props) => <PossessionTooltip {...props} />} />
                         </PieChart>
                     </ResponsiveContainer>
                 </div>
                 <div className="poss-row__legend">
                     <div><span className="poss-dot poss-dot--t1" /> Team 1 <strong>{t1.toFixed(1)}%</strong></div>
                     <div><span className="poss-dot poss-dot--t2" /> Team 2 <strong>{t2.toFixed(1)}%</strong></div>
+                    {neutral > 0 && <div><span className="poss-dot poss-dot--neutral" /> Neutral <strong>{neutral.toFixed(1)}%</strong></div>}
                 </div>
             </div>
-            <PossessionBar team1={t1} team2={t2} />
+            <PossessionBar team1={t1} team2={t2} neutral={neutral} />
 
             {periodData.length > 0 && (
                 <>
@@ -199,7 +260,7 @@ const DataAnalysisPanel = ({ playerSummary }) => {
                             <BarChart data={periodData} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
                                 <XAxis dataKey="name" stroke="#94a3b8" fontSize={11} />
                                 <YAxis stroke="#94a3b8" fontSize={11} />
-                                <Tooltip contentStyle={chartTooltipStyle} cursor={{ fill: 'rgba(255,255,255,0.04)' }} />
+                                <Tooltip content={(props) => <ChartTooltip {...props} suffix=" m" decimals={0} />} cursor={{ fill: 'rgba(255,255,255,0.04)' }} />
                                 <Bar dataKey="distance" fill="#22d3ee" radius={[6, 6, 0, 0]} />
                             </BarChart>
                         </ResponsiveContainer>
@@ -212,9 +273,9 @@ const DataAnalysisPanel = ({ playerSummary }) => {
                             {periodData.map((seg, i) => (
                                 <tr key={i}>
                                     <td>{seg.name}</td>
-                                    <td>{seg.distance} m</td>
-                                    <td>{seg.avg} km/h</td>
-                                    <td>{seg.max} km/h</td>
+                                    <td>{formatMetric(seg.distance, ' m', 0)}</td>
+                                    <td>{formatMetric(seg.avg, ' km/h')}</td>
+                                    <td>{formatMetric(seg.max, ' km/h')}</td>
                                 </tr>
                             ))}
                         </tbody>
@@ -223,14 +284,6 @@ const DataAnalysisPanel = ({ playerSummary }) => {
             )}
         </div>
     );
-};
-
-const chartTooltipStyle = {
-    background: 'rgba(15, 23, 42, 0.95)',
-    border: '1px solid rgba(255, 255, 255, 0.1)',
-    borderRadius: 8,
-    fontSize: 12,
-    color: '#e2e8f0',
 };
 
 export default function Dashboard() {
@@ -593,10 +646,15 @@ export default function Dashboard() {
                                 <video
                                     ref={heroVideoRef}
                                     src={fullReplay.url}
-                                    controls
                                     autoPlay
                                     muted
                                     loop
+                                    playsInline
+                                    onClick={(event) => {
+                                        const v = event.currentTarget;
+                                        if (v.paused) v.play?.().catch(() => { });
+                                        else v.pause?.();
+                                    }}
                                     className="hero-video-card__player"
                                 />
                                 <MinimapOverlay

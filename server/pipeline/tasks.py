@@ -1426,10 +1426,43 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         raise
 
 
+_SUMMARY_MIN_SPEED_KMH = 0.5
+_SUMMARY_MAX_SPEED_KMH = 34.0
+_MATCH_SEGMENT_TYPES = {"first_half", "second_half", "match", "full_match"}
+
+
+def _clean_speed(value) -> float | None:
+    try:
+        speed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(speed):
+        return None
+    if speed < _SUMMARY_MIN_SPEED_KMH or speed > _SUMMARY_MAX_SPEED_KMH:
+        return None
+    return speed
+
+
+def _speed_fields(speeds: list[float], rejected_count: int) -> dict:
+    fields = {
+        "max_speed_kmh": None,
+        "avg_speed_kmh": None,
+        "speed_samples": len(speeds),
+        "speed_rejected_count": int(rejected_count),
+        "speed_reliability": "ok",
+    }
+    if speeds:
+        fields["max_speed_kmh"] = round(float(max(speeds)), 1)
+        fields["avg_speed_kmh"] = round(float(np.mean(speeds)), 1)
+    if rejected_count > 0 or not speeds:
+        fields["speed_reliability"] = "suspect"
+    return fields
+
+
 def _summary_for_range(tracks: dict, tracked_bboxes: dict, team_control: list,
                         start: int, end: int, fps: int) -> dict:
     """对 [start, end) 帧区间计算一份 summary（不含全局字段）"""
-    speeds, distances, has_ball_count = [], [], 0
+    speeds, distances, has_ball_count, rejected_count = [], [], 0, 0
 
     end = min(end, len(tracks["players"]))
     for i in range(start, end):
@@ -1438,7 +1471,11 @@ def _summary_for_range(tracks: dict, tracked_bboxes: dict, team_control: list,
         sx, sy, sw, sh = tracked_bboxes[i]
         matched = _find_matched_player(tracks["players"][i], (sx+sw/2, sy+sh/2))
         if matched:
-            speeds.append(matched.get("speed", 0))
+            speed = _clean_speed(matched.get("speed"))
+            if speed is not None:
+                speeds.append(speed)
+            if matched.get("speed_rejected") is not None:
+                rejected_count += 1
             distances.append(matched.get("distance", 0))
             if matched.get("has_ball"):
                 has_ball_count += 1
@@ -1447,7 +1484,8 @@ def _summary_for_range(tracks: dict, tracked_bboxes: dict, team_control: list,
     arr = np.array(sub_ctrl) if sub_ctrl else np.array([])
     t1 = int(np.sum(arr == 1)) if arr.size else 0
     t2 = int(np.sum(arr == 2)) if arr.size else 0
-    total_ctrl = t1 + t2 or 1
+    neu = int(np.sum(arr == 0)) if arr.size else 0
+    total_ctrl = t1 + t2 + neu or 1
 
     possession_switches = 0
     prev_team = 0
@@ -1463,12 +1501,12 @@ def _summary_for_range(tracks: dict, tracked_bboxes: dict, team_control: list,
         dist_delta = float(max(distances) - min(distances))
 
     return {
-        "max_speed_kmh":        round(float(max(speeds)),        1) if speeds else 0,
-        "avg_speed_kmh":        round(float(np.mean(speeds)),    1) if speeds else 0,
+        **_speed_fields(speeds, rejected_count),
         "total_distance_m":     round(dist_delta,                0),
         "possession_seconds":   round(has_ball_count / fps,      1),
         "team1_possession_pct": round(t1 / total_ctrl * 100,     1),
         "team2_possession_pct": round(t2 / total_ctrl * 100,     1),
+        "neutral_possession_pct": round(neu / total_ctrl * 100,  1),
         "possession_switches":  possession_switches,
     }
 
@@ -1483,15 +1521,15 @@ def _compute_player_summary(tracks: dict, tracked_bboxes: dict,
     """
     total_frames = len(tracks["players"])
 
-    # ── Overall：若有中场则只统计比赛帧，避免中场零速度稀释均值 ──
-    has_halftime = segments and any(s["type"] == "halftime" for s in segments)
-    if has_halftime:
+    # ── Overall：有分段时只统计真正比赛帧，避免中场/赛前/赛后稀释均值 ──
+    has_match_segments = segments and any(s["type"] in _MATCH_SEGMENT_TYPES for s in segments)
+    if has_match_segments:
         match_ranges = [(s["start_frame"], s["end_frame"])
-                        for s in segments if s["type"] != "halftime"]
+                        for s in segments if s["type"] in _MATCH_SEGMENT_TYPES]
     else:
         match_ranges = [(0, total_frames)]
 
-    speeds, distances, has_ball_count = [], [], 0
+    speeds, distances, has_ball_count, rejected_count = [], [], 0, 0
     all_sub_ctrl = []
     for rng_start, rng_end in match_ranges:
         rng_end = min(rng_end, total_frames)
@@ -1501,7 +1539,11 @@ def _compute_player_summary(tracks: dict, tracked_bboxes: dict,
             sx, sy, sw, sh = tracked_bboxes[i]
             matched = _find_matched_player(tracks["players"][i], (sx + sw / 2, sy + sh / 2))
             if matched:
-                speeds.append(matched.get("speed", 0))
+                speed = _clean_speed(matched.get("speed"))
+                if speed is not None:
+                    speeds.append(speed)
+                if matched.get("speed_rejected") is not None:
+                    rejected_count += 1
                 distances.append(matched.get("distance", 0))
                 if matched.get("has_ball"):
                     has_ball_count += 1
@@ -1511,7 +1553,8 @@ def _compute_player_summary(tracks: dict, tracked_bboxes: dict,
     arr = np.array(all_sub_ctrl) if all_sub_ctrl else np.array([])
     t1  = int(np.sum(arr == 1)) if arr.size else 0
     t2  = int(np.sum(arr == 2)) if arr.size else 0
-    total_ctrl = t1 + t2 or 1
+    neu = int(np.sum(arr == 0)) if arr.size else 0
+    total_ctrl = t1 + t2 + neu or 1
 
     possession_switches = 0
     prev_team = 0
@@ -1524,12 +1567,12 @@ def _compute_player_summary(tracks: dict, tracked_bboxes: dict,
     dist_delta = float(max(distances) - min(distances)) if distances else 0.0
 
     overall = {
-        "max_speed_kmh":        round(float(max(speeds)),        1) if speeds else 0,
-        "avg_speed_kmh":        round(float(np.mean(speeds)),    1) if speeds else 0,
+        **_speed_fields(speeds, rejected_count),
         "total_distance_m":     round(dist_delta,                0),
         "possession_seconds":   round(has_ball_count / fps,      1),
         "team1_possession_pct": round(t1 / total_ctrl * 100,     1),
         "team2_possession_pct": round(t2 / total_ctrl * 100,     1),
+        "neutral_possession_pct": round(neu / total_ctrl * 100,  1),
         "possession_switches":  possession_switches,
     }
 
@@ -1537,7 +1580,7 @@ def _compute_player_summary(tracks: dict, tracked_bboxes: dict,
     if segments:
         by_segment = []
         for seg in segments:
-            if seg["type"] == "halftime":
+            if seg["type"] not in _MATCH_SEGMENT_TYPES:
                 continue
             seg_stats = _summary_for_range(
                 tracks, tracked_bboxes, team_control,
@@ -3903,7 +3946,10 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
                 + _player_section
                 + "## 冲刺与爆发\n"
                 "依据下方统计数据里的 `sprints`，给出冲刺次数、平均/最长持续时间、"
-                "峰值速度，并指出若干次冲刺发生的时间点 (events[].time_mm_ss)。\n\n"
+                "峰值速度，并指出若干次冲刺发生的时间点 (events[].time_mm_ss)。"
+                "**绝对指令**：如果 `tracked_player.speed_reliability` 是 `suspect`，或 `sprints.count` 为 0，"
+                "你必须在报告中明确指出：'由于最高速度数据异常且未记录到持续冲刺，该峰值速度极可能是摄像机移动或追踪误差导致的噪点，不代表球员真实爆发力'。"
+                "严禁将此异常速度解释为球员具备出色的瞬间爆发力。\n\n"
                 + "## 场区分布\n"
                 "依据 `pitch_zones`（前/中/后场占比），说明被追踪球员主要活动区域，"
                 "并据此判断角色（边锋/前腰/后腰/中卫 等）。\n\n"
@@ -3911,7 +3957,8 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
                 "依据 `defensive_breakthroughs.events`（每次穿透的 mm:ss 时间），"
                 "**列出每次穿透的具体时间点**并简评战术意义；count=0 时直接说明本场未观察到突破对方防线。\n\n"
                 + "## 战术观察\n阵型特征、进攻模式、防守组织，基于画面实际观察。\n\n"
-                + "## 改进建议\n3 条具体可执行的训练/战术建议，必须引用上面任意一项具体数据 / 时间点。\n\n"
+                + "## 改进建议\n3 条具体可执行的训练/战术建议，必须引用上面任意一项具体数据 / 时间点。"
+                "注意：如果速度数据被标记为 suspect，绝对不能基于该异常的高速度提出战术建议。\n\n"
             )
 
             # ── Helper：调用 LLM 看一段视频，返回 markdown 字符串 ─────────────
@@ -4041,7 +4088,8 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
                         "结合视频和下面的统计数据，生成一份**中文 Markdown 报告**，"
                         "严格按顺序使用以下二级标题：\n\n"
                         + _final_sections
-                        + "要求：语言简练、数据引用具体、不要泛泛而谈。\n\n"
+                        + "要求：语言简练、数据引用具体、不要泛泛而谈；"
+                        "不要把可疑速度、缺失速度或 0 次冲刺包装成正面能力判断。\n\n"
                         f"## 统计数据\n```json\n{stats_json}\n```\n\n请生成报告："
                     )
                 else:
@@ -4083,7 +4131,8 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
                     "请综合所有片段笔记 + 整场统计数据，生成一份最终中文 Markdown 报告，"
                     "严格按顺序使用以下二级标题：\n\n"
                     + _final_sections
-                    + "要求：跨片段把同一战术线索串起来，数据引用具体，不复述每段流水账。\n\n"
+                    + "要求：跨片段把同一战术线索串起来，数据引用具体，不复述每段流水账；"
+                    "不要把可疑速度、缺失速度或 0 次冲刺包装成正面能力判断。\n\n"
                     f"## 整场统计数据\n```json\n{stats_json}\n```\n\n"
                     "## 各片段笔记\n\n" + "\n\n---\n\n".join(partial_reports)
                     + "\n\n请生成最终报告："
