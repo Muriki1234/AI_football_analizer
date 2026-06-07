@@ -68,9 +68,18 @@ const _storagePathFromUrl = (url) => {
     return m ? decodeURIComponent(m[1]) : null;
 };
 
+/** 判断是否是 R2 公开 URL（不需要刷新签名）。 */
+const _isR2Url = (url) => {
+    if (!url) return false;
+    const s = String(url).toLowerCase();
+    return s.includes('.r2.dev/') || s.includes('.r2.cloudflarestorage.com/');
+};
+
 /** 给一个老的（可能是 public 或过期 signed）URL 换一张新鲜的 signed URL。
- *  不是 Supabase Storage URL 就原样返回（外部 CDN、测试数据等）。 */
+ *  R2 公开 URL 或非 Supabase Storage URL 原样返回。 */
 const _refreshVideoUrl = async (storedUrl) => {
+    // R2 public URLs never expire — skip refresh entirely
+    if (_isR2Url(storedUrl)) return storedUrl;
     const path = _storagePathFromUrl(storedUrl);
     if (!path) return storedUrl;
     try {
@@ -84,18 +93,19 @@ const _refreshVideoUrl = async (storedUrl) => {
 // ── Sessions (Supabase Auth & DB) ──────────────────────────────────────────
 
 /**
- * Upload a file directly to Supabase Storage.
+ * Upload a video to Cloudflare R2 via presigned PUT URL.
  * Then creates a record in the 'sessions' table.
+ *
+ * Flow:
+ *   1. POST /api/get-upload-url → get presigned PUT URL + permanent video URL
+ *   2. PUT the file directly to R2 (no size limit from Supabase free tier)
+ *   3. Insert session row in Supabase DB with the R2 video URL
  */
-// 前端硬上限 —— uploadVideo 走 supabase.storage.upload() 直传，绕过后端 FastAPI
-// 的 _MAX_UPLOAD_BYTES 校验。这里 client-side 拦一次，给用户立即的反馈。
-// Supabase Storage 自己也有 policy 兜底（dashboard 设置 max file size），但本地
-// 拦能省一次失败的网络往返。
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024 * 1024; // 10 GB
 const ALLOWED_VIDEO_EXTS = ['.mp4', '.mov', '.m4v', '.mkv', '.webm', '.avi'];
 
 export const uploadVideo = async (file, onProgress) => {
-    // 客户端校验：大小 + 后缀。攻击者绕过校验也只能在自己的浏览器里。
+    // 客户端校验：大小 + 后缀。
     if (!file || typeof file.size !== 'number') {
         throw new Error('Invalid file');
     }
@@ -122,26 +132,44 @@ export const uploadVideo = async (file, onProgress) => {
     }
 
     const sessionId = crypto.randomUUID();
-    // 文件名只保留字母数字点横杠下划线，避免奇怪字符让后端 path 解析出错。
-    const safeName = file.name.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^[-.]+/, '');
-    const fileName = `${sessionId}/${safeName || 'video.mp4'}`;
 
-    // 1. Upload to Supabase Storage
-    const { error: uploadError } = await supabase.storage
-        .from('videos')
-        .upload(fileName, file, {
-            cacheControl: '3600',
-            upsert: false
-        });
+    // 1. Get presigned R2 upload URL from Vercel API
+    const presignRes = await authFetch('/api/get-upload-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            sessionId,
+            fileName: file.name,
+            contentType: file.type || 'video/mp4',
+        }),
+    });
+    if (!presignRes.ok) {
+        const err = await presignRes.json().catch(() => ({}));
+        throw new Error(err.error || `Failed to get upload URL (${presignRes.status})`);
+    }
+    const { uploadUrl, videoUrl } = await presignRes.json();
 
-    if (uploadError) throw uploadError;
-    if (onProgress) onProgress(100);
+    // 2. PUT the file directly to R2 with progress tracking
+    await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('PUT', uploadUrl);
+        xhr.setRequestHeader('Content-Type', file.type || 'video/mp4');
+        xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable && onProgress) {
+                onProgress(Math.round((e.loaded / e.total) * 100));
+            }
+        };
+        xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) resolve();
+            else reject(new Error(`R2 upload failed (HTTP ${xhr.status})`));
+        };
+        xhr.onerror = () => reject(new Error('Network error during R2 upload'));
+        xhr.ontimeout = () => reject(new Error('R2 upload timed out'));
+        xhr.timeout = 30 * 60 * 1000; // 30 min for large files
+        xhr.send(file);
+    });
 
-    // 7 天 signed URL 存入 DB —— 之后用户刷新页面会通过 getSession 自动
-    // 再签一份新的 1h URL，保持时刻有效。后端用 service_role 不受签名约束。
-    const videoUrl = await _createSignedUrl(fileName, SIGNED_URL_TTL_LONG);
-
-    // 2. Create session record in Database
+    // 3. Create session record in Database with R2 video URL
     const { error: dbError } = await supabase
         .from('sessions')
         .insert([{

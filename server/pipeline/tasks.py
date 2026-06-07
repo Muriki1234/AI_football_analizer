@@ -3822,32 +3822,55 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
             print(f"[AI_SUMMARY] Local video missing ({video_for_ai}); attempting fallback download from session.video_url")
             _vurl = session.get("video_url") or ""
             if _vurl:
-                from supabase import create_client as _create_client
-                _supa_url = os.environ.get("SUPABASE_URL", "")
-                _supa_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
-                if _supa_url and _supa_key:
+                _downloaded = False
+                _dest = Path(video_for_ai or (output_dir / "video.mp4"))
+                _dest.parent.mkdir(parents=True, exist_ok=True)
+
+                # Path A: R2 public URL — simple HTTP GET, no auth needed
+                _lower = _vurl.lower()
+                if '.r2.dev/' in _lower or '.r2.cloudflarestorage.com/' in _lower:
                     try:
-                        # 从 Supabase URL 抠 storage key, 用 service-role 下载
-                        from urllib.parse import urlparse as _urlparse
-                        _path = _urlparse(_vurl).path
-                        _marker = "/storage/v1/object/"
-                        _idx = _path.find(_marker)
-                        if _idx != -1:
-                            _tail = _path[_idx + len(_marker):]
-                            _parts = _tail.split("/", 2)
-                            if len(_parts) >= 3:
-                                _bucket, _key = _parts[1], _parts[2]
-                                _client = _create_client(_supa_url, _supa_key)
-                                _bytes = _client.storage.from_(_bucket).download(_key)
-                                _dest = Path(video_for_ai or
-                                              (output_dir / "video.mp4"))
-                                _dest.parent.mkdir(parents=True, exist_ok=True)
-                                _dest.write_bytes(_bytes)
-                                video_for_ai = str(_dest)
-                                print(f"[AI_SUMMARY] Fallback download OK: "
-                                      f"{len(_bytes)/(1024*1024):.1f} MB -> {_dest}")
+                        import urllib.request as _urlreq
+                        _urlreq.urlretrieve(_vurl, str(_dest))
+                        _sz = _dest.stat().st_size if _dest.exists() else 0
+                        if _sz > 1024:
+                            video_for_ai = str(_dest)
+                            _downloaded = True
+                            print(f"[AI_SUMMARY] R2 fallback download OK: "
+                                  f"{_sz/(1024*1024):.1f} MB -> {_dest}")
+                        else:
+                            print(f"[AI_SUMMARY] R2 download too small ({_sz} B), ignoring")
+                            try: _dest.unlink()
+                            except Exception: pass
                     except Exception as _de:
-                        print(f"[AI_SUMMARY] Fallback download failed: {_de!r}")
+                        print(f"[AI_SUMMARY] R2 fallback download failed: {_de!r}")
+
+                # Path B: Supabase Storage URL — parse key + use service-role
+                if not _downloaded:
+                    _supa_url = os.environ.get("SUPABASE_URL", "")
+                    _supa_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
+                    if _supa_url and _supa_key:
+                        try:
+                            from supabase import create_client as _create_client
+                            from urllib.parse import urlparse as _urlparse
+                            _path = _urlparse(_vurl).path
+                            _marker = "/storage/v1/object/"
+                            _idx = _path.find(_marker)
+                            if _idx != -1:
+                                _tail = _path[_idx + len(_marker):]
+                                _parts = _tail.split("/", 2)
+                                if len(_parts) >= 3:
+                                    _bucket, _key = _parts[1], _parts[2]
+                                    _client = _create_client(_supa_url, _supa_key)
+                                    _bytes = _client.storage.from_(_bucket).download(_key)
+                                    _dest.write_bytes(_bytes)
+                                    video_for_ai = str(_dest)
+                                    _downloaded = True
+                                    print(f"[AI_SUMMARY] Supabase fallback download OK: "
+                                          f"{len(_bytes)/(1024*1024):.1f} MB -> {_dest}")
+                        except Exception as _de:
+                            print(f"[AI_SUMMARY] Supabase fallback download failed: {_de!r}")
+
             if not video_for_ai or not Path(video_for_ai).exists():
                 raise RuntimeError(
                     f"AI summary needs the video file on disk but "

@@ -472,15 +472,31 @@ def _action_detect_frame(session_id: str, s: dict, payload: dict, sm: SessionMan
     output_dir = sm.session_output_dir(session_id)
     frame_path = output_dir / result.get("annotated_frame_path", "first_frame.jpg")
     frame_url = None
-    supa = _get_supabase()
-    if frame_path.exists() and supa is not None:
-        storage_key = f"{session_id}/first_frame.jpg"
-        with open(frame_path, "rb") as f:
-            supa.storage.from_("videos").upload(
-                storage_key, f,
-                file_options={"content-type": "image/jpeg", "upsert": "true"}
-            )
-        frame_url = supa.storage.from_("videos").get_public_url(storage_key)
+
+    if frame_path.exists():
+        # Prefer R2 upload (no size limits, same infra as video upload)
+        try:
+            from .storage.r2 import upload_to_r2
+            r2_url = upload_to_r2(frame_path, f"{session_id}/first_frame.jpg")
+            if r2_url:
+                frame_url = r2_url
+        except Exception as r2_exc:
+            log.warning("R2 frame upload failed, falling back to Supabase: %s", r2_exc)
+
+        # Fallback: Supabase Storage (for backward compat / if R2 not configured)
+        if not frame_url:
+            supa = _get_supabase()
+            if supa is not None:
+                try:
+                    storage_key = f"{session_id}/first_frame.jpg"
+                    with open(frame_path, "rb") as f:
+                        supa.storage.from_("videos").upload(
+                            storage_key, f,
+                            file_options={"content-type": "image/jpeg", "upsert": "true"}
+                        )
+                    frame_url = supa.storage.from_("videos").get_public_url(storage_key)
+                except Exception as supa_exc:
+                    log.warning("Supabase frame upload also failed: %s", supa_exc)
 
     return {
         "players": result.get("players", []),
