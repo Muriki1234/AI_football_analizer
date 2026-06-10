@@ -658,20 +658,20 @@ def run_samurai_tracking_multi(session_id: str, session: dict,
 
         n_segments = len(segs_sorted)
 
-        # 24GB GPU: run ALL segments across ALL periods in parallel.
-        # Previously periods were serialised (first half → second half) to
-        # stay within 16GB (4 procs × ~2.5GB = ~10GB per period).  On 24GB
-        # all 8 segments run simultaneously (~14-16GB total), cutting
-        # SAMURAI wall-time roughly in half (e.g. 30 min → 15 min).
-        # Hard cap at 8 concurrent workers: each SAMURAI proc uses ~2.5GB,
-        # so 8 × 2.5 = ~20GB which fits comfortably in 24GB.  Extra segments
-        # (e.g. 3 periods × 4 players = 12) queue behind the first 8 and run
-        # as slots free up — still faster than the old serial-by-period path.
-        MAX_PARALLEL = int(os.environ.get("SAMURAI_MAX_PARALLEL", "8"))
+        # Adaptive parallelism: scale with resolution.
+        # Baseline: 1080p (1920×1080 ≈ 2.07M pixels) → 8 parallel SAMURAI.
+        # Each SAMURAI proc loads full-res frames; bigger frames = more RAM.
+        # At 2880×1800 (5.18M px, ~2.5× baseline), 8 procs OOM the 46GB
+        # RunPod worker. Scale down proportionally.
+        _BASELINE_PX = 1920 * 1080  # 2.07M
+        _res_factor = max(1.0, (orig_w * orig_h) / _BASELINE_PX)
+        _env_cap = int(os.environ.get("SAMURAI_MAX_PARALLEL", "8"))
+        MAX_PARALLEL = max(2, int(_env_cap / _res_factor))
         max_workers  = min(n_segments, MAX_PARALLEL)
         all_segs = list(enumerate(segs_sorted))
         print(f"[SAMURAI-MULTI] {n_segments} segments — "
-              f"{max_workers} running in parallel (cap={MAX_PARALLEL})")
+              f"{max_workers} running in parallel (cap={MAX_PARALLEL}, "
+              f"res={orig_w}x{orig_h}, scale={_res_factor:.1f}x)")
 
         def _submit_segment(pool, i, seg):
             return pool.submit(
@@ -890,21 +890,18 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             )
 
         # ── Parallel YOLO across N segments ─────────────────────────────
-        # PARALLEL_YOLO_SEGS=4 (default) → 4 subprocesses each handle 1/4
-        # of the video. Each subprocess runs YOLO+KPT+optical flow, then
-        # results are merged. Speeds up detection from ~10min → ~3min on a
-        # 16GB+ GPU.  Set PARALLEL_YOLO_SEGS=1 to disable and fall through
-        # to the merged-streaming or legacy paths.
-        #
-        # 24GB GPU GPU contention guard：
-        #   - 单期视频 (1 period × 4 players) → 4 SAMURAI 段，跟 4 YOLO 段同时 = 8 进程，~18GB ✅
-        #   - 多期视频 (2+ periods × 4 players) → 8 SAMURAI 段，加 4 YOLO 段 = 12 进程，~24-28GB ❌ 可能 OOM
-        #
-        # 所以之前当 SAMURAI 在并发运行时把 YOLO 限到 3 段以防 OOM，
-        # 现根据您的显卡配置（RunPod GPU）改回 4 段，即 8 SAMURAI + 4 YOLO = 12 并发。
+        # Adaptive: scale segment count with video resolution.
+        # Baseline: 1080p → 4 parallel YOLO subprocesses.
+        # Each subprocess loads YOLO model + frames at full res into RAM.
+        # At 2880×1800 (~2.5× 1080p), 4 procs + 8 SAMURAI procs OOM
+        # the 46GB RunPod worker. Scale YOLO segs down proportionally.
+        _BASELINE_PX = 1920 * 1080
+        _yolo_res_factor = max(1.0, (_vid_w * _vid_h) / _BASELINE_PX)
         _samurai_concurrent = "_samurai_done_event" in session
-        _default_segs = 4
+        _default_segs = max(1, int(4 / _yolo_res_factor))
         n_yolo_segs = int(os.environ.get("PARALLEL_YOLO_SEGS", str(_default_segs)))
+        print(f"[MEM] YOLO adaptive: res={_vid_w}x{_vid_h}, "
+              f"scale={_yolo_res_factor:.1f}x, segs={n_yolo_segs}")
         parallel_ok = False
         if n_yolo_segs > 1:
             print(f"[INFO] Parallel YOLO: {n_yolo_segs} segments")
