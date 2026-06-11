@@ -343,13 +343,16 @@ def _download_video_once(url: str, dest: Path) -> None:
 _MAX_ANALYSIS_HEIGHT = 1080  # downscale anything above this
 
 
-def _maybe_downscale_to_1080p(video_path: Path) -> None:
+def _maybe_downscale_to_1080p(video_path: Path) -> bool:
     """If the video is taller than 1080p, re-encode to 1080p in-place.
 
     YOLO internally resizes to 640px, SAMURAI uses RESIZE_FACTOR=0.5,
     so anything above 1080p is wasted resolution that just eats RAM and
     slows down parallel processing.  By normalizing to ≤1080p right
     after download, we keep max parallelism (12 procs) for every video.
+
+    Returns True if video is now ≤1080p (either already was, or downscale
+    succeeded). Returns False if video is >1080p and downscale failed.
     """
     import subprocess as _sp
 
@@ -365,18 +368,22 @@ def _maybe_downscale_to_1080p(video_path: Path) -> None:
         )
         parts = probe.stdout.strip().split(",")
         if len(parts) < 2:
-            return
+            print(f"[DOWNSCALE] ⚠️  ffprobe returned unexpected output: {probe.stdout!r}",
+                  flush=True)
+            return True  # can't determine, assume ok
         w, h = int(parts[0]), int(parts[1])
     except Exception as exc:
-        log.warning("ffprobe failed, skipping downscale check: %s", exc)
-        return
+        print(f"[DOWNSCALE] ⚠️  ffprobe failed: {exc} — skipping downscale check",
+              flush=True)
+        return True  # can't determine, assume ok
 
     if h <= _MAX_ANALYSIS_HEIGHT:
-        log.info("Video is %dx%d (≤%dp), no downscale needed", w, h, _MAX_ANALYSIS_HEIGHT)
-        return
+        print(f"[DOWNSCALE] ✅ Video is {w}x{h} (≤{_MAX_ANALYSIS_HEIGHT}p), "
+              f"no downscale needed", flush=True)
+        return True
 
-    log.info("Video is %dx%d (>%dp), downscaling to %dp…",
-             w, h, _MAX_ANALYSIS_HEIGHT, _MAX_ANALYSIS_HEIGHT)
+    print(f"[DOWNSCALE] 🔄 Video is {w}x{h} (>{_MAX_ANALYSIS_HEIGHT}p), "
+          f"downscaling to {_MAX_ANALYSIS_HEIGHT}p…", flush=True)
 
     tmp_path = video_path.with_suffix(".downscaled.mp4")
     # scale filter: height=1080, width auto (divisible by 2)
@@ -384,21 +391,19 @@ def _maybe_downscale_to_1080p(video_path: Path) -> None:
 
     # Try GPU encoder first, fall back to CPU
     for encoder in ("h264_nvenc", "libx264"):
-        cmd = [
-            "ffmpeg", "-y", "-i", str(video_path),
-            "-vf", scale_filter,
-            "-c:v", encoder,
-            "-preset", "fast" if encoder == "libx264" else "p4",
-            "-crf", "18",
-            "-c:a", "copy",
-            str(tmp_path),
-        ]
-        # h264_nvenc doesn't support -crf, uses -cq instead
         if encoder == "h264_nvenc":
             cmd = [
                 "ffmpeg", "-y", "-i", str(video_path),
                 "-vf", scale_filter,
                 "-c:v", "h264_nvenc", "-preset", "p4", "-cq", "18",
+                "-c:a", "copy",
+                str(tmp_path),
+            ]
+        else:
+            cmd = [
+                "ffmpeg", "-y", "-i", str(video_path),
+                "-vf", scale_filter,
+                "-c:v", "libx264", "-preset", "fast", "-crf", "18",
                 "-c:a", "copy",
                 str(tmp_path),
             ]
@@ -410,24 +415,28 @@ def _maybe_downscale_to_1080p(video_path: Path) -> None:
                 video_path.unlink()
                 tmp_path.rename(video_path)
                 new_size = video_path.stat().st_size
-                log.info("Downscaled %dx%d → %dp: %dMB → %dMB (%s)",
-                         w, h, _MAX_ANALYSIS_HEIGHT,
-                         orig_size // (1024*1024), new_size // (1024*1024), encoder)
-                return
+                print(f"[DOWNSCALE] ✅ SUCCESS: {w}x{h} → {_MAX_ANALYSIS_HEIGHT}p, "
+                      f"{orig_size//(1024*1024)}MB → {new_size//(1024*1024)}MB "
+                      f"(encoder={encoder})", flush=True)
+                return True
             else:
-                log.warning("ffmpeg %s failed (rc=%d), trying next encoder",
-                            encoder, result.returncode)
+                stderr_tail = (result.stderr or "")[-200:]
+                print(f"[DOWNSCALE] ⚠️  {encoder} failed (rc={result.returncode}): "
+                      f"{stderr_tail}", flush=True)
                 if tmp_path.exists():
                     tmp_path.unlink()
         except Exception as exc:
-            log.warning("ffmpeg %s error: %s, trying next encoder", encoder, exc)
+            print(f"[DOWNSCALE] ⚠️  {encoder} error: {exc}", flush=True)
             if tmp_path.exists():
                 try:
                     tmp_path.unlink()
                 except Exception:
                     pass
 
-    log.warning("All encoders failed, proceeding with original %dx%d video", w, h)
+    print(f"[DOWNSCALE] ❌ FAILED: all encoders failed for {w}x{h} video. "
+          f"Analysis will proceed at original resolution with REDUCED parallelism.",
+          flush=True)
+    return False
 
 
 def _ensure_local_video(session_id: str, video_url: str, sm: SessionManager) -> str:

@@ -663,6 +663,8 @@ def run_samurai_tracking_multi(session_id: str, session: dict,
         # Each SAMURAI proc loads full-res frames; bigger frames = more RAM.
         # At 2880×1800 (5.18M px, ~2.5× baseline), 8 procs OOM the 46GB
         # RunPod worker. Scale down proportionally.
+        # Normally the 1080p downscale in handler.py ensures we always hit
+        # _res_factor=1.0; this is a safety net if downscale failed.
         _BASELINE_PX = 1920 * 1080  # 2.07M
         _res_factor = max(1.0, (orig_w * orig_h) / _BASELINE_PX)
         _env_cap = int(os.environ.get("SAMURAI_MAX_PARALLEL", "8"))
@@ -671,9 +673,17 @@ def run_samurai_tracking_multi(session_id: str, session: dict,
         MAX_PARALLEL = max(2, int(_env_cap / (_res_factor ** 0.5)))
         max_workers  = min(n_segments, MAX_PARALLEL)
         all_segs = list(enumerate(segs_sorted))
-        print(f"[SAMURAI-MULTI] {n_segments} segments — "
-              f"{max_workers} running in parallel (cap={MAX_PARALLEL}, "
-              f"res={orig_w}x{orig_h}, scale={_res_factor:.1f}x)")
+        if _res_factor > 1.05:
+            _queued = max(0, n_segments - max_workers)
+            print(f"[SAMURAI-MULTI] ⚠️  HIGH-RES SAFETY NET ACTIVE: "
+                  f"res={orig_w}x{orig_h} ({_res_factor:.1f}x baseline), "
+                  f"reduced parallel {_env_cap}→{MAX_PARALLEL}. "
+                  f"{n_segments} segments: {max_workers} parallel + {_queued} queued",
+                  flush=True)
+        else:
+            print(f"[SAMURAI-MULTI] {n_segments} segments — "
+                  f"{max_workers} running in parallel (cap={MAX_PARALLEL}, "
+                  f"res={orig_w}x{orig_h})", flush=True)
 
         def _submit_segment(pool, i, seg):
             return pool.submit(
@@ -903,8 +913,12 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         # √ scaling: less aggressive than linear, matches SAMURAI formula
         _default_segs = max(1, int(4 / (_yolo_res_factor ** 0.5)))
         n_yolo_segs = int(os.environ.get("PARALLEL_YOLO_SEGS", str(_default_segs)))
-        print(f"[MEM] YOLO adaptive: res={_vid_w}x{_vid_h}, "
-              f"scale={_yolo_res_factor:.1f}x, segs={n_yolo_segs}")
+        if _yolo_res_factor > 1.05:
+            print(f"[YOLO-PAR] ⚠️  HIGH-RES SAFETY NET: res={_vid_w}x{_vid_h} "
+                  f"({_yolo_res_factor:.1f}x baseline), segs reduced 4→{n_yolo_segs}",
+                  flush=True)
+        else:
+            print(f"[YOLO-PAR] res={_vid_w}x{_vid_h}, segs={n_yolo_segs}", flush=True)
         parallel_ok = False
         if n_yolo_segs > 1:
             print(f"[INFO] Parallel YOLO: {n_yolo_segs} segments")
