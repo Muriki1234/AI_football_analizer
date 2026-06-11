@@ -666,7 +666,9 @@ def run_samurai_tracking_multi(session_id: str, session: dict,
         _BASELINE_PX = 1920 * 1080  # 2.07M
         _res_factor = max(1.0, (orig_w * orig_h) / _BASELINE_PX)
         _env_cap = int(os.environ.get("SAMURAI_MAX_PARALLEL", "8"))
-        MAX_PARALLEL = max(2, int(_env_cap / _res_factor))
+        # √ scaling: SAMURAI internally resizes by 0.5×, so linear scaling
+        # overcorrects. sqrt gives 8→5 at 2880×1800 instead of 8→3.
+        MAX_PARALLEL = max(2, int(_env_cap / (_res_factor ** 0.5)))
         max_workers  = min(n_segments, MAX_PARALLEL)
         all_segs = list(enumerate(segs_sorted))
         print(f"[SAMURAI-MULTI] {n_segments} segments — "
@@ -898,7 +900,8 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         _BASELINE_PX = 1920 * 1080
         _yolo_res_factor = max(1.0, (_vid_w * _vid_h) / _BASELINE_PX)
         _samurai_concurrent = "_samurai_done_event" in session
-        _default_segs = max(1, int(4 / _yolo_res_factor))
+        # √ scaling: less aggressive than linear, matches SAMURAI formula
+        _default_segs = max(1, int(4 / (_yolo_res_factor ** 0.5)))
         n_yolo_segs = int(os.environ.get("PARALLEL_YOLO_SEGS", str(_default_segs)))
         print(f"[MEM] YOLO adaptive: res={_vid_w}x{_vid_h}, "
               f"scale={_yolo_res_factor:.1f}x, segs={n_yolo_segs}")
