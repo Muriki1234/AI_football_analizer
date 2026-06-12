@@ -334,7 +334,11 @@ def _run_samurai_segment(seg_idx: int, session_id: str, output_dir: Path,
         "-vf", vf, "-vsync", "0", "-q:v", "2",
         str(frames_dir / "%05d.jpg"),
     ]
-    res = subprocess.run(cmd_ext, capture_output=True, text=True)
+    try:
+        res = subprocess.run(cmd_ext, capture_output=True, text=True, timeout=180)
+    except subprocess.TimeoutExpired as _te:
+        raise RuntimeError(f"[seg {seg_idx}] ffmpeg extract timed out after 180s") from _te
+
     if res.returncode != 0:
         raise RuntimeError(
             f"[seg {seg_idx}] ffmpeg extract failed: {res.stderr[-1000:]}"
