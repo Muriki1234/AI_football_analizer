@@ -389,13 +389,15 @@ def _maybe_downscale_to_1080p(video_path: Path) -> bool:
     # scale filter: height=1080, width auto (divisible by 2)
     scale_filter = f"scale=-2:{_MAX_ANALYSIS_HEIGHT}"
 
-    # Try GPU encoder first, fall back to CPU
+    # Try GPU encoder first, fall back to CPU.
+    # CQ/CRF=28: analysis-only video doesn't need high visual quality
+    # (YOLO resizes to 640px, SAMURAI to 0.5×). CQ=18 caused 136→369MB blowup.
     for encoder in ("h264_nvenc", "libx264"):
         if encoder == "h264_nvenc":
             cmd = [
                 "ffmpeg", "-y", "-i", str(video_path),
                 "-vf", scale_filter,
-                "-c:v", "h264_nvenc", "-preset", "p4", "-cq", "18",
+                "-c:v", "h264_nvenc", "-preset", "p4", "-cq", "28",
                 "-c:a", "copy",
                 str(tmp_path),
             ]
@@ -403,7 +405,7 @@ def _maybe_downscale_to_1080p(video_path: Path) -> bool:
             cmd = [
                 "ffmpeg", "-y", "-i", str(video_path),
                 "-vf", scale_filter,
-                "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
                 "-c:a", "copy",
                 str(tmp_path),
             ]
@@ -732,6 +734,44 @@ def _action_track(session_id: str, s: dict, payload: dict, sm: SessionManager) -
                                periods=match_periods)
     if not segments:
         return {"error": "Provide either bbox+frame or segments=[{frame,bbox},...]"}
+
+    # ── Rescale bbox coordinates if video was downscaled ──────────────
+    # The frontend (Roboflow path) sends bbox coords in the ORIGINAL video
+    # resolution (e.g. 2880×1800 from the R2 public URL). But the backend
+    # auto-downscales to 1080p after download (e.g. 1728×1080). Without
+    # rescaling, SAMURAI's clamp logic crushes the bbox to ~2px → all fail.
+    if video_path_local:
+        try:
+            import cv2 as _cv2r
+            _cap = _cv2r.VideoCapture(video_path_local)
+            _actual_w = int(_cap.get(_cv2r.CAP_PROP_FRAME_WIDTH)) or 0
+            _actual_h = int(_cap.get(_cv2r.CAP_PROP_FRAME_HEIGHT)) or 0
+            _cap.release()
+            if _actual_w > 0 and _actual_h > 0:
+                # Check if any bbox exceeds the actual video dims → needs rescale
+                _max_x2 = max((seg["bbox"]["x"] + seg["bbox"]["w"]) for seg in segments)
+                _max_y2 = max((seg["bbox"]["y"] + seg["bbox"]["h"]) for seg in segments)
+                if _max_x2 > _actual_w * 1.05 or _max_y2 > _actual_h * 1.05:
+                    _sx = _actual_w / _max_x2 if _max_x2 > _actual_w else 1.0
+                    _sy = _actual_h / _max_y2 if _max_y2 > _actual_h else 1.0
+                    # Use uniform scale to preserve aspect ratio
+                    _scale = min(_sx, _sy)
+                    print(f"[BBOX-RESCALE] Bboxes exceed video dims "
+                          f"(bbox_max={_max_x2:.0f}x{_max_y2:.0f}, "
+                          f"video={_actual_w}x{_actual_h}). "
+                          f"Rescaling all bboxes by {_scale:.4f}", flush=True)
+                    for seg in segments:
+                        seg["bbox"]["x"] *= _scale
+                        seg["bbox"]["y"] *= _scale
+                        seg["bbox"]["w"] *= _scale
+                        seg["bbox"]["h"] *= _scale
+                else:
+                    print(f"[BBOX-RESCALE] ✅ Bboxes fit within video "
+                          f"({_actual_w}x{_actual_h}), no rescale needed",
+                          flush=True)
+        except Exception as _e:
+            print(f"[BBOX-RESCALE] ⚠️  Could not verify bbox coords: {_e}",
+                  flush=True)
 
     # Enforce minimum period length (point E).
     # Real match videos (total ≥ 300s × 25fps = 7500 frames) keep the 30s minimum
