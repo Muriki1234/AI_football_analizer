@@ -395,10 +395,13 @@ def _maybe_downscale_to_1080p(video_path: Path) -> bool:
     for encoder in ("h264_nvenc", "libx264"):
         if encoder == "h264_nvenc":
             cmd = [
-                "ffmpeg", "-y", "-i", str(video_path),
-                "-vf", scale_filter,
-                "-c:v", "h264_nvenc", "-preset", "p4", "-cq", "28",
-                "-c:a", "copy",
+                "ffmpeg", "-y", 
+                "-hwaccel", "cuda", 
+                "-hwaccel_output_format", "cuda",
+                "-i", str(video_path),
+                "-vf", f"scale_cuda=-2:{_MAX_ANALYSIS_HEIGHT}",
+                "-c:v", "h264_nvenc", "-preset", "p1", "-cq", "28",
+                "-an", # Drop audio for analysis
                 str(tmp_path),
             ]
         else:
@@ -406,7 +409,7 @@ def _maybe_downscale_to_1080p(video_path: Path) -> bool:
                 "ffmpeg", "-y", "-i", str(video_path),
                 "-vf", scale_filter,
                 "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
-                "-c:a", "copy",
+                "-an", # Drop audio
                 str(tmp_path),
             ]
         try:
