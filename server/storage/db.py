@@ -1,6 +1,7 @@
 import os
 import json
 import uuid
+import threading
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,7 @@ class SessionManager:
             raise ValueError("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set in environment")
 
         self.client: Client = create_client(url, key)
+        self._lock = threading.Lock()
 
     # ── Session CRUD ─────────────────────────────────────────────────────────
 
@@ -107,62 +109,63 @@ class SessionManager:
         if error is not None:
             updates_payload["error"] = error
 
-        # Fast path: one RPC call. Tries the SQL function added in
-        # 20260525_jsonb_merge_rpc.sql. If the deployed database doesn't have
-        # it, remember that for this worker so every progress update doesn't
-        # emit a noisy Supabase 404 before falling back.
-        if not getattr(self.__class__, "_rpc_unavailable", False):
-            try:
-                self.client.rpc(
-                    "merge_session_extra",
-                    {
-                        "p_session_id": session_id,
-                        "p_extra":      json.loads(json.dumps(extra_payload, default=str)),
-                        "p_updates":    updates_payload,
-                    },
-                ).execute()
-                return
-            except Exception as rpc_exc:
-                # Likely the RPC wasn't deployed yet — fall through to legacy path.
-                # Log once per cold start, not every call.
-                self.__class__._rpc_unavailable = True
-                if not getattr(self.__class__, "_rpc_warned", False):
-                    print(f"[db] merge_session_extra RPC unavailable ({rpc_exc!r}); "
-                          f"falling back to two-step update")
-                    self.__class__._rpc_warned = True
+        with self._lock:
+            # Fast path: one RPC call. Tries the SQL function added in
+            # 20260525_jsonb_merge_rpc.sql. If the deployed database doesn't have
+            # it, remember that for this worker so every progress update doesn't
+            # emit a noisy Supabase 404 before falling back.
+            if not getattr(self.__class__, "_rpc_unavailable", False):
+                try:
+                    self.client.rpc(
+                        "merge_session_extra",
+                        {
+                            "p_session_id": session_id,
+                            "p_extra":      json.loads(json.dumps(extra_payload, default=str)),
+                            "p_updates":    updates_payload,
+                        },
+                    ).execute()
+                    return
+                except Exception as rpc_exc:
+                    # Likely the RPC wasn't deployed yet — fall through to legacy path.
+                    # Log once per cold start, not every call.
+                    self.__class__._rpc_unavailable = True
+                    if not getattr(self.__class__, "_rpc_warned", False):
+                        print(f"[db] merge_session_extra RPC unavailable ({rpc_exc!r}); "
+                              f"falling back to two-step update")
+                        self.__class__._rpc_warned = True
 
-        # ── Legacy fallback: SELECT-merge-UPDATE ─────────────────────────
-        legacy_updates: dict[str, Any] = {
-            "status": status,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-        if progress is not None:
-            legacy_updates["progress"] = progress
-        if stage is not None:
-            legacy_updates["stage"] = stage
-        if error is not None:
-            legacy_updates["error"] = error
+            # ── Legacy fallback: SELECT-merge-UPDATE ─────────────────────────
+            legacy_updates: dict[str, Any] = {
+                "status": status,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if progress is not None:
+                legacy_updates["progress"] = progress
+            if stage is not None:
+                legacy_updates["stage"] = stage
+            if error is not None:
+                legacy_updates["error"] = error
 
-        if extra:
-            current = self.client.table("sessions").select("extra").eq("id", session_id).execute()
-            current_extra = {}
-            if current.data:
-                raw = current.data[0].get("extra")
-                if raw:
-                    if isinstance(raw, str):
-                        try:
-                            current_extra = json.loads(raw)
-                        except (json.JSONDecodeError, TypeError):
-                            current_extra = {}
-                    elif isinstance(raw, dict):
-                        current_extra = raw
-            current_extra.update({k: v for k, v in extra.items() if v is not None})
-            for k, v in extra.items():
-                if v is None and k in current_extra:
-                    current_extra[k] = None
-            legacy_updates["extra"] = json.dumps(current_extra, default=str)
+            if extra:
+                current = self.client.table("sessions").select("extra").eq("id", session_id).execute()
+                current_extra = {}
+                if current.data:
+                    raw = current.data[0].get("extra")
+                    if raw:
+                        if isinstance(raw, str):
+                            try:
+                                current_extra = json.loads(raw)
+                            except (json.JSONDecodeError, TypeError):
+                                current_extra = {}
+                        elif isinstance(raw, dict):
+                            current_extra = raw
+                current_extra.update({k: v for k, v in extra.items() if v is not None})
+                for k, v in extra.items():
+                    if v is None and k in current_extra:
+                        current_extra[k] = None
+                legacy_updates["extra"] = json.dumps(current_extra, default=str)
 
-        self.client.table("sessions").update(legacy_updates).eq("id", session_id).execute()
+            self.client.table("sessions").update(legacy_updates).eq("id", session_id).execute()
 
     # ── Task CRUD ─────────────────────────────────────────────────────────────
 
@@ -200,7 +203,8 @@ class SessionManager:
             # and the Supabase table schema.
 
         if mapped:
-            self.client.table("tasks").update(mapped).eq("id", task_id).execute()
+            with self._lock:
+                self.client.table("tasks").update(mapped).eq("id", task_id).execute()
 
     def clear_tasks(self, session_id: str) -> None:
         """Delete all tasks for a session (used before re-analysis)."""
