@@ -236,13 +236,14 @@ export default function MultiSegmentConfig() {
             period_idx: s.periodIdx ?? 0,
             img_dims: s.imgDims,
         }));
+        const s_nav = await getSession(sessionId).catch(() => ({}));
         navigate(`/dashboard?sessionId=${encodeURIComponent(sessionId)}`, {
             state: {
                 sessionId,
                 videoId: sessionId,
                 multiSegments: payload,
                 matchPeriodsFrames: periodsFrames,
-                clientFps: session.video_fps || 25,
+                clientFps: s_nav.video_fps || 25,
             },
         });
     };
