@@ -27,7 +27,7 @@ function sessionStage(s) {
     if (['tracking', 'samurai_multi_pending', 'samurai_done', 'analyzing', 'queued'].includes(st))
         return { label: 'Analyzing…', cls: 'badge--progress', tier: 'in-progress' };
     if (['tracking_failed', 'analysis_failed', 'failed'].includes(st))
-        return { label: 'Failed', cls: 'badge--failed', tier: 'done' };
+        return { label: 'Failed', cls: 'badge--failed', tier: 'needs-pick' };
     // status === 'uploaded'
     const hasPeriods = Array.isArray(s.match_periods_sec) && s.match_periods_sec.length > 0;
     if (hasPeriods)

@@ -234,6 +234,7 @@ export default function MultiSegmentConfig() {
             frame: s.frame,
             bbox: s.selectedBbox,
             period_idx: s.periodIdx ?? 0,
+            img_dims: s.imgDims,
         }));
         navigate(`/dashboard?sessionId=${encodeURIComponent(sessionId)}`, {
             state: {
@@ -241,6 +242,7 @@ export default function MultiSegmentConfig() {
                 videoId: sessionId,
                 multiSegments: payload,
                 matchPeriodsFrames: periodsFrames,
+                clientFps: session.video_fps || 25,
             },
         });
     };

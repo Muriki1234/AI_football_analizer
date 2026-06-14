@@ -1318,11 +1318,12 @@ class ViewTransformer:
                 for win in [WINDOW_SLOW, WINDOW_FAST]:
                     mask = (windows == win)
                     if not mask.any(): continue
-                    # Apply uniform rolling window to the whole series, then keep only masked frames
-                    r_mx = df["mx"].rolling(win, min_periods=1, center=True).mean()
-                    r_my = df["my"].rolling(win, min_periods=1, center=True).mean()
-                    r_x  = df["x"].rolling(min(win, SPEED_SMOOTH_WINDOW), min_periods=1, center=True).mean()
-                    r_y  = df["y"].rolling(min(win, SPEED_SMOOTH_WINDOW), min_periods=1, center=True).mean()
+                    # Apply uniform rolling window to the whole series, then keep only masked frames.
+                    # Use a median filter first to reject wild homography outliers (spikes), then mean to smooth.
+                    r_mx = df["mx"].rolling(win, min_periods=1, center=True).median().rolling(win, min_periods=1, center=True).mean()
+                    r_my = df["my"].rolling(win, min_periods=1, center=True).median().rolling(win, min_periods=1, center=True).mean()
+                    r_x  = df["x"].rolling(min(win, SPEED_SMOOTH_WINDOW), min_periods=1, center=True).median().rolling(min(win, SPEED_SMOOTH_WINDOW), min_periods=1, center=True).mean()
+                    r_y  = df["y"].rolling(min(win, SPEED_SMOOTH_WINDOW), min_periods=1, center=True).median().rolling(min(win, SPEED_SMOOTH_WINDOW), min_periods=1, center=True).mean()
                     mx_smooth = mx_smooth.where(~mask, r_mx)
                     my_smooth = my_smooth.where(~mask, r_my)
                     x_smooth  = x_smooth.where(~mask, r_x)

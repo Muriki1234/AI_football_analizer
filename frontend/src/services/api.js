@@ -256,7 +256,7 @@ export const startAnalysis = async (sessionId) => {
  * Start SAMURAI player tracking via Vercel → RunPod.
  * Called from Dashboard when user selects a player bbox on the Configuration page.
  */
-export const startTracking = async (sessionId, bbox, frame = 0) => {
+export const startTracking = async (sessionId, bbox, frame = 0, imgDims = null) => {
     const session = await getSession(sessionId);
 
     const res = await authFetch('/api/analyze', {
@@ -268,7 +268,8 @@ export const startTracking = async (sessionId, bbox, frame = 0) => {
                 session_id: sessionId,
                 video_url: session.video_url,
                 bbox: bbox,
-                frame: frame
+                frame: frame,
+                img_dims: imgDims
             }
         })
     });
@@ -320,7 +321,7 @@ export const saveMatchPeriods = async (sessionId, periods) => {
     if (error) throw error;
 };
 
-export const startTrackingMulti = async (sessionId, segments, matchPeriodsFrames = null) => {
+export const startTrackingMulti = async (sessionId, segments, matchPeriodsFrames = null, clientFps = null) => {
     const session = await getSession(sessionId);
 
     // matchPeriodsFrames: [{startFrame, endFrame}, ...] — sent to backend so
@@ -330,6 +331,7 @@ export const startTrackingMulti = async (sessionId, segments, matchPeriodsFrames
         session_id: sessionId,
         video_url: session.video_url,
         segments,
+        client_fps: clientFps,
     };
     if (matchPeriodsFrames && matchPeriodsFrames.length > 0) {
         input.match_periods = matchPeriodsFrames.map((p) => [

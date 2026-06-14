@@ -340,58 +340,59 @@ def _download_video_once(url: str, dest: Path) -> None:
     _stream_download(url, dest)
 
 
-_MAX_ANALYSIS_HEIGHT = 1080  # downscale anything above this
+_MAX_ANALYSIS_HEIGHT = 720  # downscale anything above this to 720p to accelerate YOLO/SAMURAI
 
 
-def _maybe_downscale_to_1080p(video_path: Path) -> bool:
-    """If the video is taller than 1080p, re-encode to 1080p in-place.
+def _maybe_normalize_video(video_path: Path) -> bool:
+    """If the video is taller than 1080p or >30fps, re-encode in-place.
 
-    YOLO internally resizes to 640px, SAMURAI uses RESIZE_FACTOR=0.5,
-    so anything above 1080p is wasted resolution that just eats RAM and
-    slows down parallel processing.  By normalizing to ≤1080p right
-    after download, we keep max parallelism (12 procs) for every video.
-
-    Returns True if video is now ≤1080p (either already was, or downscale
-    succeeded). Returns False if video is >1080p and downscale failed.
+    YOLO internally resizes to 640px, SAMURAI uses RESIZE_FACTOR=0.5.
+    >1080p or >30fps is wasted data that just eats RAM and slows down parallel processing.
     """
     import subprocess as _sp
 
     try:
-        # Probe resolution with ffprobe
+        # Probe resolution and fps with ffprobe
         probe = _sp.run(
             ["ffprobe", "-v", "error",
              "-select_streams", "v:0",
-             "-show_entries", "stream=width,height",
+             "-show_entries", "stream=width,height,r_frame_rate",
              "-of", "csv=p=0",
              str(video_path)],
             capture_output=True, text=True, timeout=30,
         )
         parts = probe.stdout.strip().split(",")
-        if len(parts) < 2:
-            print(f"[DOWNSCALE] ⚠️  ffprobe returned unexpected output: {probe.stdout!r}",
-                  flush=True)
+        if len(parts) < 3:
+            print(f"[NORMALIZE] ⚠️  ffprobe returned unexpected output: {probe.stdout!r}", flush=True)
             return True  # can't determine, assume ok
         w, h = int(parts[0]), int(parts[1])
+        fps_str = parts[2]
+        fps_num, fps_den = fps_str.split("/") if "/" in fps_str else (fps_str, "1")
+        fps = float(fps_num) / float(fps_den) if float(fps_den) > 0 else 30.0
     except Exception as exc:
-        print(f"[DOWNSCALE] ⚠️  ffprobe failed: {exc} — skipping downscale check",
-              flush=True)
+        print(f"[NORMALIZE] ⚠️  ffprobe failed: {exc} — skipping normalization check", flush=True)
         return True  # can't determine, assume ok
 
-    if h <= _MAX_ANALYSIS_HEIGHT:
-        print(f"[DOWNSCALE] ✅ Video is {w}x{h} (≤{_MAX_ANALYSIS_HEIGHT}p), "
-              f"no downscale needed", flush=True)
+    needs_downscale = h > _MAX_ANALYSIS_HEIGHT
+    needs_decimate = fps > 31.0  # Allow some margin for 30.03, 30.0, etc.
+
+    if not needs_downscale and not needs_decimate:
+        print(f"[NORMALIZE] ✅ Video is {w}x{h} @ {fps:.1f}fps, no normalization needed", flush=True)
         return True
 
-    print(f"[DOWNSCALE] 🔄 Video is {w}x{h} (>{_MAX_ANALYSIS_HEIGHT}p), "
-          f"downscaling to {_MAX_ANALYSIS_HEIGHT}p…", flush=True)
+    print(f"[NORMALIZE] 🔄 Video is {w}x{h} @ {fps:.1f}fps, normalizing to "
+          f"{min(h, _MAX_ANALYSIS_HEIGHT)}p @ {min(fps, 30.0):.1f}fps…", flush=True)
 
-    tmp_path = video_path.with_suffix(".downscaled.mp4")
-    # scale filter: height=1080, width auto (divisible by 2)
-    scale_filter = f"scale=-2:{_MAX_ANALYSIS_HEIGHT}"
+    tmp_path = video_path.with_suffix(".normalized.mp4")
+    
+    # Scale filter only if needed
+    scale_cuda = f"-vf scale_cuda=-2:{_MAX_ANALYSIS_HEIGHT}" if needs_downscale else ""
+    scale_cpu = f"-vf scale=-2:{_MAX_ANALYSIS_HEIGHT}" if needs_downscale else ""
+    
+    # Framerate filter
+    fps_arg = ["-r", "30"] if needs_decimate else []
 
     # Try GPU encoder first, fall back to CPU.
-    # CQ/CRF=28: analysis-only video doesn't need high visual quality
-    # (YOLO resizes to 640px, SAMURAI to 0.5×). CQ=18 caused 136→369MB blowup.
     for encoder in ("h264_nvenc", "libx264"):
         if encoder == "h264_nvenc":
             cmd = [
@@ -399,35 +400,31 @@ def _maybe_downscale_to_1080p(video_path: Path) -> bool:
                 "-hwaccel", "cuda", 
                 "-hwaccel_output_format", "cuda",
                 "-i", str(video_path),
-                "-vf", f"scale_cuda=-2:{_MAX_ANALYSIS_HEIGHT}",
-                "-c:v", "h264_nvenc", "-preset", "p1", "-cq", "28",
-                "-an", # Drop audio for analysis
-                str(tmp_path),
             ]
+            if scale_cuda:
+                cmd.extend(["-vf", f"scale_cuda=-2:{_MAX_ANALYSIS_HEIGHT}"])
+            cmd.extend(fps_arg)
+            cmd.extend(["-c:v", "h264_nvenc", "-preset", "p1", "-cq", "28", "-an", str(tmp_path)])
         else:
-            cmd = [
-                "ffmpeg", "-y", "-i", str(video_path),
-                "-vf", scale_filter,
-                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
-                "-an", # Drop audio
-                str(tmp_path),
-            ]
+            cmd = ["ffmpeg", "-y", "-i", str(video_path)]
+            if scale_cpu:
+                cmd.extend(["-vf", f"scale=-2:{_MAX_ANALYSIS_HEIGHT}"])
+            cmd.extend(fps_arg)
+            cmd.extend(["-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-an", str(tmp_path)])
+            
         try:
             result = _sp.run(cmd, capture_output=True, text=True, timeout=600)
             if result.returncode == 0 and tmp_path.exists() and tmp_path.stat().st_size > 1024:
-                # Replace original with downscaled version
                 orig_size = video_path.stat().st_size
                 video_path.unlink()
                 tmp_path.rename(video_path)
                 new_size = video_path.stat().st_size
-                print(f"[DOWNSCALE] ✅ SUCCESS: {w}x{h} → {_MAX_ANALYSIS_HEIGHT}p, "
-                      f"{orig_size//(1024*1024)}MB → {new_size//(1024*1024)}MB "
-                      f"(encoder={encoder})", flush=True)
+                print(f"[NORMALIZE] ✅ SUCCESS: {w}x{h} @ {fps:.1f}fps → {min(h, _MAX_ANALYSIS_HEIGHT)}p @ {min(fps, 30.0):.1f}fps, "
+                      f"{orig_size//(1024*1024)}MB → {new_size//(1024*1024)}MB (encoder={encoder})", flush=True)
                 return True
             else:
                 stderr_tail = (result.stderr or "")[-200:]
-                print(f"[DOWNSCALE] ⚠️  {encoder} failed (rc={result.returncode}): "
-                      f"{stderr_tail}", flush=True)
+                print(f"[NORMALIZE] ⚠️  {encoder} failed (rc={result.returncode}): {stderr_tail}", flush=True)
                 if tmp_path.exists():
                     tmp_path.unlink()
         except Exception as exc:
@@ -470,9 +467,9 @@ def _ensure_local_video(session_id: str, video_url: str, sm: SessionManager) -> 
     _download_video(video_url, local_path)
     log.info("Downloaded %d MB", local_path.stat().st_size // (1024 * 1024))
 
-    # Auto-downscale to 1080p to keep RAM usage predictable and
-    # parallelism at maximum (12 procs). No-op if already ≤1080p.
-    _maybe_downscale_to_1080p(local_path)
+    # Auto-downscale to 1080p and decimate to 30fps to keep RAM usage predictable
+    # and parallelism at maximum (12 procs). No-op if already ≤1080p and ≤30fps.
+    _maybe_normalize_video(local_path)
 
     # 不要无脑把 status 设成 "uploaded" — 那会把已经 analysis_done 的
     # session 拖回 pick-player 页面。读当前 status 再回写同一个值（实际上
@@ -614,20 +611,22 @@ def _action_detect_frame(session_id: str, s: dict, payload: dict, sm: SessionMan
     }
 
 
-def _parse_match_periods(payload: dict, total_frames_hint: int) -> list[tuple[int, int]]:
+def _parse_match_periods(payload: dict, total_frames_hint: int, client_fps: float = None, actual_fps: float = 25.0) -> list[tuple[int, int]]:
     """
     Read match_periods from payload. Format from frontend:
       [[startFrame, endFrame], ...]  (sorted, non-overlapping)
     Defaults to a single full-video period if missing/empty.
     """
+    scale_ratio = actual_fps / client_fps if client_fps and client_fps > 0 else 1.0
+
     raw = payload.get("match_periods")
     if not raw:
         return [(0, total_frames_hint)]
     out: list[tuple[int, int]] = []
     for p in raw:
         if isinstance(p, (list, tuple)) and len(p) >= 2:
-            s = max(0, int(p[0]))
-            e = min(total_frames_hint, int(p[1]))
+            s = max(0, int(round(int(p[0]) * scale_ratio)))
+            e = min(total_frames_hint, int(round(int(p[1]) * scale_ratio)))
             if e > s + 1:
                 out.append((s, e))
     if not out:
@@ -637,7 +636,8 @@ def _parse_match_periods(payload: dict, total_frames_hint: int) -> list[tuple[in
 
 
 def _parse_segments(payload: dict, total_frames_hint: int = 1500,
-                    periods: list[tuple[int, int]] | None = None) -> list[dict]:
+                    periods: list[tuple[int, int]] | None = None,
+                    client_fps: float = None, actual_fps: float = 25.0) -> list[dict]:
     """
     Normalize either:
       - single bbox (legacy): payload["bbox"] = {x1,y1,x2,y2} or [...]
@@ -649,6 +649,8 @@ def _parse_segments(payload: dict, total_frames_hint: int = 1500,
     period — without this, the last seg in period 1 would span across
     a skipped halftime gap into period 2.
     """
+    scale_ratio = actual_fps / client_fps if client_fps and client_fps > 0 else 1.0
+
     segments_in = payload.get("segments")
     if segments_in:
         out = []
@@ -663,10 +665,13 @@ def _parse_segments(payload: dict, total_frames_hint: int = 1500,
                 x1, y1, x2, y2 = [float(v) for v in bb]
             else:
                 continue
+            
+            scaled_frame = max(0, min(total_frames_hint - 1, int(round(int(seg.get("frame", 0)) * scale_ratio))))
             out.append({
-                "start_frame": int(seg.get("frame", 0)),
+                "start_frame": scaled_frame,
                 "period_idx":  int(seg.get("period_idx", 0)),
                 "bbox": {"x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1},
+                "img_dims": seg.get("img_dims"),
             })
         out.sort(key=lambda s_: s_["start_frame"])
 
@@ -720,21 +725,26 @@ def _action_track(session_id: str, s: dict, payload: dict, sm: SessionManager) -
 
     # Try to probe total_frames so we can default the last segment's end_frame.
     total_frames_hint = 1500
+    actual_fps = 25.0
     video_path_local = s.get("video_path") or ""
     if video_path_local:
         try:
             import cv2 as _cv2  # noqa: WPS433 (local import for cold-start speed)
             cap = _cv2.VideoCapture(video_path_local)
             t = int(cap.get(_cv2.CAP_PROP_FRAME_COUNT))
+            f = float(cap.get(_cv2.CAP_PROP_FPS))
             cap.release()
             if t > 0:
                 total_frames_hint = t
+            if f > 0:
+                actual_fps = f
         except Exception:
             pass
 
-    match_periods = _parse_match_periods(payload, total_frames_hint)
-    segments = _parse_segments(payload, total_frames_hint=total_frames_hint,
-                               periods=match_periods)
+    client_fps = payload.get("client_fps")
+
+    match_periods = _parse_match_periods(payload, total_frames_hint, client_fps=client_fps, actual_fps=actual_fps)
+    segments = _parse_segments(payload, total_frames_hint=total_frames_hint, periods=match_periods, client_fps=client_fps, actual_fps=actual_fps)
     if not segments:
         return {"error": "Provide either bbox+frame or segments=[{frame,bbox},...]"}
 
@@ -751,23 +761,31 @@ def _action_track(session_id: str, s: dict, payload: dict, sm: SessionManager) -
             _actual_h = int(_cap.get(_cv2r.CAP_PROP_FRAME_HEIGHT)) or 0
             _cap.release()
             if _actual_w > 0 and _actual_h > 0:
-                # Check if any bbox exceeds the actual video dims → needs rescale
-                _max_x2 = max((seg["bbox"]["x"] + seg["bbox"]["w"]) for seg in segments)
-                _max_y2 = max((seg["bbox"]["y"] + seg["bbox"]["h"]) for seg in segments)
-                if _max_x2 > _actual_w * 1.05 or _max_y2 > _actual_h * 1.05:
-                    _sx = _actual_w / _max_x2 if _max_x2 > _actual_w else 1.0
-                    _sy = _actual_h / _max_y2 if _max_y2 > _actual_h else 1.0
-                    # Use uniform scale to preserve aspect ratio
-                    _scale = min(_sx, _sy)
-                    print(f"[BBOX-RESCALE] Bboxes exceed video dims "
-                          f"(bbox_max={_max_x2:.0f}x{_max_y2:.0f}, "
-                          f"video={_actual_w}x{_actual_h}). "
-                          f"Rescaling all bboxes by {_scale:.4f}", flush=True)
+                # Check if any bbox exceeds the actual video dims OR if img_dims were provided
+                _needs_rescale = False
+                for seg in segments:
+                    img_dims = seg.get("img_dims")
+                    if img_dims and img_dims.get("width") and img_dims.get("height"):
+                        _img_w = float(img_dims["width"])
+                        if abs(_img_w - _actual_w) > 5:
+                            _needs_rescale = True
+                            break
+
+                if _needs_rescale:
+                    print(f"[BBOX-RESCALE] Rescaling bboxes for actual video dims ({_actual_w}x{_actual_h})", flush=True)
                     for seg in segments:
-                        seg["bbox"]["x"] *= _scale
-                        seg["bbox"]["y"] *= _scale
-                        seg["bbox"]["w"] *= _scale
-                        seg["bbox"]["h"] *= _scale
+                        _scale = 1.0
+                        img_dims = seg.get("img_dims")
+                        if img_dims and img_dims.get("width") and img_dims.get("height"):
+                            _img_w = float(img_dims["width"])
+                            _img_h = float(img_dims["height"])
+                            _scale = min(_actual_w / _img_w, _actual_h / _img_h)
+                            seg["bbox"]["x"] *= _scale
+                            seg["bbox"]["y"] *= _scale
+                            seg["bbox"]["w"] *= _scale
+                            seg["bbox"]["h"] *= _scale
+                        else:
+                            print(f"[BBOX-RESCALE] ⚠️  Missing img_dims for segment {seg.get('start_frame')}, cannot rescale!", flush=True)
                 else:
                     print(f"[BBOX-RESCALE] ✅ Bboxes fit within video "
                           f"({_actual_w}x{_actual_h}), no rescale needed",

@@ -384,12 +384,14 @@ export default function Dashboard() {
                         frame: seg.frame,
                         bbox: seg.bbox,
                         period_idx: seg.period_idx ?? 0,
+                        img_dims: seg.img_dims,
                     }));
-                    await startTrackingMulti(sessionId, segments, matchPeriodsFrames);
+                    await startTrackingMulti(sessionId, segments, matchPeriodsFrames, location.state?.clientFps);
                     toast.success(`Tracking across ${segments.length} segments in parallel…`);
                 } else if (selectedBbox && Array.isArray(selectedBbox) && selectedBbox.length === 4) {
                     const [x1, y1, x2, y2] = selectedBbox;
-                    await startTracking(sessionId, { x1, y1, x2, y2 }, 0);
+                    const imgDims = location.state?.imgDims || null;
+                    await startTracking(sessionId, { x1, y1, x2, y2 }, 0, imgDims);
                     if (playerName) toast.success(`Tracking ${playerName}…`);
                 } else if (startWithoutSelection) {
                     await startAnalysis(sessionId);

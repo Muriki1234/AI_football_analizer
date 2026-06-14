@@ -657,7 +657,10 @@ def run_samurai_tracking_multi(session_id: str, session: dict,
         _require_file(sam2_model_path, "SAM2 checkpoint")
         samurai_root = str(Path(samurai_script).resolve().parents[1])
 
-        RESIZE_FACTOR = 0.5
+        # SAMURAI internal resize. For 1080p, 0.5x gives 540p which is fine.
+        # But if the video is already 720p, 0.5x gives 360p which is too blurry
+        # for SAM2 to track small players. So we only resize if > 720p.
+        RESIZE_FACTOR = 1.0 if orig_h <= 720 else 0.5
         SKIP_STEP = 10
 
         n_segments = len(segs_sorted)
@@ -915,7 +918,9 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         _yolo_res_factor = max(1.0, (_vid_w * _vid_h) / _BASELINE_PX)
         _samurai_concurrent = "_samurai_done_event" in session
         # √ scaling: less aggressive than linear, matches SAMURAI formula
-        _default_segs = max(1, int(4 / (_yolo_res_factor ** 0.5)))
+        # Since we now downscale to 720p, we have 2x more RAM overhead available,
+        # so we can push baseline parallelism to 8 YOLO procs instead of 4.
+        _default_segs = max(1, int(8 / (_yolo_res_factor ** 0.5)))
         n_yolo_segs = int(os.environ.get("PARALLEL_YOLO_SEGS", str(_default_segs)))
         if _yolo_res_factor > 1.05:
             print(f"[YOLO-PAR] ⚠️  HIGH-RES SAFETY NET: res={_vid_w}x{_vid_h} "
@@ -1486,7 +1491,7 @@ def _summary_for_range(tracks: dict, tracked_bboxes: dict, team_control: list,
         if i not in tracked_bboxes:
             continue
         sx, sy, sw, sh = tracked_bboxes[i]
-        matched = _find_matched_player(tracks["players"][i], (sx+sw/2, sy+sh/2))
+        matched = _find_matched_player(tracks["players"][i], (sx, sy, sw, sh))
         if matched:
             speed = _clean_speed(matched.get("speed"))
             if speed is not None:
@@ -1554,7 +1559,7 @@ def _compute_player_summary(tracks: dict, tracked_bboxes: dict,
             if i not in tracked_bboxes:
                 continue
             sx, sy, sw, sh = tracked_bboxes[i]
-            matched = _find_matched_player(tracks["players"][i], (sx + sw / 2, sy + sh / 2))
+            matched = _find_matched_player(tracks["players"][i], (sx, sy, sw, sh))
             if matched:
                 speed = _clean_speed(matched.get("speed"))
                 if speed is not None:
@@ -1697,7 +1702,7 @@ def _export_position_jsons(session_id: str, tracks: dict, tracked_bboxes: dict,
         # Tracked player position (for heatmap) — only on heatmap-stride frames
         if emit_heatmap and i in tracked_bboxes:
             sx, sy, sw, sh = tracked_bboxes[i]
-            matched = _find_matched_player(frame_players or {}, (sx + sw / 2, sy + sh / 2))
+            matched = _find_matched_player(frame_players or {}, (sx, sy, sw, sh))
             if matched:
                 mm = matched.get("position_minimap")
                 tr = matched.get("position_transformed")
@@ -1723,7 +1728,7 @@ def _export_position_jsons(session_id: str, tracks: dict, tracked_bboxes: dict,
             if i in tracked_bboxes:
                 sx, sy, sw, sh = tracked_bboxes[i]
                 matched = _find_matched_player(
-                    frame_players or {}, (sx + sw / 2, sy + sh / 2)
+                    frame_players or {}, (sx, sy, sw, sh)
                 )
                 if matched:
                     # Identify the pid whose info object is the matched one
@@ -2200,7 +2205,8 @@ def _render_minimap_frame_worker(args):
 # ── 3e. 全景图合并回放 (Full Replay) ──────────────────────────────────
 
 # Replay rendering tunables. Adjust if RunPod gives you a different CPU count.
-REPLAY_WORKERS = min(4, max(1, (os.cpu_count() or 4)))
+# We cap at 8 because consumer NVIDIA GPUs limit concurrent NVENC sessions to 8.
+REPLAY_WORKERS = min(8, max(1, (os.cpu_count() or 4)))
 # Downscale anything taller than this before encoding (Plan C). 0 disables.
 REPLAY_MAX_HEIGHT = 1080
 # Below this frame count we skip the multi-process overhead and use the
@@ -2233,10 +2239,10 @@ def _h264_encode_args() -> list[str]:
     if _NVENC_AVAILABLE:
         return [
             "-c:v", "h264_nvenc",
-            "-preset", "p4",   # p1..p7 = fastest..slowest; p4 = balanced
+            "-preset", "p1",   # p1 = fastest (hardware encoder is incredibly fast at p1)
             "-tune", "hq",
             "-rc", "vbr",
-            "-cq", "23",       # constant quality target (≈ libx264 crf 23)
+            "-cq", "25",       # constant quality target
             "-b:v", "0",       # let -cq drive bitrate
             "-pix_fmt", "yuv420p",
         ]
@@ -2686,7 +2692,7 @@ def _render_single_frame_worker_full(args):
             samurai_center = (sx + sw/2, sy + sh/2)
             samurai_bbox_xyxy = [sx, sy, sx+sw, sy+sh]
 
-            min_dist = 100
+            min_dist = max(150.0, max(sw, sh) * 0.8)
             for pid, info in tracks['players'][i].items():
                 if not info or 'bbox' not in info: continue
                 y_bbox = info['bbox']
@@ -3502,7 +3508,7 @@ def _render_gemini_video(video_path: str, bboxes_dict: dict,
             "-f", "rawvideo", "-vcodec", "rawvideo",
             "-s", f"{w}x{h}", "-pix_fmt", "bgr24",
             "-r", str(out_fps), "-i", "pipe:0",
-            "-vcodec", "libx264", "-pix_fmt", "yuv420p", "-crf", "22",
+            *_h264_encode_args(),
             "-movflags", "+faststart",   # moov -> 文件头，Gemini 分析和浏览器预览都更快
             str(output_path),
         ]
@@ -4268,9 +4274,11 @@ def _load_cache(session: dict) -> dict:
         return _TRACKS_CACHE[cache_path]
 
 
-def _find_matched_player(player_frame: dict, target_center: tuple,
-                          max_dist: float = 150):
+def _find_matched_player(player_frame: dict, samurai_bbox: tuple):
     """在 YOLO 追踪结果中找最接近 SAMURAI 中心点的球员"""
+    sx, sy, sw, sh = samurai_bbox
+    target_center = (sx + sw/2, sy + sh/2)
+    max_dist = max(150.0, max(sw, sh) * 0.8)
     best_dist, best_info = max_dist, None
     for info in player_frame.values():
         if not info or "bbox" not in info:
