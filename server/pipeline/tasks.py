@@ -2330,41 +2330,41 @@ def _render_chunk_to_mp4(args):
         str(output_path),
     ]
 
-    cap = _video_capture(video_path)
-    if start > 0:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, start)
+    with _video_capture(video_path) as cap:
+        if start > 0:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start)
 
-    proc = sp_local.Popen(ffmpeg_cmd, stdin=sp_local.PIPE,
-                           stdout=sp_local.DEVNULL, stderr=sp_local.DEVNULL)
-    rendered_frames = 0
-    skipped_frames = 0
-    try:
-        for i in range(start, end):
-            ret, frame = cap.read()
-            if not ret:
-                frame = np.zeros((h, w, 3), dtype=np.uint8)
-            # Skip non-match frames cheaply: still decode (cv2 doesn't expose
-            # frame skipping that's faster than read), but don't render/write.
-            # Output mp4 ends up containing only valid-period frames.
-            if not _in_period(i):
-                skipped_frames += 1
-                continue
-            rargs = (i, frame, tracks, tracked_bboxes, team_control,
-                     team_assigner, tracker_obj, config, hex_t1, hex_t2)
-            _, rendered = _render_single_frame_worker_full(rargs)
-            if do_resize:
-                rendered = cv2.resize(rendered, (out_w, out_h), interpolation=cv2.INTER_AREA)
-            try:
-                proc.stdin.write(rendered.tobytes())
-                rendered_frames += 1
-            except BrokenPipeError:
-                break
-    finally:
-        cap.release()
-        if proc.stdin:
-            try: proc.stdin.close()
-            except Exception: pass
-        proc.wait()
+        proc = sp_local.Popen(ffmpeg_cmd, stdin=sp_local.PIPE,
+                               stdout=sp_local.DEVNULL, stderr=sp_local.DEVNULL)
+        rendered_frames = 0
+        skipped_frames = 0
+        try:
+            for i in range(start, end):
+                ret, frame = cap.read()
+                if not ret:
+                    frame = np.zeros((h, w, 3), dtype=np.uint8)
+                # Skip non-match frames cheaply
+                if not _in_period(i):
+                    skipped_frames += 1
+                    continue
+
+                rargs = (i, frame, tracks, tracked_bboxes, team_control,
+                         team_assigner, tracker_obj, config, hex_t1, hex_t2)
+                _, rendered = _render_single_frame_worker_full(rargs)
+                
+                if do_resize:
+                    rendered = cv2.resize(rendered, (out_w, out_h), interpolation=cv2.INTER_AREA)
+                
+                try:
+                    proc.stdin.write(rendered.tobytes())
+                    rendered_frames += 1
+                except BrokenPipeError:
+                    break
+        finally:
+            if proc.stdin:
+                try: proc.stdin.close()
+                except Exception: pass
+            proc.wait()
 
     return {
         "start": start,
@@ -4459,5 +4459,5 @@ def run_hls_replay(session_id: str, session: dict, task_id: str, sm: SessionMana
             pct = int(10 + 90 * len(completed_segments) / total_segments)
             sm.update_task(session_id, task_id, progress=pct)
 
-    _finish_task(sm, session_id, task_id, output_path=output_dir / "playlist.m3u8")
+    _finish_task(sm, session_id, task_id, file_path=output_dir / "playlist.m3u8")
 
