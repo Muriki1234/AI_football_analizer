@@ -4330,6 +4330,7 @@ def _log_error(name: str, session_id: str, exc: Exception):
 
 def _generate_m3u8(output_dir: Path, session_id: str, sm: SessionManager, total_segments: int, completed_segments: dict, fps: float, segment_frames: int):
     from ..storage.r2 import upload_to_r2
+    import math
     
     m3u8_path = output_dir / "playlist.m3u8"
     lines = [
@@ -4358,6 +4359,7 @@ def _generate_m3u8(output_dir: Path, session_id: str, sm: SessionManager, total_
 
 
 def run_hls_replay(session_id: str, session: dict, task_id: str, sm: SessionManager):
+    import math
     import heapq
     import time
     from concurrent.futures import ProcessPoolExecutor, FIRST_COMPLETED, wait
