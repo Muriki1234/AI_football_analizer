@@ -7,17 +7,16 @@ import { analyzeFrame, getSession } from '../services/api';
 import StepNav from '../components/StepNav';
 import './Configuration.css';
 
-// Auto segment count per period. 4 is the sweet spot on 24GB GPUs:
-//   1 period  × 4 = 4 picks total
-//   2 periods × 4 = 8 picks (e.g. first + second half)
-//   N periods × 4 = N*4 picks  (SAMURAI cap=8 means more queue up)
+// Auto segment count per period. 5 is the sweet spot for 10-parallel SAMURAI:
+//   1 period  × 5 = 5 picks total
+//   2 periods × 5 = 10 picks (e.g. first + second half)
+//   N periods × 5 = N*5 picks  (SAMURAI cap=10)
 //
 // 之前阈值是 20s — 30秒视频拆 2 段 (15s each) 反而每段只给 1 segment，用户
 // 加了 break 后预期 4→8 结果变 1→2，反直觉。降到 5s：
 //   - 5秒以下：1 segment（SAMURAI 在 100帧内开 4 进程并行 overhead 大于收益）
-//   - 5秒以上：4 segments
-// 30 秒视频 / 2 period × 15s = 各 4 segments = 8 picks，符合预期。
-const SEGS_PER_PERIOD = 4;
+//   - 5秒以上：5 segments
+const SEGS_PER_PERIOD = 5;
 const MIN_PERIOD_FOR_MULTI_SEG = 5;   // 秒
 function segCountForPeriod(periodSec) {
     if (!Number.isFinite(periodSec) || periodSec < MIN_PERIOD_FOR_MULTI_SEG) return 1;

@@ -674,9 +674,9 @@ def run_samurai_tracking_multi(session_id: str, session: dict,
         # _res_factor=1.0; this is a safety net if downscale failed.
         _BASELINE_PX = 1920 * 1080  # 2.07M
         _res_factor = max(1.0, (orig_w * orig_h) / _BASELINE_PX)
-        _env_cap = int(os.environ.get("SAMURAI_MAX_PARALLEL", "8"))
+        _env_cap = int(os.environ.get("SAMURAI_MAX_PARALLEL", "10"))
         # √ scaling: SAMURAI internally resizes by 0.5×, so linear scaling
-        # overcorrects. sqrt gives 8→5 at 2880×1800 instead of 8→3.
+        # overcorrects. sqrt gives 10→6 at 2880×1800 instead of 10→4.
         MAX_PARALLEL = max(2, int(_env_cap / (_res_factor ** 0.5)))
         max_workers  = min(n_segments, MAX_PARALLEL)
         all_segs = list(enumerate(segs_sorted))
@@ -919,12 +919,12 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         _samurai_concurrent = "_samurai_done_event" in session
         # √ scaling: less aggressive than linear, matches SAMURAI formula
         # Since we now downscale to 720p, we have 2x more RAM overhead available,
-        # so we can push baseline parallelism to 8 YOLO procs instead of 4.
-        _default_segs = max(1, int(8 / (_yolo_res_factor ** 0.5)))
+        # so we can push baseline parallelism to 6 YOLO procs (balanced with 10 SAMURAI).
+        _default_segs = max(1, int(6 / (_yolo_res_factor ** 0.5)))
         n_yolo_segs = int(os.environ.get("PARALLEL_YOLO_SEGS", str(_default_segs)))
         if _yolo_res_factor > 1.05:
             print(f"[YOLO-PAR] ⚠️  HIGH-RES SAFETY NET: res={_vid_w}x{_vid_h} "
-                  f"({_yolo_res_factor:.1f}x baseline), segs reduced 4→{n_yolo_segs}",
+                  f"({_yolo_res_factor:.1f}x baseline), segs reduced 6→{n_yolo_segs}",
                   flush=True)
         else:
             print(f"[YOLO-PAR] res={_vid_w}x{_vid_h}, segs={n_yolo_segs}", flush=True)
