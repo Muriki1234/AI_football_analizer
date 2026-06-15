@@ -314,6 +314,7 @@ export default function Dashboard() {
     const [drawerOpen, setDrawerOpen] = useState(false);
     const [minimapOn, setMinimapOn] = useState(false);
     const [aiGenerating, setAiGenerating] = useState(false);
+    const [isVideoBuffering, setIsVideoBuffering] = useState(false);
 
     const analysisKicked = useRef(false);
     const summaryFetched = useRef(false);
@@ -554,6 +555,9 @@ export default function Dashboard() {
             updateSessionPriority(sessionId, segmentIdx).catch(console.error);
         };
 
+        const handleWaiting = () => setIsVideoBuffering(true);
+        const handlePlaying = () => setIsVideoBuffering(false);
+
         if (Hls.isSupported()) {
             hls = new Hls({
                 autoStartLoad: true,
@@ -567,15 +571,21 @@ export default function Dashboard() {
             hls.attachMedia(video);
             
             video.addEventListener('seeking', handleSeek);
+            video.addEventListener('waiting', handleWaiting);
+            video.addEventListener('playing', handlePlaying);
         } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
             // Safari fallback
             video.src = fullReplay.url;
             video.addEventListener('seeking', handleSeek);
+            video.addEventListener('waiting', handleWaiting);
+            video.addEventListener('playing', handlePlaying);
         }
 
         return () => {
             if (hls) hls.destroy();
             video.removeEventListener('seeking', handleSeek);
+            video.removeEventListener('waiting', handleWaiting);
+            video.removeEventListener('playing', handlePlaying);
         };
     }, [fullReplay.url, sessionId]);
 
@@ -700,6 +710,12 @@ export default function Dashboard() {
                                     }}
                                     className="hero-video-card__player"
                                 />
+                                {isVideoBuffering && (
+                                    <div className="hero-video-card__buffering-overlay">
+                                        <div className="feature-card__spinner" style={{ width: 48, height: 48, borderTopColor: '#60a5fa' }} />
+                                        <p>Rendering / Buffering...</p>
+                                    </div>
+                                )}
                                 <MinimapOverlay
                                     dataUrl={minimapDataUrl}
                                     videoRef={heroVideoRef}
