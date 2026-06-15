@@ -4379,7 +4379,8 @@ def run_hls_replay(session_id: str, session: dict, task_id: str, sm: SessionMana
         h = int(session.get("video_height") or cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
     output_dir = sm.session_output_dir(session_id)
-    n_workers = REPLAY_WORKERS
+    # Limit to 3 to prevent NVENC session limits or VRAM exhaustion on GPU
+    n_workers = min(3, REPLAY_WORKERS)
 
     segment_frames = int(fps * 5.0)
     total_segments = math.ceil(total_frames / segment_frames)
@@ -4456,7 +4457,18 @@ def run_hls_replay(session_id: str, session: dict, task_id: str, sm: SessionMana
                     except: pass
                     
                 except Exception as e:
-                    print(f"Failed to render segment {seg_idx}: {e}")
+                    import traceback
+                    from ..storage.db import SessionManager  # Just for typing, we already have sm
+                    err_str = traceback.format_exc()
+                    print(f"Failed to render segment {seg_idx}:\n{err_str}")
+                    
+                    if "BrokenProcessPool" in str(type(e)):
+                        print("CRITICAL: Process pool broke! Aborting replay.")
+                        sm.update_task(session_id, task_id, status="failed", error="Worker process crashed (OOM/Segfault)")
+                        return
+                    
+                    sm.update_task(session_id, task_id, status="failed", error=str(e))
+                    return
 
             pct = int(10 + 90 * len(completed_segments) / total_segments)
             sm.update_task(session_id, task_id, progress=pct)
