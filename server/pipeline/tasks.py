@@ -4338,18 +4338,15 @@ def _generate_m3u8(output_dir: Path, session_id: str, sm: SessionManager, total_
         "#EXT-X-VERSION:3",
         f"#EXT-X-TARGETDURATION:{math.ceil(segment_frames / fps)}",
         "#EXT-X-MEDIA-SEQUENCE:0",
-        "#EXT-X-PLAYLIST-TYPE:EVENT"
+        "#EXT-X-PLAYLIST-TYPE:VOD"
     ]
     
     segment_duration = segment_frames / fps
     for i in range(total_segments):
-        if i in completed_segments:
-            ts_url = completed_segments[i]
-            lines.append(f"#EXTINF:{segment_duration:.3f},")
-            lines.append(ts_url)
+        lines.append(f"#EXTINF:{segment_duration:.3f},")
+        lines.append(f"chunk_{i:03d}.ts")
     
-    if len(completed_segments) == total_segments:
-        lines.append("#EXT-X-ENDLIST")
+    lines.append("#EXT-X-ENDLIST")
         
     with open(m3u8_path, "w") as f:
         f.write("\n".join(lines) + "\n")
@@ -4451,7 +4448,6 @@ def run_hls_replay(session_id: str, session: dict, task_id: str, sm: SessionMana
                         ts_url = f"chunk_{seg_idx:03d}.ts"
                         
                     completed_segments[seg_idx] = ts_url
-                    _generate_m3u8(output_dir, session_id, sm, total_segments, completed_segments, fps, segment_frames)
                         
                     try: ts_path.unlink()
                     except: pass

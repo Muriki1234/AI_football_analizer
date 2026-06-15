@@ -558,7 +558,10 @@ export default function Dashboard() {
             hls = new Hls({
                 autoStartLoad: true,
                 startPosition: -1,
-                debug: false
+                debug: false,
+                fragLoadingMaxRetry: 100,
+                fragLoadingRetryDelay: 1000,
+                manifestLoadingMaxRetry: 10
             });
             hls.loadSource(fullReplay.url);
             hls.attachMedia(video);
