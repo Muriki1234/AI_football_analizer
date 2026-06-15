@@ -60,6 +60,10 @@ def upload_to_r2(local_path: Path, remote_key: str) -> str | None:
             content_type = "image/jpeg"
         elif local_path.suffix == ".json":
             content_type = "application/json"
+        elif local_path.suffix == ".ts":
+            content_type = "video/MP2T"
+        elif local_path.suffix == ".m3u8":
+            content_type = "application/x-mpegURL"
         elif local_path.suffix == ".pkl":
             content_type = "application/octet-stream"
             

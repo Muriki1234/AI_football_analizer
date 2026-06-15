@@ -646,14 +646,17 @@ class Tracker:
         return frame
 
     def draw_team_ball_control(self, frame, frame_num, team_ball_control, team_colors):
-        overlay = frame.copy()
         # 比例坐标，适应任意分辨率（之前硬编码 1080p 的 1350/1900，4K 或 720p 会偏）
         h, w = frame.shape[:2]
         x1, y1 = int(w * 0.70), int(h * 0.79)
         x2, y2 = int(w * 0.99), int(h * 0.90)
-        cv2.rectangle(overlay, (x1, y1), (x2, y2), (255,255,255), -1)
+        
+        # Optimize: only copy and blend the Region of Interest (ROI) instead of full frame
+        roi = frame[y1:y2, x1:x2]
+        overlay = roi.copy()
+        cv2.rectangle(overlay, (0, 0), (x2 - x1, y2 - y1), (255, 255, 255), -1)
         alpha = 0.4
-        cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+        cv2.addWeighted(overlay, alpha, roi, 1 - alpha, 0, roi)
         team_ball_control_till_frame = team_ball_control[:frame_num+1]
         team_1_num_frames = team_ball_control_till_frame[team_ball_control_till_frame==1].shape[0]
         team_2_num_frames = team_ball_control_till_frame[team_ball_control_till_frame==2].shape[0]

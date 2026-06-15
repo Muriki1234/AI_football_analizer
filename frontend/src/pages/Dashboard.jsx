@@ -23,7 +23,9 @@ import {
     listTasks,
     artifactUrl,
     subscribeSession,
+    updateSessionPriority
 } from '../services/api';
+import Hls from 'hls.js';
 import { absUrl, API_KEY } from '../services/config';
 import StepNav from '../components/StepNav';
 import VideoTimelineMarkers from '../components/VideoTimelineMarkers';
@@ -538,6 +540,42 @@ export default function Dashboard() {
         };
     }, [drawerOpen]);
 
+    // HLS.js streaming support with priority segment tracking
+    useEffect(() => {
+        if (!fullReplay.url || !fullReplay.url.endsWith('.m3u8') || !heroVideoRef.current) {
+            return;
+        }
+
+        const video = heroVideoRef.current;
+        let hls;
+
+        const handleSeek = () => {
+            const segmentIdx = Math.floor(video.currentTime / 5.0);
+            updateSessionPriority(sessionId, segmentIdx).catch(console.error);
+        };
+
+        if (Hls.isSupported()) {
+            hls = new Hls({
+                autoStartLoad: true,
+                startPosition: -1,
+                debug: false
+            });
+            hls.loadSource(fullReplay.url);
+            hls.attachMedia(video);
+            
+            video.addEventListener('seeking', handleSeek);
+        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+            // Safari fallback
+            video.src = fullReplay.url;
+            video.addEventListener('seeking', handleSeek);
+        }
+
+        return () => {
+            if (hls) hls.destroy();
+            video.removeEventListener('seeking', handleSeek);
+        };
+    }, [fullReplay.url, sessionId]);
+
     const handleNewPlayer = () => {
         if (!sessionId) return;
         if (isAnalyzing) {
@@ -643,11 +681,11 @@ export default function Dashboard() {
                     </div>
 
                     <div className="hero-video-card__body">
-                        {fullReplay.status === 'done' && fullReplay.url ? (
+                        {(fullReplay.status === 'done' || fullReplay.status === 'generating') && fullReplay.url ? (
                             <div className="hero-video-card__player-wrap">
                                 <video
                                     ref={heroVideoRef}
-                                    src={fullReplay.url}
+                                    src={!fullReplay.url.endsWith('.m3u8') ? fullReplay.url : undefined}
                                     autoPlay
                                     muted
                                     loop

@@ -2206,7 +2206,7 @@ def _render_minimap_frame_worker(args):
 
 # Replay rendering tunables. Adjust if RunPod gives you a different CPU count.
 # We cap at 8 because consumer NVIDIA GPUs limit concurrent NVENC sessions to 8.
-REPLAY_WORKERS = min(8, max(1, (os.cpu_count() or 4)))
+REPLAY_WORKERS = int(os.environ.get("REPLAY_WORKERS", min(8, max(1, (os.cpu_count() or 4)))))
 # Downscale anything taller than this before encoding (Plan C). 0 disables.
 REPLAY_MAX_HEIGHT = 1080
 # Below this frame count we skip the multi-process overhead and use the
@@ -2330,7 +2330,7 @@ def _render_chunk_to_mp4(args):
         str(output_path),
     ]
 
-    cap = cv2.VideoCapture(video_path)
+    cap = _video_capture(video_path)
     if start > 0:
         cap.set(cv2.CAP_PROP_POS_FRAMES, start)
 
@@ -2683,7 +2683,6 @@ def _render_single_frame_worker_full(args):
     """单帧全景渲"""
     i, frame, tracks, tracked_bboxes, team_control, team_assigner, tracker, config, hex_t1, hex_t2 = args
     if frame is None: return i, frame
-    frame = frame.copy()
     
     try:
         current_matched_yolo_id = None
@@ -4328,3 +4327,135 @@ def _finish_task(sm: SessionManager, session_id: str, task_id: str,
 def _log_error(name: str, session_id: str, exc: Exception):
     print(f"[ERROR] {name} | session={session_id}")
     print(traceback.format_exc())
+
+def _generate_m3u8(output_dir: Path, session_id: str, sm: SessionManager, total_segments: int, completed_segments: dict, fps: float, segment_frames: int):
+    from ..storage.r2 import upload_to_r2
+    
+    m3u8_path = output_dir / "playlist.m3u8"
+    lines = [
+        "#EXTM3U",
+        "#EXT-X-VERSION:3",
+        f"#EXT-X-TARGETDURATION:{math.ceil(segment_frames / fps)}",
+        "#EXT-X-MEDIA-SEQUENCE:0",
+        "#EXT-X-PLAYLIST-TYPE:EVENT"
+    ]
+    
+    segment_duration = segment_frames / fps
+    for i in range(total_segments):
+        if i in completed_segments:
+            ts_url = completed_segments[i]
+            lines.append(f"#EXTINF:{segment_duration:.3f},")
+            lines.append(ts_url)
+    
+    if len(completed_segments) == total_segments:
+        lines.append("#EXT-X-ENDLIST")
+        
+    with open(m3u8_path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+        
+    remote_key = f"{session_id}/playlist.m3u8"
+    return upload_to_r2(m3u8_path, remote_key)
+
+
+def run_hls_replay(session_id: str, session: dict, task_id: str, sm: SessionManager):
+    import heapq
+    import time
+    from concurrent.futures import ProcessPoolExecutor, FIRST_COMPLETED, wait
+    from ..storage.r2 import upload_to_r2
+    
+    sm.update_task(session_id, task_id, status="running", progress=5)
+
+    data = _load_cache(session)
+    tracks, tracked_bboxes = data["tracks"], data["tracked_bboxes"]
+    hex_t1 = data["team_colors_hex"].get(1, "#3498db")
+    hex_t2 = data["team_colors_hex"].get(2, "#e74c3c")
+    total_frames = len(tracks["players"])
+    fps = float(session.get("video_fps") or 25.0)
+
+    with _video_capture(session["video_path"]) as cap:
+        w = int(session.get("video_width") or cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(session.get("video_height") or cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    output_dir = sm.session_output_dir(session_id)
+    n_workers = REPLAY_WORKERS
+
+    segment_frames = int(fps * 5.0)
+    total_segments = math.ceil(total_frames / segment_frames)
+
+    unassigned = [(i, i) for i in range(total_segments)]
+    heapq.heapify(unassigned)
+    
+    in_progress = {}
+    completed_segments = {}
+    
+    # Initialize the playlist on R2 so frontend can start polling
+    m3u8_url = _generate_m3u8(output_dir, session_id, sm, total_segments, completed_segments, fps, segment_frames)
+    
+    # Update the UI to show the player immediately
+    sm.update_status(session_id, "analysis_done", full_replay_url=m3u8_url)
+
+    yolo_path = get_yolo_model_path()
+    tracks_cache_path = session.get("tracks_cache_path") or str(output_dir / "tracks.pkl")
+    match_periods = (
+        [tuple(p) for p in session.get("match_periods_frames", [])]
+        if session.get("match_periods_frames") else None
+    )
+
+    with ProcessPoolExecutor(max_workers=n_workers) as pool:
+        while unassigned or in_progress:
+            # Check for priority updates every loop iteration
+            current_session = sm.get_session(session_id) or {}
+            p_seg = current_session.get("priority_segment")
+            if p_seg is not None and p_seg < total_segments:
+                for idx, (p, s) in enumerate(unassigned):
+                    if s == p_seg:
+                        # Elevate priority drastically
+                        unassigned[idx] = (-1000 - p_seg, s)
+                        heapq.heapify(unassigned)
+                        break
+
+            # Fill the pool
+            while len(in_progress) < n_workers and unassigned:
+                _, seg_idx = heapq.heappop(unassigned)
+                start = seg_idx * segment_frames
+                end = min(start + segment_frames, total_frames)
+                ts_path = output_dir / f"chunk_{seg_idx:03d}.ts"
+                args = (
+                    start, end, session["video_path"], tracks_cache_path,
+                    hex_t1, hex_t2, fps, w, h,
+                    yolo_path, str(ts_path), REPLAY_MAX_HEIGHT,
+                    match_periods,
+                )
+                fut = pool.submit(_render_chunk_to_mp4, args)
+                in_progress[fut] = seg_idx
+
+            if not in_progress:
+                break
+                
+            done, not_done = wait(in_progress.keys(), timeout=1.0, return_when=FIRST_COMPLETED)
+            
+            for fut in done:
+                seg_idx = in_progress.pop(fut)
+                try:
+                    r = fut.result()
+                    if r.get("rc", 0) != 0:
+                        raise RuntimeError(f"TS render failed: {r}")
+                        
+                    ts_path = Path(r["path"])
+                    remote_key = f"{session_id}/chunk_{seg_idx:03d}.ts"
+                    ts_url = upload_to_r2(ts_path, remote_key)
+                    if ts_url:
+                        completed_segments[seg_idx] = ts_url
+                        _generate_m3u8(output_dir, session_id, sm, total_segments, completed_segments, fps, segment_frames)
+                        
+                    try: ts_path.unlink()
+                    except: pass
+                    
+                except Exception as e:
+                    print(f"Failed to render segment {seg_idx}: {e}")
+
+            pct = int(10 + 90 * len(completed_segments) / total_segments)
+            sm.update_task(session_id, task_id, progress=pct)
+
+    _finish_task(sm, session_id, task_id, output_path=output_dir / "playlist.m3u8")
+
