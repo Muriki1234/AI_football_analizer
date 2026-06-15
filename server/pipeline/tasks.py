@@ -2268,6 +2268,8 @@ def _render_chunk_to_mp4(args):
     """
     import subprocess as sp_local
     import pickle as pkl_local
+    import cv2
+    cv2.setNumThreads(1)
 
     # match_periods is a list of (start_frame, end_frame) tuples — frames
     # falling outside ANY period are dropped from the rendered mp4 (e.g.
@@ -2299,7 +2301,7 @@ def _render_chunk_to_mp4(args):
     tracked_bboxes = data["tracked_bboxes"]
     team_control = data["team_control"]
 
-    tracker_obj = Tracker(yolo_path)
+    tracker_obj = Tracker(None)
     team_assigner = TeamAssigner()
     team_assigner.team_colors = {
         1: np.array([int(hex_t1[5:7], 16), int(hex_t1[3:5], 16), int(hex_t1[1:3], 16)]),
@@ -2323,6 +2325,7 @@ def _render_chunk_to_mp4(args):
         "-f", "rawvideo", "-vcodec", "rawvideo",
         "-s", f"{out_w}x{out_h}", "-pix_fmt", "bgr24",
         "-r", str(fps), "-i", "pipe:",
+        "-threads", "2",
         *_h264_encode_args(),
         str(output_path),
     ]

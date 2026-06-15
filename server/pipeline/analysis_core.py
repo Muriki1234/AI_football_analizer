@@ -455,16 +455,18 @@ def interpolate_ball_positions_spline(ball_positions: list) -> list:
 # ═══════════════════════════════════════════════════════════════════════
 
 class Tracker:
-    def __init__(self, model_path: str):
-        self.model        = YOLO(model_path)
+    def __init__(self, model_path: str = None):
         self.tracker      = sv.ByteTrack()  # 只用于球员追踪
-        self.class_names  = self.model.names
         self.player_id = self.ball_id = self.referee_id = None
-        for i, name in self.class_names.items():
-            n = name.lower()
-            if   "player" in n or "person" in n: self.player_id   = i
-            elif "ball"   in n:                   self.ball_id     = i
-            elif "referee" in n:                  self.referee_id  = i
+        
+        if model_path:
+            self.model        = YOLO(model_path)
+            self.class_names  = self.model.names
+            for i, name in self.class_names.items():
+                n = name.lower()
+                if   "player" in n or "person" in n: self.player_id   = i
+                elif "ball"   in n:                   self.ball_id     = i
+                elif "referee" in n:                  self.referee_id  = i
         if self.player_id is None: self.player_id = 0
 
     def _process_detections(self, ds: "sv.Detections", fidx: int, tracks: dict):
