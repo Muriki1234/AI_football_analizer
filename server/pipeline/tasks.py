@@ -4393,8 +4393,8 @@ def run_hls_replay(session_id: str, session: dict, task_id: str, sm: SessionMana
     # Initialize the playlist on R2 so frontend can start polling
     m3u8_url = _generate_m3u8(output_dir, session_id, sm, total_segments, completed_segments, fps, segment_frames)
     
-    # Update the UI to show the player immediately
-    sm.update_status(session_id, "analysis_done", full_replay_url=m3u8_url)
+    # Update the UI to show the player immediately by setting the task URL
+    sm.update_task(session_id, task_id, url=m3u8_url)
 
     yolo_path = get_yolo_model_path()
     tracks_cache_path = session.get("tracks_cache_path") or str(output_dir / "tracks.pkl")
@@ -4446,9 +4446,11 @@ def run_hls_replay(session_id: str, session: dict, task_id: str, sm: SessionMana
                     ts_path = Path(r["path"])
                     remote_key = f"{session_id}/chunk_{seg_idx:03d}.ts"
                     ts_url = upload_to_r2(ts_path, remote_key)
-                    if ts_url:
-                        completed_segments[seg_idx] = ts_url
-                        _generate_m3u8(output_dir, session_id, sm, total_segments, completed_segments, fps, segment_frames)
+                    if not ts_url:
+                        ts_url = f"chunk_{seg_idx:03d}.ts"
+                        
+                    completed_segments[seg_idx] = ts_url
+                    _generate_m3u8(output_dir, session_id, sm, total_segments, completed_segments, fps, segment_frames)
                         
                     try: ts_path.unlink()
                     except: pass
