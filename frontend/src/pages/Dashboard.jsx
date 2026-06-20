@@ -738,7 +738,7 @@ export default function Dashboard() {
                             </div>
                         )}
 
-                        {fullReplay.status === 'done' && (
+                        {(fullReplay.status === 'done' || (fullReplay.status === 'generating' && fullReplay.url)) && (
                             <VideoTimelineMarkers
                                 segments={session?.segments}
                                 fps={session?.video_fps}

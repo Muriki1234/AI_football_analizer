@@ -784,7 +784,7 @@ def run_samurai_tracking_multi(session_id: str, session: dict,
 
         sm.update_status(
             session_id, "tracking_done",
-            progress=100, stage="samurai_done",
+            stage="samurai_done",
             samurai_cache_path=str(cache_path),
             samurai_tracked_frames=len(bboxes_dict),
         )
