@@ -18,7 +18,7 @@ const formatTime = (sec) => {
     return `${m}:${s}`;
 };
 
-export default function VideoTimelineMarkers({ segments, fps, totalFrames, videoRef }) {
+export default function VideoTimelineMarkers({ segments, matchPeriods, fps, totalFrames, videoRef }) {
     const containerRef = useRef(null);
     const [currentTime, setCurrentTime] = useState(0);
     const [duration, setDuration] = useState(0);
@@ -54,36 +54,63 @@ export default function VideoTimelineMarkers({ segments, fps, totalFrames, video
     }, [videoRef]);
 
     const items = useMemo(() => {
-        const totalSec = fps && totalFrames ? totalFrames / fps : duration;
-        if (!totalSec) return [];
+        // Map original frame to stitched frame
+        const mapToStitchedFrame = (origFrame) => {
+            if (!matchPeriods || matchPeriods.length === 0) return origFrame;
+            let curStitched = 0;
+            for (const [ps, pe] of matchPeriods) {
+                if (origFrame >= ps && origFrame < pe) {
+                    return curStitched + (origFrame - ps);
+                }
+                if (origFrame >= pe) {
+                    curStitched += (pe - ps);
+                }
+            }
+            return curStitched;
+        };
 
         const source = segments?.length
             ? segments
             : [{
                 type: 'full_match',
                 start_frame: 0,
-                end_frame: totalFrames || Math.round(totalSec * (fps || 1)),
+                end_frame: totalFrames || Math.round((duration || 1) * (fps || 1)),
                 start_sec: 0,
-                end_sec: totalSec,
+                end_sec: duration || 1,
             }];
 
+        // Stitched total frames is the sum of all match periods, or just totalFrames
+        let stitchedTotalFrames = totalFrames;
+        if (matchPeriods && matchPeriods.length > 0) {
+            stitchedTotalFrames = matchPeriods.reduce((acc, [ps, pe]) => acc + (pe - ps), 0);
+        }
+        
+        const stitchedTotalSec = fps && stitchedTotalFrames ? stitchedTotalFrames / fps : duration;
+        if (!stitchedTotalSec) return [];
+
         return source.map((seg) => {
-            const startSec = seg.start_frame / fps;
-            const endSec = seg.end_frame / fps;
+            const stitchedStartFrame = mapToStitchedFrame(seg.start_frame);
+            const stitchedEndFrame = mapToStitchedFrame(seg.end_frame);
+            
+            const startSec = stitchedStartFrame / fps;
+            const endSec = stitchedEndFrame / fps;
+            
             const fallbackStart = Number(seg.start_sec ?? 0);
-            const fallbackEnd = Number(seg.end_sec ?? totalSec);
+            const fallbackEnd = Number(seg.end_sec ?? stitchedTotalSec);
+            
             const safeStart = Number.isFinite(startSec) ? startSec : fallbackStart;
             const safeEnd = Number.isFinite(endSec) ? endSec : fallbackEnd;
+            
             return {
                 ...seg,
                 style: SEGMENT_STYLES[seg.type] || { color: '#64748b', label: seg.type },
                 startSec: safeStart,
                 endSec: safeEnd,
-                widthPct: Math.max(0, ((safeEnd - safeStart) / totalSec) * 100),
-                leftPct: Math.max(0, (safeStart / totalSec) * 100),
+                widthPct: Math.max(0, ((safeEnd - safeStart) / stitchedTotalSec) * 100),
+                leftPct: Math.max(0, (safeStart / stitchedTotalSec) * 100),
             };
-        });
-    }, [segments, fps, totalFrames, duration]);
+        }).filter(seg => seg.widthPct > 0); // Hide dropped segments (like halftime)
+    }, [segments, matchPeriods, fps, totalFrames, duration]);
 
     if (items.length === 0) return null;
 

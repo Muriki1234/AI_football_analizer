@@ -741,6 +741,7 @@ export default function Dashboard() {
                         {(fullReplay.status === 'done' || (fullReplay.status === 'generating' && fullReplay.url)) && (
                             <VideoTimelineMarkers
                                 segments={session?.segments}
+                                matchPeriods={session?.match_periods_frames}
                                 fps={session?.video_fps}
                                 totalFrames={session?.total_frames}
                                 videoRef={heroVideoRef}
