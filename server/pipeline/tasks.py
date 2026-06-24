@@ -2335,6 +2335,12 @@ def _render_chunk_to_mp4(args):
     with _video_capture(video_path) as cap:
         if start > 0:
             cap.set(cv2.CAP_PROP_POS_FRAMES, start)
+            # OpenCV's set() often snaps to the nearest keyframe BEFORE start.
+            # We must grab frames until we actually reach 'start' for frame precision.
+            actual_pos = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+            if 0 <= actual_pos < start:
+                for _ in range(start - actual_pos):
+                    cap.grab()
 
         proc = sp_local.Popen(ffmpeg_cmd, stdin=sp_local.PIPE,
                                stdout=sp_local.DEVNULL, stderr=sp_local.DEVNULL)
