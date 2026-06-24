@@ -4433,15 +4433,18 @@ def run_hls_replay(session_id: str, session: dict, task_id: str, sm: SessionMana
     sm.update_task(session_id, task_id, url=m3u8_url)
 
     with ProcessPoolExecutor(max_workers=n_workers) as pool:
+        last_p_seg = None
+        priority_counter = -1000
         while unassigned or in_progress:
             # Check for priority updates every loop iteration
             current_session = sm.get_session(session_id) or {}
             p_seg = current_session.get("priority_segment")
-            if p_seg is not None and p_seg < total_segments:
+            if p_seg is not None and p_seg != last_p_seg and p_seg < total_segments:
+                last_p_seg = p_seg
                 for idx, (p, s) in enumerate(unassigned):
                     if s == p_seg:
-                        # Elevate priority drastically
-                        unassigned[idx] = (-1000 - p_seg, s)
+                        unassigned[idx] = (priority_counter, s)
+                        priority_counter -= 1
                         heapq.heapify(unassigned)
                         break
 

@@ -553,11 +553,36 @@ export default function Dashboard() {
         const video = heroVideoRef.current;
         let hls;
 
-        // Bug 5 fix: Debounce seek priority updates (300ms)
+        // Bug 5 & 10 fix: Debounce seek priority updates (300ms) + map stitched time to original time
         const handleSeek = () => {
             if (seekTimerRef.current) clearTimeout(seekTimerRef.current);
             seekTimerRef.current = setTimeout(() => {
-                const segmentIdx = Math.floor(video.currentTime / 5.0);
+                let originalSec = video.currentTime;
+                const periods = session?.match_periods_frames;
+                const fps = session?.video_fps || 25.0;
+                
+                // Map stitched time back to original time to find correct segment
+                if (periods && periods.length > 0) {
+                    let stitchedFramesAccum = 0;
+                    const targetStitchedFrames = video.currentTime * fps;
+                    let found = false;
+                    for (const [ps, pe] of periods) {
+                        const duration = pe - ps;
+                        if (stitchedFramesAccum + duration > targetStitchedFrames) {
+                            const offset = targetStitchedFrames - stitchedFramesAccum;
+                            originalSec = (ps + offset) / fps;
+                            found = true;
+                            break;
+                        }
+                        stitchedFramesAccum += duration;
+                    }
+                    if (!found) {
+                        const lastPeriod = periods[periods.length - 1];
+                        originalSec = lastPeriod[1] / fps;
+                    }
+                }
+                
+                const segmentIdx = Math.floor(originalSec / 5.0);
                 updateSessionPriority(sessionId, segmentIdx).catch(console.error);
             }, 300);
         };
@@ -721,7 +746,7 @@ export default function Dashboard() {
                         {fullReplay.status === 'generating' && (
                             <span className="hero-video-card__pill">Generating · {fullReplay.progress}%</span>
                         )}
-                        {fullReplay.status === 'done' && fullReplay.url && (
+                        {fullReplay.status === 'done' && fullReplay.url && !fullReplay.url.endsWith('.m3u8') && (
                             <a
                                 href={fullReplay.url}
                                 download={`pitchlogic_${sessionId?.slice(0, 8) || 'replay'}.mp4`}
