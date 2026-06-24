@@ -141,29 +141,54 @@ export default function MultiSegmentConfig() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [sessionId]);
 
-    // 2. Lazy-load detection for the active segment. Re-runs whenever the
-    // active segment's frame value changes (e.g. from a nudge button).
-    // Use a per-(idx, frame) detection key so each unique frame is fetched
-    // exactly once even with React StrictMode double-invoke.
-    const activeSegFrame = segments[activeIdx]?.frame;
+    // 2. Background loading queue for segment detection.
+    // Prioritizes the active segment, then sequentially loads the rest in the background.
     useEffect(() => {
-        if (segments.length === 0 || activeSegFrame == null) return;
-        const detectKey = `${activeIdx}:${activeSegFrame}`;
-        if (detectedSegs.current.has(detectKey)) return;
+        if (segments.length === 0) return;
+        
+        // If we are currently detecting something, wait for it to finish.
+        const isDetecting = segments.some(s => s.detecting);
+        if (isDetecting) return;
+        
+        // Find the best segment to detect next
+        let targetIdx = -1;
+        
+        // Priority 1: The currently active segment
+        const activeKey = `${activeIdx}:${segments[activeIdx]?.frame}`;
+        if (!detectedSegs.current.has(activeKey) && !segments[activeIdx].error && !segments[activeIdx].frameUrl) {
+            targetIdx = activeIdx;
+        } else {
+            // Priority 2: Next segments in order
+            for (let i = 1; i < segments.length; i++) {
+                const checkIdx = (activeIdx + i) % segments.length;
+                const checkFrame = segments[checkIdx]?.frame;
+                const checkKey = `${checkIdx}:${checkFrame}`;
+                if (!detectedSegs.current.has(checkKey) && !segments[checkIdx].error && !segments[checkIdx].frameUrl) {
+                    targetIdx = checkIdx;
+                    break;
+                }
+            }
+        }
+        
+        // All segments are processed
+        if (targetIdx === -1) return;
+        
+        const targetFrame = segments[targetIdx].frame;
+        const detectKey = `${targetIdx}:${targetFrame}`;
         detectedSegs.current.add(detectKey);
 
         setSegments((prev) => prev.map((s, i) =>
-            i === activeIdx ? { ...s, detecting: true, error: null } : s
+            i === targetIdx ? { ...s, detecting: true, error: null } : s
         ));
 
-        analyzeFrame(sessionId, activeSegFrame)
+        analyzeFrame(sessionId, targetFrame)
             .then((data) => {
                 const players = (data.players_data || []).map((p, i) => ({
                     id: p.id || i + 1,
                     bbox: p.bbox,
                 }));
                 setSegments((prev) => prev.map((s, i) =>
-                    i === activeIdx
+                    i === targetIdx
                         ? {
                             ...s,
                             detecting: false,
@@ -180,12 +205,12 @@ export default function MultiSegmentConfig() {
             .catch((e) => {
                 detectedSegs.current.delete(detectKey);  // allow retry
                 setSegments((prev) => prev.map((s, i) =>
-                    i === activeIdx
+                    i === targetIdx
                         ? { ...s, detecting: false, error: e.message || 'Detection failed' }
                         : s
                 ));
             });
-    }, [activeIdx, activeSegFrame, segments.length, sessionId]);
+    }, [segments, activeIdx, sessionId]);
 
     /**
      * Shift one segment's keyframe by ±N frames. Useful when the auto-split
@@ -339,8 +364,8 @@ export default function MultiSegmentConfig() {
                                 className="btn btn-ghost"
                                 style={{ marginTop: 12 }}
                                 onClick={() => {
-                                    detectedSegs.current.delete(activeIdx);
-                                    setActiveIdx(activeIdx);  // re-trigger
+                                    detectedSegs.current.delete(`${activeIdx}:${active.frame}`);
+                                    setSegments(prev => prev.map((s, i) => i === activeIdx ? { ...s, error: null } : s));
                                 }}
                             >
                                 <HiArrowPath /> Retry

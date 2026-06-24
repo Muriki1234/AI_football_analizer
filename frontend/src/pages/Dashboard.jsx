@@ -782,8 +782,8 @@ export default function Dashboard() {
                                         <div className="feature-card__spinner" style={{ width: 48, height: 48, borderTopColor: '#60a5fa' }} />
                                         {hlsFragNotReady ? (
                                             <>
-                                                <p style={{ fontWeight: 600 }}>⏳ 该片段尚在渲染中</p>
-                                                <p style={{ fontSize: '0.85rem', opacity: 0.7 }}>正在后台渲染，稍后自动播放…</p>
+                                                <p style={{ fontWeight: 600 }}>⏳ Rendering this segment...</p>
+                                                <p style={{ fontSize: '0.85rem', opacity: 0.7 }}>Will auto-play when ready</p>
                                             </>
                                         ) : (
                                             <p>Buffering...</p>

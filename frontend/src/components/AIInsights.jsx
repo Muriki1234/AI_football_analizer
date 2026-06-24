@@ -10,25 +10,25 @@ import './AIInsights.css';
 // instead of leaking through as literal characters in a <pre> block.
 marked.setOptions({ gfm: true, breaks: true });
 
-// XSS 防线：AI 的输入来自视频帧里的文字（jersey/scoreboard 等），
-// 攻击者可以通过控制视频内容让 LLM 输出 `<img src=x onerror=...>`，
-// 经 marked.parse 后变成可执行 HTML 注入页面（同源 = 偷 Supabase JWT）。
+// XSS Defense: AI input comes from text in video frames (jersey/scoreboard etc.),
+// an attacker could control video content to make LLM output `<img src=x onerror=...>`,
+// which after marked.parse becomes executable HTML injected into the page (same-origin = stealing Supabase JWT).
 const _renderMd = (md) => DOMPurify.sanitize(marked.parse(md || ''));
 
 const STAGE_LABELS = {
-    loading_data:        '加载统计数据...',
-    selecting_video:     '选择视频源...',
-    uploading_video:     '上传视频到 Gemini...',
-    gemini_reasoning:    'Gemini 正在分析比赛...',
-    saving_report:       '保存报告...',
+    loading_data:        'Loading stats...',
+    selecting_video:     'Selecting video source...',
+    uploading_video:     'Uploading video to Gemini...',
+    gemini_reasoning:    'Gemini is analyzing the match...',
+    saving_report:       'Saving report...',
 };
 
 function stageLabel(stage) {
-    if (!stage) return 'AI 正在分析...';
+    if (!stage) return 'AI is analyzing...';
     if (STAGE_LABELS[stage]) return STAGE_LABELS[stage];
     if (stage.startsWith('gemini_processing_')) {
         const sec = stage.split('_').pop().replace('s', '');
-        return `Gemini 处理视频中 ${sec}s...`;
+        return `Gemini processing video ${sec}s...`;
     }
     return stage;
 }
@@ -44,7 +44,7 @@ export default function AIInsights({ sessionId }) {
     const indexRef     = useRef(0);
     const containerRef = useRef(null);
 
-    // ── 触发生成 ─────────────────────────────────────────────────────
+    // ── Trigger Generation ───────────────────────────────────────────
     const generate = async () => {
         if (!sessionId) {
             setErrorMsg('session_id missing');
@@ -131,7 +131,7 @@ export default function AIInsights({ sessionId }) {
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
                     >
-                        <p>点击下方按钮，让 AI 结合追踪视频 + 数据生成战术分析报告。</p>
+                        <p>Click the button below to generate a tactical analysis report using the tracked video and data.</p>
                         <button className="btn btn-primary" onClick={generate} disabled={!sessionId}>
                             <HiSparkles /> Generate Report
                         </button>
