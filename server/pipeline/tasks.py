@@ -2320,6 +2320,7 @@ def _render_chunk_to_mp4(args):
         out_h = (int(max_height) // 2) * 2
     do_resize = (out_w, out_h) != (w, h)
 
+    is_ts = str(output_path).endswith('.ts')
     ffmpeg_cmd = [
         "ffmpeg", "-y",
         "-f", "rawvideo", "-vcodec", "rawvideo",
@@ -2327,6 +2328,7 @@ def _render_chunk_to_mp4(args):
         "-r", str(fps), "-i", "pipe:",
         "-threads", "2",
         *_h264_encode_args(),
+        *(['-f', 'mpegts'] if is_ts else ['-movflags', '+faststart']),
         str(output_path),
     ]
 
@@ -4328,22 +4330,51 @@ def _log_error(name: str, session_id: str, exc: Exception):
     print(f"[ERROR] {name} | session={session_id}")
     print(traceback.format_exc())
 
-def _generate_m3u8(output_dir: Path, session_id: str, sm: SessionManager, total_segments: int, completed_segments: dict, fps: float, segment_frames: int):
+def _generate_m3u8(output_dir: Path, session_id: str, sm: SessionManager,
+                   total_segments: int, completed_segments: dict,
+                   fps: float, segment_frames: int,
+                   total_frames: int, match_periods=None):
     from ..storage.r2 import upload_to_r2
     import math
-    
+
+    # Compute actual rendered frames per segment (accounting for match_periods)
+    def _rendered_frames_in_range(start, end):
+        if not match_periods:
+            return end - start
+        count = 0
+        for ps, pe in match_periods:
+            overlap_start = max(start, ps)
+            overlap_end = min(end, pe)
+            if overlap_end > overlap_start:
+                count += overlap_end - overlap_start
+        return count
+
     m3u8_path = output_dir / "playlist.m3u8"
+    
+    # Compute per-segment durations
+    seg_durations = []
+    for i in range(total_segments):
+        seg_start = i * segment_frames
+        seg_end = min(seg_start + segment_frames, total_frames)
+        rendered = _rendered_frames_in_range(seg_start, seg_end)
+        dur = rendered / fps if fps > 0 else 0
+        seg_durations.append(dur)
+    
+    max_dur = max(seg_durations) if seg_durations else segment_frames / fps
+    
     lines = [
         "#EXTM3U",
         "#EXT-X-VERSION:3",
-        f"#EXT-X-TARGETDURATION:{math.ceil(segment_frames / fps)}",
+        f"#EXT-X-TARGETDURATION:{math.ceil(max_dur)}",
         "#EXT-X-MEDIA-SEQUENCE:0",
         "#EXT-X-PLAYLIST-TYPE:VOD"
     ]
     
-    segment_duration = segment_frames / fps
     for i in range(total_segments):
-        lines.append(f"#EXTINF:{segment_duration:.3f},")
+        dur = seg_durations[i]
+        if dur <= 0:
+            continue  # Skip empty segments (all frames outside match periods)
+        lines.append(f"#EXTINF:{dur:.3f},")
         lines.append(f"chunk_{i:03d}.ts")
     
     lines.append("#EXT-X-ENDLIST")
@@ -4388,18 +4419,18 @@ def run_hls_replay(session_id: str, session: dict, task_id: str, sm: SessionMana
     in_progress = {}
     completed_segments = {}
     
-    # Initialize the playlist on R2 so frontend can start polling
-    m3u8_url = _generate_m3u8(output_dir, session_id, sm, total_segments, completed_segments, fps, segment_frames)
-    
-    # Update the UI to show the player immediately by setting the task URL
-    sm.update_task(session_id, task_id, url=m3u8_url)
-
     yolo_path = get_yolo_model_path()
     tracks_cache_path = session.get("tracks_cache_path") or str(output_dir / "tracks.pkl")
     match_periods = (
         [tuple(p) for p in session.get("match_periods_frames", [])]
         if session.get("match_periods_frames") else None
     )
+
+    # Initialize the playlist on R2 so frontend can start polling
+    m3u8_url = _generate_m3u8(output_dir, session_id, sm, total_segments, completed_segments, fps, segment_frames, total_frames, match_periods)
+    
+    # Update the UI to show the player immediately by setting the task URL
+    sm.update_task(session_id, task_id, url=m3u8_url)
 
     with ProcessPoolExecutor(max_workers=n_workers) as pool:
         while unassigned or in_progress:

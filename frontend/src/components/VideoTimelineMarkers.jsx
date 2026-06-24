@@ -88,7 +88,11 @@ export default function VideoTimelineMarkers({ segments, matchPeriods, fps, tota
         const stitchedTotalSec = fps && stitchedTotalFrames ? stitchedTotalFrames / fps : duration;
         if (!stitchedTotalSec) return [];
 
+        // Non-match segment types that get stripped from the video
+        const NON_MATCH_TYPES = new Set(['halftime', 'pre_match', 'post_match']);
+
         return source.map((seg) => {
+            const isNonMatch = NON_MATCH_TYPES.has(seg.type);
             const stitchedStartFrame = mapToStitchedFrame(seg.start_frame);
             const stitchedEndFrame = mapToStitchedFrame(seg.end_frame);
             
@@ -101,15 +105,21 @@ export default function VideoTimelineMarkers({ segments, matchPeriods, fps, tota
             const safeStart = Number.isFinite(startSec) ? startSec : fallbackStart;
             const safeEnd = Number.isFinite(endSec) ? endSec : fallbackEnd;
             
+            // Bug 3 fix: Non-match segments (halftime etc.) get a thin separator
+            // instead of being filtered out, so users can still see the label
+            const rawWidth = (safeEnd - safeStart) / stitchedTotalSec * 100;
+            const widthPct = isNonMatch && rawWidth <= 0 ? 0.5 : Math.max(0, rawWidth);
+            
             return {
                 ...seg,
                 style: SEGMENT_STYLES[seg.type] || { color: '#64748b', label: seg.type },
                 startSec: safeStart,
                 endSec: safeEnd,
-                widthPct: Math.max(0, ((safeEnd - safeStart) / stitchedTotalSec) * 100),
+                widthPct,
                 leftPct: Math.max(0, (safeStart / stitchedTotalSec) * 100),
+                isSeparator: isNonMatch && rawWidth <= 0,
             };
-        }).filter(seg => seg.widthPct > 0); // Hide dropped segments (like halftime)
+        });
     }, [segments, matchPeriods, fps, totalFrames, duration]);
 
     if (items.length === 0) return null;
@@ -161,15 +171,16 @@ export default function VideoTimelineMarkers({ segments, matchPeriods, fps, tota
                         {items.map((seg, i) => (
                             <span
                                 key={`${seg.type}-${i}`}
-                                className="video-markers__seg"
+                                className={`video-markers__seg${seg.isSeparator ? ' video-markers__seg--separator' : ''}`}
                                 style={{
                                     left: `${seg.leftPct}%`,
                                     width: `${seg.widthPct}%`,
-                                    background: seg.style.color,
+                                    background: seg.isSeparator ? 'rgba(148, 163, 184, 0.6)' : seg.style.color,
+                                    ...(seg.isSeparator ? { borderLeft: '1px dashed #64748b', borderRight: '1px dashed #64748b' } : {}),
                                 }}
-                                title={`${seg.style.label} • ${formatTime(seg.startSec)}-${formatTime(seg.endSec)}`}
+                                title={`${seg.style.label}${seg.isSeparator ? '' : ` • ${formatTime(seg.startSec)}-${formatTime(seg.endSec)}`}`}
                             >
-                                <span className="video-markers__seg-label">{seg.style.label}</span>
+                                {!seg.isSeparator && <span className="video-markers__seg-label">{seg.style.label}</span>}
                             </span>
                         ))}
                     </span>

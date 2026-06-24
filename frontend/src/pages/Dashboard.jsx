@@ -542,6 +542,9 @@ export default function Dashboard() {
     }, [drawerOpen]);
 
     // HLS.js streaming support with priority segment tracking
+    const [hlsFragNotReady, setHlsFragNotReady] = useState(false);
+    const seekTimerRef = useRef(null);
+
     useEffect(() => {
         if (!fullReplay.url || !fullReplay.url.endsWith('.m3u8') || !heroVideoRef.current) {
             return;
@@ -550,42 +553,81 @@ export default function Dashboard() {
         const video = heroVideoRef.current;
         let hls;
 
+        // Bug 5 fix: Debounce seek priority updates (300ms)
         const handleSeek = () => {
-            const segmentIdx = Math.floor(video.currentTime / 5.0);
-            updateSessionPriority(sessionId, segmentIdx).catch(console.error);
+            if (seekTimerRef.current) clearTimeout(seekTimerRef.current);
+            seekTimerRef.current = setTimeout(() => {
+                const segmentIdx = Math.floor(video.currentTime / 5.0);
+                updateSessionPriority(sessionId, segmentIdx).catch(console.error);
+            }, 300);
         };
 
         const handleWaiting = () => setIsVideoBuffering(true);
-        const handlePlaying = () => setIsVideoBuffering(false);
+        const handlePlaying = () => {
+            setIsVideoBuffering(false);
+            setHlsFragNotReady(false);
+        };
+        const handleCanPlay = () => {
+            setIsVideoBuffering(false);
+            setHlsFragNotReady(false);
+        };
 
         if (Hls.isSupported()) {
             hls = new Hls({
                 autoStartLoad: true,
                 startPosition: -1,
                 debug: false,
-                fragLoadingMaxRetry: 100,
-                fragLoadingRetryDelay: 1000,
-                manifestLoadingMaxRetry: 10
+                // Bug 4 fix: Progressive backoff instead of fixed 1s retry
+                fragLoadingMaxRetry: 60,
+                fragLoadingRetryDelay: 500,           // start at 500ms
+                fragLoadingMaxRetryTimeout: 30000,    // cap total retry time at 30s
+                manifestLoadingMaxRetry: 20,
+                manifestLoadingRetryDelay: 500,
+                levelLoadingMaxRetry: 20,
             });
             hls.loadSource(fullReplay.url);
             hls.attachMedia(video);
-            
+
+            // Bug 4 fix: Detect 404 on fragment = not rendered yet
+            hls.on(Hls.Events.ERROR, (_event, data) => {
+                if (data.details === 'fragLoadError' && data.response && data.response.code === 404) {
+                    setHlsFragNotReady(true);
+                    setIsVideoBuffering(true);
+                } else if (data.fatal) {
+                    console.error('[HLS] Fatal error:', data);
+                    if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                        hls.startLoad();  // try to recover
+                    } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                        hls.recoverMediaError();
+                    }
+                }
+            });
+
+            // When a new fragment loads successfully, clear the "not ready" state
+            hls.on(Hls.Events.FRAG_LOADED, () => {
+                setHlsFragNotReady(false);
+            });
+
             video.addEventListener('seeking', handleSeek);
             video.addEventListener('waiting', handleWaiting);
             video.addEventListener('playing', handlePlaying);
+            video.addEventListener('canplay', handleCanPlay);
         } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-            // Safari fallback
+            // Safari native HLS
             video.src = fullReplay.url;
             video.addEventListener('seeking', handleSeek);
             video.addEventListener('waiting', handleWaiting);
             video.addEventListener('playing', handlePlaying);
+            video.addEventListener('canplay', handleCanPlay);
         }
 
         return () => {
+            if (seekTimerRef.current) clearTimeout(seekTimerRef.current);
             if (hls) hls.destroy();
             video.removeEventListener('seeking', handleSeek);
             video.removeEventListener('waiting', handleWaiting);
             video.removeEventListener('playing', handlePlaying);
+            video.removeEventListener('canplay', handleCanPlay);
         };
     }, [fullReplay.url, sessionId]);
 
@@ -713,7 +755,14 @@ export default function Dashboard() {
                                 {isVideoBuffering && (
                                     <div className="hero-video-card__buffering-overlay">
                                         <div className="feature-card__spinner" style={{ width: 48, height: 48, borderTopColor: '#60a5fa' }} />
-                                        <p>Rendering / Buffering...</p>
+                                        {hlsFragNotReady ? (
+                                            <>
+                                                <p style={{ fontWeight: 600 }}>⏳ 该片段尚在渲染中</p>
+                                                <p style={{ fontSize: '0.85rem', opacity: 0.7 }}>正在后台渲染，稍后自动播放…</p>
+                                            </>
+                                        ) : (
+                                            <p>Buffering...</p>
+                                        )}
                                     </div>
                                 )}
                                 <MinimapOverlay

@@ -67,11 +67,22 @@ def upload_to_r2(local_path: Path, remote_key: str) -> str | None:
         elif local_path.suffix == ".pkl":
             content_type = "application/octet-stream"
             
+        # Set cache headers: .ts segments are immutable, .m3u8 should always be fresh
+        cache_control = None
+        if local_path.suffix == '.ts':
+            cache_control = 'public, max-age=31536000, immutable'
+        elif local_path.suffix == '.m3u8':
+            cache_control = 'no-cache, no-store, must-revalidate'
+        
+        extra_args = {'ContentType': content_type}
+        if cache_control:
+            extra_args['CacheControl'] = cache_control
+        
         client.upload_file(
             str(local_path), 
             settings.R2_BUCKET_NAME, 
             remote_key,
-            ExtraArgs={'ContentType': content_type}
+            ExtraArgs=extra_args
         )
         
         # Prefer permanent public URL (zero egress cost, never expires)
