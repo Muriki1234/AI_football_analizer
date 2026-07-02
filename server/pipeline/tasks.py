@@ -2257,24 +2257,34 @@ print(f"[REPLAY] h264 encoder: "
       f"{'h264_nvenc (GPU)' if _NVENC_AVAILABLE else 'libx264 (CPU)'}")
 
 
+_WORKER_CACHE = {}
+
+def _init_render_worker(cache_path: str):
+    """
+    Worker initializer for ProcessPoolExecutor.
+    Loads tracks_cache_path ONCE per worker, avoiding deserialization
+    overhead on every single chunk rendering call.
+    """
+    global _WORKER_CACHE
+    import pickle
+    with open(cache_path, "rb") as f:
+        _WORKER_CACHE = pickle.load(f)
+
 def _render_chunk_to_mp4(args):
     """
     Render a contiguous frame range to its own temp mp4. Runs in a worker
     process so several chunks can be encoded in parallel.
 
     All arguments are pickle-safe (paths + plain dicts/strings/numbers).
-    The worker reloads tracks.pkl itself to avoid serialising hundreds of MB
-    across the process boundary on every call.
     """
     import subprocess as sp_local
-    import pickle as pkl_local
     import cv2
     cv2.setNumThreads(1)
 
     # match_periods is a list of (start_frame, end_frame) tuples — frames
     # falling outside ANY period are dropped from the rendered mp4 (e.g.
     # the user's chosen halftime gap). None means "render every frame".
-    (start, end, video_path, tracks_cache_path,
+    (start, end, video_path,
      hex_t1, hex_t2, fps, w, h,
      yolo_path, output_path, max_height, match_periods) = args
 
@@ -2293,10 +2303,9 @@ def _render_chunk_to_mp4(args):
         def _in_period(_: int) -> bool:
             return True
 
-    # Reload analysis cache in this worker (workers run in parallel, so the
-    # 5-10s of pickle-load happens concurrently across all of them).
-    with open(tracks_cache_path, "rb") as f:
-        data = pkl_local.load(f)
+    # Use the global cache loaded by the initializer
+    global _WORKER_CACHE
+    data = _WORKER_CACHE
     tracks = data["tracks"]
     tracked_bboxes = data["tracked_bboxes"]
     team_control = data["team_control"]
@@ -2457,7 +2466,7 @@ def run_full_replay(session_id: str, session: dict, task_id: str, sm: SessionMan
                 continue
             chunk_path = output_dir / f"full_replay_chunk_{ci:03d}.mp4"
             chunk_args.append((
-                start, end, session["video_path"], tracks_cache_path,
+                start, end, session["video_path"],
                 hex_t1, hex_t2, fps, w, h,
                 yolo_path, str(chunk_path), REPLAY_MAX_HEIGHT,
                 match_periods,
@@ -2465,7 +2474,11 @@ def run_full_replay(session_id: str, session: dict, task_id: str, sm: SessionMan
 
         # Dispatch to worker pool
         results = []
-        with ProcessPoolExecutor(max_workers=n_workers) as pool:
+        with ProcessPoolExecutor(
+            max_workers=n_workers,
+            initializer=_init_render_worker,
+            initargs=(str(tracks_cache_path),)
+        ) as pool:
             futures = {pool.submit(_render_chunk_to_mp4, c): c for c in chunk_args}
             done = 0
             for fut in as_completed(futures):
@@ -4438,7 +4451,11 @@ def run_hls_replay(session_id: str, session: dict, task_id: str, sm: SessionMana
     # Update the UI to show the player immediately by setting the task URL
     sm.update_task(session_id, task_id, url=m3u8_url)
 
-    with ProcessPoolExecutor(max_workers=n_workers) as pool:
+    with ProcessPoolExecutor(
+        max_workers=n_workers,
+        initializer=_init_render_worker,
+        initargs=(str(tracks_cache_path),)
+    ) as pool:
         last_p_seg = None
         priority_counter = -1000
         while unassigned or in_progress:
@@ -4461,7 +4478,7 @@ def run_hls_replay(session_id: str, session: dict, task_id: str, sm: SessionMana
                 end = min(start + segment_frames, total_frames)
                 ts_path = output_dir / f"chunk_{seg_idx:03d}.ts"
                 args = (
-                    start, end, session["video_path"], tracks_cache_path,
+                    start, end, session["video_path"],
                     hex_t1, hex_t2, fps, w, h,
                     yolo_path, str(ts_path), REPLAY_MAX_HEIGHT,
                     match_periods,
