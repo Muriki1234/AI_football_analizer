@@ -127,7 +127,9 @@ export default function VideoTimelineMarkers({ segments, matchPeriods, fps, tota
     const seekTo = (sec) => {
         const v = videoRef?.current;
         if (!v) return;
-        v.currentTime = Math.max(0, Math.min(sec, v.duration || sec));
+        const target = Math.max(0, Math.min(sec, v.duration || sec));
+        v.currentTime = target;
+        setCurrentTime(target);
         v.play?.().catch(() => { });
     };
 
@@ -144,7 +146,9 @@ export default function VideoTimelineMarkers({ segments, matchPeriods, fps, tota
         if (!v || !track || !duration) return;
         const rect = track.getBoundingClientRect();
         const pct = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
-        v.currentTime = pct * duration;
+        const target = pct * duration;
+        v.currentTime = target;
+        setCurrentTime(target);
     };
 
     const progressPct = duration ? Math.max(0, Math.min(100, (currentTime / duration) * 100)) : 0;

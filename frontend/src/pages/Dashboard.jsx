@@ -631,6 +631,7 @@ export default function Dashboard() {
             // When a new fragment loads successfully, clear the "not ready" state
             hls.on(Hls.Events.FRAG_LOADED, () => {
                 setHlsFragNotReady(false);
+                setIsVideoBuffering(false);
             });
 
             video.addEventListener('seeking', handleSeek);
