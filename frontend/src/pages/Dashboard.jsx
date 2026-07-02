@@ -597,15 +597,28 @@ export default function Dashboard() {
             setHlsFragNotReady(false);
         };
 
+        let missingChunks = new Set();
+        
+        class CacheBustingLoader extends (Hls.DefaultConfig.loader || class {}) {
+            load(context, config, callbacks) {
+                if (context.url && missingChunks.has(context.url.split('?')[0])) {
+                    const separator = context.url.includes('?') ? '&' : '?';
+                    context.url = context.url.split(/[\?&]t=/)[0] + separator + 't=' + Date.now();
+                }
+                if (super.load) super.load(context, config, callbacks);
+            }
+        }
+
         if (Hls.isSupported()) {
             hls = new Hls({
                 autoStartLoad: true,
                 startPosition: -1,
                 debug: false,
+                fLoader: Hls.DefaultConfig.loader ? CacheBustingLoader : undefined,
                 // Bug 4 fix: Progressive backoff instead of fixed 1s retry
-                fragLoadingMaxRetry: 60,
+                fragLoadingMaxRetry: 600,
                 fragLoadingRetryDelay: 500,           // start at 500ms
-                fragLoadingMaxRetryTimeout: 30000,    // cap total retry time at 30s
+                fragLoadingMaxRetryTimeout: 600000,   // cap total retry time at 10 minutes
                 manifestLoadingMaxRetry: 20,
                 manifestLoadingRetryDelay: 500,
                 levelLoadingMaxRetry: 20,
@@ -618,6 +631,9 @@ export default function Dashboard() {
                 if (data.details === 'fragLoadError' && data.response && data.response.code === 404) {
                     setHlsFragNotReady(true);
                     setIsVideoBuffering(true);
+                    if (data.frag && data.frag.url) {
+                        missingChunks.add(data.frag.url.split('?')[0]);
+                    }
                 } else if (data.fatal) {
                     console.error('[HLS] Fatal error:', data);
                     if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
@@ -629,9 +645,12 @@ export default function Dashboard() {
             });
 
             // When a new fragment loads successfully, clear the "not ready" state
-            hls.on(Hls.Events.FRAG_LOADED, () => {
+            hls.on(Hls.Events.FRAG_LOADED, (_event, data) => {
                 setHlsFragNotReady(false);
                 setIsVideoBuffering(false);
+                if (data.frag && data.frag.url) {
+                    missingChunks.delete(data.frag.url.split('?')[0]);
+                }
             });
 
             video.addEventListener('seeking', handleSeek);
