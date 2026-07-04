@@ -731,7 +731,14 @@ def _action_track(session_id: str, s: dict, payload: dict, sm: SessionManager) -
         try:
             import cv2 as _cv2  # noqa: WPS433 (local import for cold-start speed)
             cap = _cv2.VideoCapture(video_path_local)
-            t = int(cap.get(_cv2.CAP_PROP_FRAME_COUNT))
+            cv2_frames = int(cap.get(_cv2.CAP_PROP_FRAME_COUNT))
+            f = float(cap.get(_cv2.CAP_PROP_FPS))
+            try:
+                from server.pipeline.tasks import _probe_total_frames
+                ffprobe_frames = _probe_total_frames(video_path_local, f)
+            except ImportError:
+                ffprobe_frames = 0
+            t = max(cv2_frames, ffprobe_frames)
             f = float(cap.get(_cv2.CAP_PROP_FPS))
             cap.release()
             if t > 0:

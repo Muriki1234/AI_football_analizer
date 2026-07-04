@@ -597,24 +597,11 @@ export default function Dashboard() {
             setHlsFragNotReady(false);
         };
 
-        let missingChunks = new Set();
-        
-        class CacheBustingLoader extends (Hls.DefaultConfig.loader || class {}) {
-            load(context, config, callbacks) {
-                if (context.url && missingChunks.has(context.url.split('?')[0])) {
-                    const separator = context.url.includes('?') ? '&' : '?';
-                    context.url = context.url.split(/[\?&]t=/)[0] + separator + 't=' + Date.now();
-                }
-                if (super.load) super.load(context, config, callbacks);
-            }
-        }
-
         if (Hls.isSupported()) {
             hls = new Hls({
                 autoStartLoad: true,
                 startPosition: -1,
                 debug: false,
-                fLoader: Hls.DefaultConfig.loader ? CacheBustingLoader : undefined,
                 // Bug 4 fix: Progressive backoff instead of fixed 1s retry
                 fragLoadingMaxRetry: 600,
                 fragLoadingRetryDelay: 500,           // start at 500ms
@@ -622,18 +609,34 @@ export default function Dashboard() {
                 manifestLoadingMaxRetry: 20,
                 manifestLoadingRetryDelay: 500,
                 levelLoadingMaxRetry: 20,
+                levelLoadingRetryDelay: 500,
+                fetchSetup: (context, initParams) => {
+                    let url = context.url;
+                    if (url && missingChunks.has(url.split('?')[0])) {
+                        const sep = url.includes('?') ? '&' : '?';
+                        url = url.split(/[\?&]t=/)[0] + sep + 't=' + Date.now();
+                    }
+                    return new Request(url, initParams);
+                },
+                xhrSetup: (xhr, url) => {
+                    if (url && missingChunks.has(url.split('?')[0])) {
+                        const sep = url.includes('?') ? '&' : '?';
+                        const newUrl = url.split(/[\?&]t=/)[0] + sep + 't=' + Date.now();
+                        xhr.open('GET', newUrl, true);
+                    }
+                }
             });
             hls.loadSource(fullReplay.url);
             hls.attachMedia(video);
 
             // Bug 4 fix: Detect 404 on fragment = not rendered yet
             hls.on(Hls.Events.ERROR, (_event, data) => {
-                if (data.details === 'fragLoadError' && data.response && data.response.code === 404) {
-                    setHlsFragNotReady(true);
-                    setIsVideoBuffering(true);
-                    if (data.frag && data.frag.url) {
-                        missingChunks.add(data.frag.url.split('?')[0]);
+                if (data.type === Hls.ErrorTypes.NETWORK_ERROR && data.details === Hls.ErrorDetails.FRAG_LOAD_ERROR) {
+                    if (data.context && data.context.url) {
+                        missingChunks.add(data.context.url.split('?')[0]);
                     }
+                    // Do NOT set buffering state here. Let the native video 'waiting' event handle it,
+                    // otherwise background prefetching 404s will show the spinner while the video is still playing.
                 } else if (data.fatal) {
                     console.error('[HLS] Fatal error:', data);
                     if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
@@ -646,21 +649,19 @@ export default function Dashboard() {
 
             // When a new fragment loads successfully, clear the "not ready" state
             hls.on(Hls.Events.FRAG_LOADED, (_event, data) => {
-                setHlsFragNotReady(false);
-                setIsVideoBuffering(false);
                 if (data.frag && data.frag.url) {
                     missingChunks.delete(data.frag.url.split('?')[0]);
                 }
             });
 
-            video.addEventListener('seeking', handleSeek);
+            video.addEventListener('seeked', handleSeek);
             video.addEventListener('waiting', handleWaiting);
             video.addEventListener('playing', handlePlaying);
             video.addEventListener('canplay', handleCanPlay);
         } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
             // Safari native HLS
             video.src = fullReplay.url;
-            video.addEventListener('seeking', handleSeek);
+            video.addEventListener('seeked', handleSeek);
             video.addEventListener('waiting', handleWaiting);
             video.addEventListener('playing', handlePlaying);
             video.addEventListener('canplay', handleCanPlay);
@@ -669,7 +670,7 @@ export default function Dashboard() {
         return () => {
             if (seekTimerRef.current) clearTimeout(seekTimerRef.current);
             if (hls) hls.destroy();
-            video.removeEventListener('seeking', handleSeek);
+            video.removeEventListener('seeked', handleSeek);
             video.removeEventListener('waiting', handleWaiting);
             video.removeEventListener('playing', handlePlaying);
             video.removeEventListener('canplay', handleCanPlay);
@@ -792,8 +793,10 @@ export default function Dashboard() {
                                     playsInline
                                     onClick={(event) => {
                                         const v = event.currentTarget;
-                                        if (v.paused) v.play?.().catch(() => { });
-                                        else v.pause?.();
+                                        if (fullReplay?.status !== 'generating') {
+                                            if (v.paused) v.play?.().catch(() => { });
+                                            else v.pause?.();
+                                        }
                                     }}
                                     className="hero-video-card__player"
                                 />

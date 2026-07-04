@@ -185,6 +185,10 @@ def stream_video_chunks_range(video_path: str, start_frame: int, end_frame: int,
     cap = cv2.VideoCapture(video_path, cv2.CAP_FFMPEG)
     if start_frame > 0:
         cap.set(cv2.CAP_PROP_POS_FRAMES, float(start_frame))
+        actual_pos = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+        if 0 <= actual_pos < start_frame:
+            for _ in range(start_frame - actual_pos):
+                cap.grab()
     cur = start_frame
     while cur < end_frame:
         chunk = []

@@ -180,6 +180,35 @@ def _probe_fps(path: str):
         return None
     return None
 
+import math
+
+def _probe_total_frames(path: str, fps: float) -> int:
+    """Use ffprobe to get total frames (much more reliable than cv2 for VFR/broken mp4s)."""
+    try:
+        # Try to get nb_frames from video stream
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=nb_frames",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            capture_output=True, text=True, timeout=5
+        ).stdout.strip()
+        if out and out.isdigit():
+            return int(out)
+    except Exception:
+        pass
+
+    try:
+        # Fallback to duration * fps
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            capture_output=True, text=True, timeout=5
+        ).stdout.strip()
+        if out and out != 'N/A':
+            return math.ceil(float(out) * fps)
+    except Exception:
+        pass
+    return 0
 
 # ═══════════════════════════════════════════════════════════════════════
 # 阶段 0：首帧球员检测（轻量同步任务，给前端选择球员用）
@@ -278,7 +307,7 @@ def detect_frame_players(session_id: str, session: dict, frame_idx: int,
 
     out_dir = sm.session_output_dir(session_id)
     out_dir.mkdir(parents=True, exist_ok=True)
-    rel_path = "first_frame.jpg"
+    rel_path = f"annotated_frame_{frame_idx}.jpg"
     cv2.imwrite(str(out_dir / rel_path), annotated, [cv2.IMWRITE_JPEG_QUALITY, 88])
 
     return {
@@ -625,7 +654,12 @@ def run_samurai_tracking_multi(session_id: str, session: dict,
         with _video_capture(video_path) as cap:
             orig_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             orig_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            total_orig_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            raw_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+            cv2_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            
+        ffprobe_frames = _probe_total_frames(video_path, raw_fps)
+        total_orig_frames = max(cv2_frames, ffprobe_frames)
+        
         if total_orig_frames <= 0:
             total_orig_frames = 1500
 
@@ -837,13 +871,17 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         sm.update_status(session_id, "analyzing", progress=5, stage="loading_video")
         with _video_capture(video_path) as cap_meta:
             raw_fps = cap_meta.get(cv2.CAP_PROP_FPS)
-            total   = int(cap_meta.get(cv2.CAP_PROP_FRAME_COUNT))
+            cv2_total = int(cap_meta.get(cv2.CAP_PROP_FRAME_COUNT))
             _vid_w  = int(cap_meta.get(cv2.CAP_PROP_FRAME_WIDTH))  or 1920
             _vid_h  = int(cap_meta.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 1080
         # FPS fallback：容器/编解码器有时不报 fps（返回 0 或异常值），用 ffprobe 兜底
         if not raw_fps or raw_fps <= 1 or raw_fps > 240:
             raw_fps = _probe_fps(video_path) or 25.0
         fps = float(raw_fps)
+        
+        ffprobe_total = _probe_total_frames(video_path, fps)
+        total = max(cv2_total, ffprobe_total)
+        
         if total <= 0:
             total = 1500
         # 把真实 fps / 尺寸写入 session，下游按需任务不再 cap.get(FPS) 重开视频
@@ -3499,7 +3537,10 @@ def _render_gemini_video(video_path: str, bboxes_dict: dict,
             fps  = cap.get(cv2.CAP_PROP_FPS) or 24
             w    = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             h    = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
+            cv2_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            
+        ffprobe_frames = _probe_total_frames(video_path, fps)
+        total_frames = max(cv2_frames, ffprobe_frames) or 1
 
         # 用户没传 periods 时，把整段当作一个 period
         _periods = (
