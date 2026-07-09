@@ -629,14 +629,21 @@ export default function Dashboard() {
             hls.loadSource(fullReplay.url);
             hls.attachMedia(video);
 
+            // Auto-play once the manifest is parsed (autoPlay attr doesn't work
+            // when src is undefined and HLS.js attaches media programmatically)
+            hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                video.play().catch(() => {});
+            });
+
             // Bug 4 fix: Detect 404 on fragment = not rendered yet
             hls.on(Hls.Events.ERROR, (_event, data) => {
                 if (data.type === Hls.ErrorTypes.NETWORK_ERROR && data.details === Hls.ErrorDetails.FRAG_LOAD_ERROR) {
                     if (data.context && data.context.url) {
                         missingChunks.add(data.context.url.split('?')[0]);
                     }
-                    // Do NOT set buffering state here. Let the native video 'waiting' event handle it,
-                    // otherwise background prefetching 404s will show the spinner while the video is still playing.
+                    // Don't set buffering here — background prefetch 404s would
+                    // show spinner while the current segment is still playing.
+                    setHlsFragNotReady(true);
                 } else if (data.fatal) {
                     console.error('[HLS] Fatal error:', data);
                     if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
@@ -647,8 +654,10 @@ export default function Dashboard() {
                 }
             });
 
-            // When a new fragment loads successfully, clear the "not ready" state
+            // When a new fragment loads successfully, clear buffering state
             hls.on(Hls.Events.FRAG_LOADED, (_event, data) => {
+                setHlsFragNotReady(false);
+                setIsVideoBuffering(false);
                 if (data.frag && data.frag.url) {
                     missingChunks.delete(data.frag.url.split('?')[0]);
                 }
@@ -801,7 +810,14 @@ export default function Dashboard() {
                                     className="hero-video-card__player"
                                 />
                                 {isVideoBuffering && (
-                                    <div className="hero-video-card__buffering-overlay">
+                                    <div
+                                        className="hero-video-card__buffering-overlay"
+                                        onClick={(e) => {
+                                            // Let clicks pass through to the video element
+                                            const v = heroVideoRef.current;
+                                            if (v && v.paused) v.play().catch(() => {});
+                                        }}
+                                    >
                                         <div className="feature-card__spinner" style={{ width: 48, height: 48, borderTopColor: '#60a5fa' }} />
                                         {hlsFragNotReady ? (
                                             <>
