@@ -566,7 +566,7 @@ def _run_auto_full_replay(session_id: str, sm: SessionManager) -> None:
 
     # Fallback: inline 执行（原行为）。仅在本地 dev / env 缺失时进。
     log.info("[auto-full-replay] inline run %s for session %s", task_id, session_id)
-    pipeline_tasks.run_full_replay(session_id, session, task_id, sm)
+    pipeline_tasks.run_hls_replay(session_id, session, task_id, sm)
 
 
 def _action_detect_frame(session_id: str, s: dict, payload: dict, sm: SessionManager) -> dict:

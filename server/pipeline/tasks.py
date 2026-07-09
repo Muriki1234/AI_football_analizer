@@ -2324,7 +2324,8 @@ def _render_chunk_to_mp4(args):
     # the user's chosen halftime gap). None means "render every frame".
     (start, end, video_path,
      hex_t1, hex_t2, fps, w, h,
-     yolo_path, output_path, max_height, match_periods) = args
+     yolo_path, output_path, max_height, match_periods, *rest) = args
+    ts_offset = rest[0] if rest else 0.0
 
     # Pre-compute a fast in-period check
     if match_periods:
@@ -2375,6 +2376,7 @@ def _render_chunk_to_mp4(args):
         "-r", str(fps), "-i", "pipe:",
         "-threads", "2",
         *_h264_encode_args(),
+        *(['-output_ts_offset', str(ts_offset)] if is_ts and ts_offset > 0 else []),
         *(['-f', 'mpegts'] if is_ts else ['-movflags', '+faststart']),
         str(output_path),
     ]
@@ -4434,7 +4436,6 @@ def _generate_m3u8(output_dir: Path, session_id: str, sm: SessionManager,
         dur = seg_durations[i]
         if dur <= 0:
             continue  # Skip empty segments (all frames outside match periods)
-        lines.append("#EXT-X-DISCONTINUITY")
         lines.append(f"#EXTINF:{dur:.3f},")
         lines.append(f"chunk_{i:03d}.ts")
     
@@ -4493,6 +4494,25 @@ def run_hls_replay(session_id: str, session: dict, task_id: str, sm: SessionMana
     # Update the UI to show the player immediately by setting the task URL
     sm.update_task(session_id, task_id, url=m3u8_url)
 
+    def _rendered_frames_in_range(start_f, end_f):
+        if not match_periods:
+            return end_f - start_f
+        count = 0
+        for ps, pe in match_periods:
+            overlap_start = max(start_f, ps)
+            overlap_end = min(end_f, pe)
+            if overlap_end > overlap_start:
+                count += overlap_end - overlap_start
+        return count
+
+    chunk_offsets = []
+    current_offset = 0.0
+    for i in range(total_segments):
+        chunk_offsets.append(current_offset)
+        s_f = i * segment_frames
+        e_f = min(s_f + segment_frames, total_frames)
+        current_offset += _rendered_frames_in_range(s_f, e_f) / fps if fps > 0 else 0
+
     with ProcessPoolExecutor(
         max_workers=n_workers,
         initializer=_init_render_worker,
@@ -4519,11 +4539,12 @@ def run_hls_replay(session_id: str, session: dict, task_id: str, sm: SessionMana
                 start = seg_idx * segment_frames
                 end = min(start + segment_frames, total_frames)
                 ts_path = output_dir / f"chunk_{seg_idx:03d}.ts"
+                ts_offset = chunk_offsets[seg_idx]
                 args = (
                     start, end, session["video_path"],
                     hex_t1, hex_t2, fps, w, h,
                     yolo_path, str(ts_path), REPLAY_MAX_HEIGHT,
-                    match_periods,
+                    match_periods, ts_offset
                 )
                 fut = pool.submit(_render_chunk_to_mp4, args)
                 in_progress[fut] = seg_idx

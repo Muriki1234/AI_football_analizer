@@ -49,7 +49,7 @@ FEATURE_TASKS: dict[str, Callable[..., Any]] = {
     "speed_chart":     pipeline_tasks.run_speed_chart,
     "possession":      pipeline_tasks.run_possession_stats,
     "minimap_replay":  pipeline_tasks.run_minimap_replay,
-    "full_replay":     pipeline_tasks.run_full_replay,
+    "full_replay":     pipeline_tasks.run_hls_replay,
     "sprint_analysis": pipeline_tasks.run_sprint_analysis,
     "defensive_line":  pipeline_tasks.run_defensive_line,
     "ai_summary":      pipeline_tasks.run_ai_summary,
