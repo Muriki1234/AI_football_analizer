@@ -896,7 +896,6 @@ def _action_track(session_id: str, s: dict, payload: dict, sm: SessionManager) -
 def _action_analyze(session_id: str, s: dict, payload: dict, sm: SessionManager) -> dict:
     """Full analysis (assumes SAMURAI cache already present)."""
     pipeline_tasks.run_global_analysis(session_id, s, sm)
-    _run_auto_full_replay(session_id, sm)
     return {"ok": True, "session": sm.get_session(session_id)}
 
 

@@ -1454,8 +1454,11 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                 team_assigner.team_colors, fps, total, output_dir,
                 match_periods=_periods_for_export,
             )
+            overlay_url = _export_overlay_json(
+                session_id, tracks, tracked_bboxes, fps, total, output_dir
+            )
         except Exception as exc:
-            print(f"[WARN] position JSON export failed (non-fatal): {exc}")
+            print(f"[WARN] JSON export failed (non-fatal): {exc}")
 
         sm.update_status(
             session_id, "analysis_done",
@@ -1466,6 +1469,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             segments=segments,
             minimap_data_url=minimap_url,
             heatmap_data_url=heatmap_url,
+            overlay_data_url=overlay_url if 'overlay_url' in locals() else None,
         )
 
     except Exception as exc:
@@ -1864,6 +1868,63 @@ def _export_position_jsons(session_id: str, tracks: dict, tracked_bboxes: dict,
         print(f"[WARN] position JSON R2 upload failed: {exc}")
 
     return mm_url, hm_url
+
+
+def _export_overlay_json(session_id: str, tracks: dict, tracked_bboxes: dict, fps: float, total: int, output_dir: Path) -> str | None:
+    import json
+    frames_data = []
+    
+    for i in range(total):
+        frame_players = tracks["players"][i] if i < len(tracks["players"]) else {}
+        
+        # Target
+        target_bbox = None
+        if i in tracked_bboxes:
+            sx, sy, sw, sh = tracked_bboxes[i]
+            target_bbox = [round(sx, 1), round(sy, 1), round(sw, 1), round(sh, 1)]
+            
+        # Players: [id, x1, y1, x2, y2, team, has_ball]
+        p_list = []
+        for pid, info in (frame_players or {}).items():
+            bbox = info.get("bbox")
+            if not bbox or len(bbox) < 4:
+                continue
+            team = int(info.get("team", 0)) if info.get("team") is not None else 0
+            has_ball = 1 if info.get("has_ball") else 0
+            # Convert bbox (x1, y1, x2, y2) to round
+            p_list.append([
+                int(pid),
+                round(bbox[0], 1), round(bbox[1], 1),
+                round(bbox[2], 1), round(bbox[3], 1),
+                team, has_ball
+            ])
+            
+        # Ball: [x1, y1, x2, y2]
+        ball_bbox = None
+        if tracks.get("ball") and i < len(tracks["ball"]):
+            for _, info in (tracks["ball"][i] or {}).items():
+                if info and "bbox" in info:
+                    bbox = info["bbox"]
+                    if len(bbox) >= 4:
+                        ball_bbox = [round(bbox[0], 1), round(bbox[1], 1), round(bbox[2], 1), round(bbox[3], 1)]
+                        break
+
+        frames_data.append([target_bbox, p_list, ball_bbox])
+        
+    payload = {
+        "fps": round(fps, 2),
+        "frames": frames_data
+    }
+    
+    local_path = output_dir / "overlay_bboxes.json"
+    local_path.write_text(json.dumps(payload, separators=(",", ":")))
+    
+    try:
+        from ..storage.r2 import upload_to_r2
+        return upload_to_r2(local_path, f"{session_id}/overlay_bboxes.json")
+    except Exception as exc:
+        print(f"[WARN] overlay JSON R2 upload failed: {exc}")
+        return None
 
 
 def run_heatmap(session_id: str, session: dict, task_id: str, sm: SessionManager):

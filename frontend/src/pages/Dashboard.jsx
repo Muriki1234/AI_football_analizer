@@ -29,6 +29,7 @@ import Hls from 'hls.js';
 import { absUrl, API_KEY } from '../services/config';
 import StepNav from '../components/StepNav';
 import VideoTimelineMarkers from '../components/VideoTimelineMarkers';
+import CanvasOverlay from '../components/CanvasOverlay';
 import MinimapOverlay from '../components/MinimapOverlay';
 import HeatmapCanvas from '../components/HeatmapCanvas';
 import './Dashboard.css';
@@ -313,6 +314,7 @@ export default function Dashboard() {
 
     const [drawerOpen, setDrawerOpen] = useState(false);
     const [minimapOn, setMinimapOn] = useState(false);
+    const [overlayOn, setOverlayOn] = useState(true);
     const [aiGenerating, setAiGenerating] = useState(false);
     const [isVideoBuffering, setIsVideoBuffering] = useState(false);
 
@@ -488,6 +490,7 @@ export default function Dashboard() {
     }, [isDone, sessionId]);
 
     const minimapDataUrl = session?.minimap_data_url || null;
+    const overlayDataUrl = session?.overlay_data_url || null;
     const heatmapDataUrl = session?.heatmap_data_url || null;
 
     const playerSummary = session?.player_summary || null;
@@ -791,11 +794,11 @@ export default function Dashboard() {
                     </div>
 
                     <div className="hero-video-card__body">
-                        {(fullReplay.status === 'done' || fullReplay.status === 'generating') && fullReplay.url ? (
+                        {((fullReplay.status === 'done' || fullReplay.status === 'generating') && fullReplay.url) || session?.status === 'analysis_done' ? (
                             <div className="hero-video-card__player-wrap">
                                 <video
                                     ref={heroVideoRef}
-                                    src={!fullReplay.url.endsWith('.m3u8') ? fullReplay.url : undefined}
+                                    src={fullReplay.url ? (!fullReplay.url.endsWith('.m3u8') ? fullReplay.url : undefined) : session?.video_url}
                                     autoPlay
                                     muted
                                     loop
@@ -829,6 +832,11 @@ export default function Dashboard() {
                                         )}
                                     </div>
                                 )}
+                                <CanvasOverlay
+                                    dataUrl={overlayDataUrl}
+                                    videoRef={heroVideoRef}
+                                    visible={overlayOn && (!fullReplay.url)}
+                                />
                                 <MinimapOverlay
                                     dataUrl={minimapDataUrl}
                                     videoRef={heroVideoRef}
@@ -851,7 +859,7 @@ export default function Dashboard() {
                             </div>
                         )}
 
-                        {(fullReplay.status === 'done' || (fullReplay.status === 'generating' && fullReplay.url)) && (
+                        {(((fullReplay.status === 'done' || fullReplay.status === 'generating') && fullReplay.url) || session?.status === 'analysis_done') && (
                             <VideoTimelineMarkers
                                 segments={session?.segments}
                                 matchPeriods={session?.match_periods_frames}
