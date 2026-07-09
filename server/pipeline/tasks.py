@@ -4434,6 +4434,7 @@ def _generate_m3u8(output_dir: Path, session_id: str, sm: SessionManager,
         dur = seg_durations[i]
         if dur <= 0:
             continue  # Skip empty segments (all frames outside match periods)
+        lines.append("#EXT-X-DISCONTINUITY")
         lines.append(f"#EXTINF:{dur:.3f},")
         lines.append(f"chunk_{i:03d}.ts")
     
