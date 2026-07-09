@@ -140,18 +140,29 @@ export default function VideoTimelineMarkers({ segments, matchPeriods, fps, tota
         else v.pause?.();
     };
 
+    const computedDuration = useMemo(() => {
+        if (!fps) return duration;
+        let stitchedTotalFrames = totalFrames;
+        if (matchPeriods && matchPeriods.length > 0) {
+            stitchedTotalFrames = matchPeriods.reduce((acc, [ps, pe]) => acc + (pe - ps), 0);
+        }
+        return stitchedTotalFrames ? stitchedTotalFrames / fps : duration;
+    }, [fps, totalFrames, matchPeriods, duration]);
+
     const seekFromPointer = (event) => {
         const v = videoRef?.current;
         const track = event.currentTarget;
-        if (!v || !track || !duration) return;
+        const activeDuration = computedDuration || duration;
+        if (!v || !track || !activeDuration) return;
         const rect = track.getBoundingClientRect();
         const pct = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
-        const target = pct * duration;
+        const target = pct * activeDuration;
         v.currentTime = target;
         setCurrentTime(target);
     };
 
-    const progressPct = duration ? Math.max(0, Math.min(100, (currentTime / duration) * 100)) : 0;
+    const activeDuration = computedDuration || duration;
+    const progressPct = activeDuration ? Math.max(0, Math.min(100, (currentTime / activeDuration) * 100)) : 0;
 
     return (
         <div className="video-markers" ref={containerRef}>
