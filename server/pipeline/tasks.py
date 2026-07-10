@@ -1455,7 +1455,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                 match_periods=_periods_for_export,
             )
             overlay_url = _export_overlay_json(
-                session_id, tracks, tracked_bboxes, fps, total, output_dir
+                session_id, tracks, tracked_bboxes, fps, total, output_dir, orig_w, orig_h
             )
         except Exception as exc:
             print(f"[WARN] JSON export failed (non-fatal): {exc}")
@@ -1870,7 +1870,7 @@ def _export_position_jsons(session_id: str, tracks: dict, tracked_bboxes: dict,
     return mm_url, hm_url
 
 
-def _export_overlay_json(session_id: str, tracks: dict, tracked_bboxes: dict, fps: float, total: int, output_dir: Path) -> str | None:
+def _export_overlay_json(session_id: str, tracks: dict, tracked_bboxes: dict, fps: float, total: int, output_dir: Path, orig_w: int, orig_h: int) -> str | None:
     import json
     frames_data = []
     
@@ -1913,6 +1913,7 @@ def _export_overlay_json(session_id: str, tracks: dict, tracked_bboxes: dict, fp
         
     payload = {
         "fps": round(fps, 2),
+        "resolution": [orig_w, orig_h],
         "frames": frames_data
     }
     

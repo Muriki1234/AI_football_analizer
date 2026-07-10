@@ -43,10 +43,22 @@ const CanvasOverlay = ({ dataUrl, videoRef, visible }) => {
             const { videoWidth, videoHeight, currentTime } = video;
             if (!videoWidth || !videoHeight) return;
 
-            // Match canvas internal resolution to video's natural resolution
-            if (canvas.width !== videoWidth || canvas.height !== videoHeight) {
-                canvas.width = videoWidth;
-                canvas.height = videoHeight;
+            let trackW = videoWidth;
+            let trackH = videoHeight;
+            if (overlayData.resolution) {
+                trackW = overlayData.resolution[0];
+                trackH = overlayData.resolution[1];
+            } else if (videoHeight > 720) {
+                // Heuristic for old sessions where backend downscaled to 720p max
+                const scale = 720 / videoHeight;
+                trackW = Math.round(videoWidth * scale);
+                trackH = 720;
+            }
+
+            // Match canvas internal resolution to tracking resolution (or video natural resolution)
+            if (canvas.width !== trackW || canvas.height !== trackH) {
+                canvas.width = trackW;
+                canvas.height = trackH;
             }
 
             ctx.clearRect(0, 0, canvas.width, canvas.height);
