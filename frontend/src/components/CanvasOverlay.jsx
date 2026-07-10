@@ -96,7 +96,7 @@ const CanvasOverlay = ({ dataUrl, videoRef, visible }) => {
                             ctx.lineTo(x1 + w/2 - 10, y1 - 40);
                             ctx.lineTo(x1 + w/2 + 10, y1 - 40);
                             ctx.closePath();
-                            ctx.fillStyle = "rgba(255, 80, 0, 0.9)"; // vivid blue (was BGR 255,80,0 -> RGB 0,80,255)
+                            ctx.fillStyle = "rgba(0, 80, 255, 0.9)"; // vivid blue (was BGR 255,80,0 -> RGB 0,80,255)
                             ctx.fill();
                         }
                     }
@@ -118,18 +118,18 @@ const CanvasOverlay = ({ dataUrl, videoRef, visible }) => {
 
                 // Draw target (SAMURAI)
                 if (targetBbox) {
-                    const [sx1, sy1, sx2, sy2] = targetBbox;
+                    const [sx, sy, sw, sh] = targetBbox;
                     ctx.strokeStyle = "rgba(255, 255, 0, 0.9)"; // Yellow box
                     ctx.lineWidth = 3;
-                    ctx.strokeRect(sx1, sy1, sx2 - sx1, sy2 - sy1);
+                    ctx.strokeRect(sx, sy, sw, sh);
                     
                     // Draw name tag
                     ctx.fillStyle = "rgba(255, 255, 0, 0.9)";
-                    ctx.fillRect(sx1, sy1 - 20, Math.max(100, sx2 - sx1), 20);
+                    ctx.fillRect(sx, sy - 20, Math.max(100, sw), 20);
                     ctx.fillStyle = "black";
                     ctx.font = "bold 12px Arial";
                     ctx.textAlign = "center";
-                    ctx.fillText("Tracked Target", sx1 + Math.max(100, sx2 - sx1)/2, sy1 - 5);
+                    ctx.fillText("Tracked Target", sx + Math.max(100, sw)/2, sy - 5);
                 }
             }
         };
