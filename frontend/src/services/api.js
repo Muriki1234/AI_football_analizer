@@ -625,26 +625,7 @@ export const artifactUrl = (sessionId, relPath) => {
     return relPath;
 };
 
-export const updateSessionPriority = async (sessionId, segmentIdx) => {
-    // Read-modify-write to avoid the missing merge_session_extra RPC error
-    const { data: session } = await supabase
-        .from('sessions')
-        .select('extra')
-        .eq('id', sessionId)
-        .single();
-        
-    let extra = session?.extra;
-    if (typeof extra === 'string') {
-        try { extra = JSON.parse(extra); } catch { extra = {}; }
-    }
-    extra = extra || {};
-    extra.priority_segment = segmentIdx;
-    
-    await supabase
-        .from('sessions')
-        .update({ extra })
-        .eq('id', sessionId);
-};
+
 
 export default {
     uploadVideo,
@@ -657,6 +638,5 @@ export default {
     generateFeature,
     pollTaskStatus,
     listTasks,
-    subscribeSession,
-    updateSessionPriority
+    subscribeSession
 };

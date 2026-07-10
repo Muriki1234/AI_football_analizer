@@ -25,7 +25,7 @@ import {
     subscribeSession,
     updateSessionPriority
 } from '../services/api';
-import Hls from 'hls.js';
+
 import { absUrl, API_KEY } from '../services/config';
 import StepNav from '../components/StepNav';
 import VideoTimelineMarkers from '../components/VideoTimelineMarkers';
@@ -309,7 +309,7 @@ export default function Dashboard() {
     const [session, setSession] = useState(null);
     const [aiSummary, setAiSummary] = useState(null);
     const [aiProgress, setAiProgress] = useState(0);   // 0-100, mirrors the ai_summary task row
-    const [fullReplay, setFullReplay] = useState({ status: 'locked', url: null, progress: 0, error: null });
+
     const [error, setError] = useState(null);
 
     const [drawerOpen, setDrawerOpen] = useState(false);
@@ -366,7 +366,7 @@ export default function Dashboard() {
     useEffect(() => {
         setSession(null);
         setAiSummary(null);
-        setFullReplay({ status: 'locked', url: null, progress: 0, error: null });
+
         setError(null);
         setMinimapOn(false);
         setAiGenerating(false);
@@ -415,14 +415,7 @@ export default function Dashboard() {
 
         const applyTasks = (tasks = []) => {
             for (const t of tasks) {
-                if (t.task_type === 'full_replay') {
-                    setFullReplay({
-                        status: t.status === 'done' ? 'done' : t.status === 'failed' ? 'error' : 'generating',
-                        url: t.url ? taskResultUrl(sessionId, t.url) : null,
-                        progress: t.progress || 0,
-                        error: t.error || null,
-                    });
-                }
+
                 if (t.task_type === 'ai_summary') {
                     setAiSummary(t.result || null);
                     setAiProgress(Math.max(0, Math.min(100, Number(t.progress) || 0)));
@@ -462,14 +455,7 @@ export default function Dashboard() {
             onSession: (s) => { realtimeEvents.current += 1; setSession((prev) => ({ ...prev, ...s })); },
             onTask: (t) => {
                 realtimeEvents.current += 1;
-                if (t.task_type === 'full_replay') {
-                    setFullReplay({
-                        status: t.status === 'done' ? 'done' : t.status === 'failed' ? 'error' : 'generating',
-                        url: t.url ? taskResultUrl(sessionId, t.url) : null,
-                        progress: t.progress || 0,
-                        error: t.error || null,
-                    });
-                }
+
                 if (t.task_type === 'ai_summary') {
                     setAiSummary(t.result || null);
                     setAiProgress(Math.max(0, Math.min(100, Number(t.progress) || 0)));
@@ -544,150 +530,7 @@ export default function Dashboard() {
         };
     }, [drawerOpen]);
 
-    // HLS.js streaming support with priority segment tracking
-    const [hlsFragNotReady, setHlsFragNotReady] = useState(false);
-    const seekTimerRef = useRef(null);
 
-    useEffect(() => {
-        if (!fullReplay.url || !fullReplay.url.endsWith('.m3u8') || !heroVideoRef.current) {
-            return;
-        }
-
-        const video = heroVideoRef.current;
-        let hls;
-
-        // Bug 5 & 10 fix: Debounce seek priority updates (300ms) + map stitched time to original time
-        const handleSeek = () => {
-            if (seekTimerRef.current) clearTimeout(seekTimerRef.current);
-            seekTimerRef.current = setTimeout(() => {
-                let originalSec = video.currentTime;
-                const periods = session?.match_periods_frames;
-                const fps = session?.video_fps || 25.0;
-                
-                // Map stitched time back to original time to find correct segment
-                if (periods && periods.length > 0) {
-                    let stitchedFramesAccum = 0;
-                    const targetStitchedFrames = video.currentTime * fps;
-                    let found = false;
-                    for (const [ps, pe] of periods) {
-                        const duration = pe - ps;
-                        if (stitchedFramesAccum + duration > targetStitchedFrames) {
-                            const offset = targetStitchedFrames - stitchedFramesAccum;
-                            originalSec = (ps + offset) / fps;
-                            found = true;
-                            break;
-                        }
-                        stitchedFramesAccum += duration;
-                    }
-                    if (!found) {
-                        const lastPeriod = periods[periods.length - 1];
-                        originalSec = lastPeriod[1] / fps;
-                    }
-                }
-                
-                const segmentIdx = Math.floor(originalSec / 5.0);
-                updateSessionPriority(sessionId, segmentIdx).catch(console.error);
-            }, 300);
-        };
-
-        const handleWaiting = () => setIsVideoBuffering(true);
-        const handlePlaying = () => {
-            setIsVideoBuffering(false);
-            setHlsFragNotReady(false);
-        };
-        const handleCanPlay = () => {
-            setIsVideoBuffering(false);
-            setHlsFragNotReady(false);
-        };
-
-        if (Hls.isSupported()) {
-            hls = new Hls({
-                autoStartLoad: true,
-                startPosition: -1,
-                debug: false,
-                // Bug 4 fix: Progressive backoff instead of fixed 1s retry
-                fragLoadingMaxRetry: 600,
-                fragLoadingRetryDelay: 500,           // start at 500ms
-                fragLoadingMaxRetryTimeout: 600000,   // cap total retry time at 10 minutes
-                manifestLoadingMaxRetry: 20,
-                manifestLoadingRetryDelay: 500,
-                levelLoadingMaxRetry: 20,
-                levelLoadingRetryDelay: 500,
-                fetchSetup: (context, initParams) => {
-                    let url = context.url;
-                    if (url && missingChunks.has(url.split('?')[0])) {
-                        const sep = url.includes('?') ? '&' : '?';
-                        url = url.split(/[\?&]t=/)[0] + sep + 't=' + Date.now();
-                    }
-                    return new Request(url, initParams);
-                },
-                xhrSetup: (xhr, url) => {
-                    if (url && missingChunks.has(url.split('?')[0])) {
-                        const sep = url.includes('?') ? '&' : '?';
-                        const newUrl = url.split(/[\?&]t=/)[0] + sep + 't=' + Date.now();
-                        xhr.open('GET', newUrl, true);
-                    }
-                }
-            });
-            hls.loadSource(fullReplay.url);
-            hls.attachMedia(video);
-
-            // Auto-play once the manifest is parsed (autoPlay attr doesn't work
-            // when src is undefined and HLS.js attaches media programmatically)
-            hls.on(Hls.Events.MANIFEST_PARSED, () => {
-                video.play().catch(() => {});
-            });
-
-            // Bug 4 fix: Detect 404 on fragment = not rendered yet
-            hls.on(Hls.Events.ERROR, (_event, data) => {
-                if (data.type === Hls.ErrorTypes.NETWORK_ERROR && data.details === Hls.ErrorDetails.FRAG_LOAD_ERROR) {
-                    if (data.context && data.context.url) {
-                        missingChunks.add(data.context.url.split('?')[0]);
-                    }
-                    // Don't set buffering here — background prefetch 404s would
-                    // show spinner while the current segment is still playing.
-                    setHlsFragNotReady(true);
-                } else if (data.fatal) {
-                    console.error('[HLS] Fatal error:', data);
-                    if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-                        hls.startLoad();  // try to recover
-                    } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-                        hls.recoverMediaError();
-                    }
-                }
-            });
-
-            // When a new fragment loads successfully, clear buffering state
-            hls.on(Hls.Events.FRAG_LOADED, (_event, data) => {
-                setHlsFragNotReady(false);
-                setIsVideoBuffering(false);
-                if (data.frag && data.frag.url) {
-                    missingChunks.delete(data.frag.url.split('?')[0]);
-                }
-            });
-
-            video.addEventListener('seeked', handleSeek);
-            video.addEventListener('waiting', handleWaiting);
-            video.addEventListener('playing', handlePlaying);
-            video.addEventListener('canplay', handleCanPlay);
-        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-            // Safari native HLS
-            video.src = fullReplay.url;
-            video.addEventListener('seeked', handleSeek);
-            video.addEventListener('waiting', handleWaiting);
-            video.addEventListener('playing', handlePlaying);
-            video.addEventListener('canplay', handleCanPlay);
-        }
-
-        return () => {
-            if (seekTimerRef.current) clearTimeout(seekTimerRef.current);
-            if (hls) hls.destroy();
-            video.removeEventListener('seeked', handleSeek);
-            video.removeEventListener('waiting', handleWaiting);
-            video.removeEventListener('playing', handlePlaying);
-            video.removeEventListener('canplay', handleCanPlay);
-        };
-    }, [fullReplay.url, sessionId]);
 
     const handleNewPlayer = () => {
         if (!sessionId) return;
@@ -776,39 +619,22 @@ export default function Dashboard() {
                 >
                     <div className="hero-video-card__header">
                         <HiPlayCircle /> <span>Annotated Replay</span>
-                        {fullReplay.status === 'generating' && (
-                            <span className="hero-video-card__pill">Generating · {fullReplay.progress}%</span>
-                        )}
-                        {fullReplay.status === 'done' && fullReplay.url && !fullReplay.url.endsWith('.m3u8') && (
-                            <a
-                                href={fullReplay.url}
-                                download={`pitchlogic_${sessionId?.slice(0, 8) || 'replay'}.mp4`}
-                                target="_blank"
-                                rel="noopener"
-                                className="hero-video-card__download"
-                                title="Download annotated replay mp4"
-                            >
-                                <HiArrowDownTray /> Download
-                            </a>
-                        )}
                     </div>
 
                     <div className="hero-video-card__body">
-                        {((fullReplay.status === 'done' || fullReplay.status === 'generating') && fullReplay.url) || session?.status === 'analysis_done' ? (
+                        {session?.status === 'analysis_done' ? (
                             <div className="hero-video-card__player-wrap">
                                 <video
                                     ref={heroVideoRef}
-                                    src={fullReplay.url ? (!fullReplay.url.endsWith('.m3u8') ? fullReplay.url : undefined) : session?.video_url}
+                                    src={session?.video_url}
                                     autoPlay
                                     muted
                                     loop
                                     playsInline
                                     onClick={(event) => {
                                         const v = event.currentTarget;
-                                        if (fullReplay?.status !== 'generating') {
-                                            if (v.paused) v.play?.().catch(() => { });
-                                            else v.pause?.();
-                                        }
+                                        if (v.paused) v.play?.().catch(() => { });
+                                        else v.pause?.();
                                     }}
                                     className="hero-video-card__player"
                                 />
@@ -822,35 +648,19 @@ export default function Dashboard() {
                                         }}
                                     >
                                         <div className="feature-card__spinner" style={{ width: 48, height: 48, borderTopColor: '#60a5fa' }} />
-                                        {hlsFragNotReady ? (
-                                            <>
-                                                <p style={{ fontWeight: 600 }}>⏳ Rendering this segment...</p>
-                                                <p style={{ fontSize: '0.85rem', opacity: 0.7 }}>Will auto-play when ready</p>
-                                            </>
-                                        ) : (
-                                            <p>Buffering...</p>
-                                        )}
+                                        <p>Buffering...</p>
                                     </div>
                                 )}
                                 <CanvasOverlay
                                     dataUrl={overlayDataUrl}
                                     videoRef={heroVideoRef}
-                                    visible={overlayOn && (!fullReplay.url)}
+                                    visible={overlayOn}
                                 />
                                 <MinimapOverlay
                                     dataUrl={minimapDataUrl}
                                     videoRef={heroVideoRef}
                                     visible={minimapOn}
                                 />
-                            </div>
-                        ) : fullReplay.status === 'generating' ? (
-                            <div className="hero-video-card__placeholder">
-                                <div className="feature-card__spinner" />
-                                <p>Rendering replay… {fullReplay.progress}%</p>
-                            </div>
-                        ) : fullReplay.status === 'error' ? (
-                            <div className="hero-video-card__placeholder">
-                                <p className="feature-card__error">❌ {fullReplay.error || 'Replay generation failed'}</p>
                             </div>
                         ) : (
                             <div className="hero-video-card__placeholder">
@@ -859,7 +669,7 @@ export default function Dashboard() {
                             </div>
                         )}
 
-                        {(((fullReplay.status === 'done' || fullReplay.status === 'generating') && fullReplay.url) || session?.status === 'analysis_done') && (
+                        {session?.status === 'analysis_done' && (
                             <VideoTimelineMarkers
                                 segments={session?.segments}
                                 matchPeriods={session?.match_periods_frames}
