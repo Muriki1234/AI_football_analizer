@@ -1455,7 +1455,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                 match_periods=_periods_for_export,
             )
             overlay_url = _export_overlay_json(
-                session_id, tracks, tracked_bboxes, fps, total, output_dir, orig_w, orig_h
+                session_id, tracks, tracked_bboxes, fps, total, output_dir, _vid_w, _vid_h
             )
         except Exception as exc:
             print(f"[WARN] JSON export failed (non-fatal): {exc}")
