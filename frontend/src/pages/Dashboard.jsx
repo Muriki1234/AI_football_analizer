@@ -146,20 +146,20 @@ const PossessionTooltip = ({ active, payload }) => {
     );
 };
 
-const PossessionBar = ({ team1, team2, neutral }) => {
+const PossessionBar = ({ team1, team2, neutral, t1Color, t2Color }) => {
     const t1 = Math.max(0, Math.min(100, team1 ?? 0));
     const t2 = Math.max(0, Math.min(100, team2 ?? 0));
     const neu = Math.max(0, Math.min(100, neutral ?? Math.max(0, 100 - t1 - t2)));
     return (
         <div className="poss-bar">
             <div className="poss-bar__header">
-                <span><span className="poss-dot poss-dot--t1" /> Team 1 · {t1.toFixed(1)}%</span>
-                <span><span className="poss-dot poss-dot--t2" /> Team 2 · {t2.toFixed(1)}%</span>
+                <span><span className="poss-dot poss-dot--t1" style={t1Color ? { backgroundColor: t1Color } : {}} /> Team 1 · {t1.toFixed(1)}%</span>
+                <span><span className="poss-dot poss-dot--t2" style={t2Color ? { backgroundColor: t2Color } : {}} /> Team 2 · {t2.toFixed(1)}%</span>
                 {neu > 0 && <span><span className="poss-dot poss-dot--neutral" /> Neutral · {neu.toFixed(1)}%</span>}
             </div>
             <div className="poss-bar__track">
-                <div className="poss-bar__fill poss-bar__fill--t1" style={{ width: `${t1}%` }} />
-                <div className="poss-bar__fill poss-bar__fill--t2" style={{ width: `${t2}%` }} />
+                <div className="poss-bar__fill poss-bar__fill--t1" style={{ width: `${t1}%`, backgroundColor: t1Color || undefined }} />
+                <div className="poss-bar__fill poss-bar__fill--t2" style={{ width: `${t2}%`, backgroundColor: t2Color || undefined }} />
                 {neu > 0 && <div className="poss-bar__fill poss-bar__fill--neutral" style={{ width: `${neu}%` }} />}
             </div>
         </div>
@@ -176,9 +176,13 @@ const DataAnalysisPanel = ({ playerSummary }) => {
     const t1 = Number(overall.team1_possession_pct ?? 0);
     const t2 = Number(overall.team2_possession_pct ?? 0);
     const neutral = Number(overall.neutral_possession_pct ?? Math.max(0, 100 - t1 - t2));
+    const teamColors = overall.team_colors_hex || {};
+    const t1Color = teamColors['1'] || '#3498db';
+    const t2Color = teamColors['2'] || '#e74c3c';
+
     const possessionData = [
-        { name: 'Team 1', value: t1, fill: '#3498db' },
-        { name: 'Team 2', value: t2, fill: '#e74c3c' },
+        { name: 'Team 1', value: t1, fill: t1Color },
+        { name: 'Team 2', value: t2, fill: t2Color },
         ...(neutral > 0 ? [{ name: 'Neutral', value: neutral, fill: '#94a3b8' }] : []),
     ].filter((item) => item.value > 0);
 
@@ -248,12 +252,12 @@ const DataAnalysisPanel = ({ playerSummary }) => {
                     </ResponsiveContainer>
                 </div>
                 <div className="poss-row__legend">
-                    <div><span className="poss-dot poss-dot--t1" /> Team 1 <strong>{t1.toFixed(1)}%</strong></div>
-                    <div><span className="poss-dot poss-dot--t2" /> Team 2 <strong>{t2.toFixed(1)}%</strong></div>
+                    <div><span className="poss-dot poss-dot--t1" style={t1Color ? { backgroundColor: t1Color } : {}} /> Team 1 <strong>{t1.toFixed(1)}%</strong></div>
+                    <div><span className="poss-dot poss-dot--t2" style={t2Color ? { backgroundColor: t2Color } : {}} /> Team 2 <strong>{t2.toFixed(1)}%</strong></div>
                     {neutral > 0 && <div><span className="poss-dot poss-dot--neutral" /> Neutral <strong>{neutral.toFixed(1)}%</strong></div>}
                 </div>
             </div>
-            <PossessionBar team1={t1} team2={t2} neutral={neutral} />
+            <PossessionBar team1={t1} team2={t2} neutral={neutral} t1Color={t1Color} t2Color={t2Color} />
 
             {periodData.length > 0 && (
                 <>
