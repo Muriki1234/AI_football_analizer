@@ -153,13 +153,13 @@ const PossessionBar = ({ team1, team2, neutral, t1Color, t2Color }) => {
     return (
         <div className="poss-bar">
             <div className="poss-bar__header">
-                <span><span className="poss-dot poss-dot--t1" style={t1Color ? { backgroundColor: t1Color } : {}} /> Team 1 · {t1.toFixed(1)}%</span>
-                <span><span className="poss-dot poss-dot--t2" style={t2Color ? { backgroundColor: t2Color } : {}} /> Team 2 · {t2.toFixed(1)}%</span>
+                <span><span className="poss-dot poss-dot--t1" style={t1Color ? { background: t1Color } : {}} /> Team 1 · {t1.toFixed(1)}%</span>
+                <span><span className="poss-dot poss-dot--t2" style={t2Color ? { background: t2Color } : {}} /> Team 2 · {t2.toFixed(1)}%</span>
                 {neu > 0 && <span><span className="poss-dot poss-dot--neutral" /> Neutral · {neu.toFixed(1)}%</span>}
             </div>
             <div className="poss-bar__track">
-                <div className="poss-bar__fill poss-bar__fill--t1" style={{ width: `${t1}%`, backgroundColor: t1Color || undefined }} />
-                <div className="poss-bar__fill poss-bar__fill--t2" style={{ width: `${t2}%`, backgroundColor: t2Color || undefined }} />
+                <div className="poss-bar__fill poss-bar__fill--t1" style={{ width: `${t1}%`, background: t1Color || undefined }} />
+                <div className="poss-bar__fill poss-bar__fill--t2" style={{ width: `${t2}%`, background: t2Color || undefined }} />
                 {neu > 0 && <div className="poss-bar__fill poss-bar__fill--neutral" style={{ width: `${neu}%` }} />}
             </div>
         </div>
@@ -252,8 +252,8 @@ const DataAnalysisPanel = ({ playerSummary }) => {
                     </ResponsiveContainer>
                 </div>
                 <div className="poss-row__legend">
-                    <div><span className="poss-dot poss-dot--t1" style={t1Color ? { backgroundColor: t1Color } : {}} /> Team 1 <strong>{t1.toFixed(1)}%</strong></div>
-                    <div><span className="poss-dot poss-dot--t2" style={t2Color ? { backgroundColor: t2Color } : {}} /> Team 2 <strong>{t2.toFixed(1)}%</strong></div>
+                    <div><span className="poss-dot poss-dot--t1" style={t1Color ? { background: t1Color } : {}} /> Team 1 <strong>{t1.toFixed(1)}%</strong></div>
+                    <div><span className="poss-dot poss-dot--t2" style={t2Color ? { background: t2Color } : {}} /> Team 2 <strong>{t2.toFixed(1)}%</strong></div>
                     {neutral > 0 && <div><span className="poss-dot poss-dot--neutral" /> Neutral <strong>{neutral.toFixed(1)}%</strong></div>}
                 </div>
             </div>
