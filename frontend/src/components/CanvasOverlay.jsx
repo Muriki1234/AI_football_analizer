@@ -81,8 +81,17 @@ const CanvasOverlay = ({ dataUrl, videoRef, visible }) => {
                         
                         // Set colors based on team
                         let strokeStyle = "rgba(0, 255, 0, 0.7)"; // fallback green
-                        if (team === 1) strokeStyle = "rgba(52, 152, 219, 0.8)"; // blue
-                        else if (team === 2) strokeStyle = "rgba(231, 76, 60, 0.8)"; // red
+                        if (overlayData.team_colors && overlayData.team_colors[team]) {
+                            // The hex color needs some transparency
+                            const hex = overlayData.team_colors[team];
+                            const r = parseInt(hex.slice(1, 3), 16);
+                            const g = parseInt(hex.slice(3, 5), 16);
+                            const b = parseInt(hex.slice(5, 7), 16);
+                            strokeStyle = `rgba(${r}, ${g}, ${b}, 0.8)`;
+                        } else {
+                            if (team === 1) strokeStyle = "rgba(52, 152, 219, 0.8)"; // blue
+                            else if (team === 2) strokeStyle = "rgba(231, 76, 60, 0.8)"; // red
+                        }
                         
                         // Draw ellipse at bottom of player
                         ctx.save();

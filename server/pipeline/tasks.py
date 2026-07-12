@@ -1455,7 +1455,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                 match_periods=_periods_for_export,
             )
             overlay_url = _export_overlay_json(
-                session_id, tracks, tracked_bboxes, fps, total, output_dir, _vid_w, _vid_h
+                session_id, tracks, tracked_bboxes, fps, total, output_dir, _vid_w, _vid_h, team_assigner.team_colors
             )
         except Exception as exc:
             print(f"[WARN] JSON export failed (non-fatal): {exc}")
@@ -1870,7 +1870,7 @@ def _export_position_jsons(session_id: str, tracks: dict, tracked_bboxes: dict,
     return mm_url, hm_url
 
 
-def _export_overlay_json(session_id: str, tracks: dict, tracked_bboxes: dict, fps: float, total: int, output_dir: Path, orig_w: int, orig_h: int) -> str | None:
+def _export_overlay_json(session_id: str, tracks: dict, tracked_bboxes: dict, fps: float, total: int, output_dir: Path, orig_w: int, orig_h: int, team_colors: dict = None) -> str | None:
     import json
     frames_data = []
     
@@ -1911,9 +1911,14 @@ def _export_overlay_json(session_id: str, tracks: dict, tracked_bboxes: dict, fp
 
         frames_data.append([target_bbox, p_list, ball_bbox])
         
+    team_colors_hex = {
+        str(k): bgr_to_hex(v) for k, v in team_colors.items()
+    } if team_colors else {}
+
     payload = {
         "fps": round(fps, 2),
         "resolution": [orig_w, orig_h],
+        "team_colors": team_colors_hex,
         "frames": frames_data
     }
     
