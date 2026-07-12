@@ -1405,7 +1405,8 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         print(f"[INFO] Computing summary for session {session_id}…")
         _t = _time.perf_counter()
         player_summary = _compute_player_summary(
-            tracks, tracked_bboxes, team_control, fps=fps, segments=segments)
+            tracks, tracked_bboxes, team_control, fps=fps, segments=segments,
+            team_colors=team_assigner.team_colors)
         _bench("compute_summary", _t)
 
         cache_payload = {
@@ -1577,7 +1578,8 @@ def _summary_for_range(tracks: dict, tracked_bboxes: dict, team_control: list,
 
 def _compute_player_summary(tracks: dict, tracked_bboxes: dict,
                             team_control: list, fps: int = 24,
-                            segments: list = None) -> dict:
+                            segments: list = None,
+                            team_colors: dict = None) -> dict:
     """从 tracks 中提取被追踪球员的关键数字（存入 session，立即可用）
 
     若提供 segments，overall 只统计实际比赛帧（排除 halftime），
@@ -1639,6 +1641,11 @@ def _compute_player_summary(tracks: dict, tracked_bboxes: dict,
         "neutral_possession_pct": round(neu / total_ctrl * 100,  1),
         "possession_switches":  possession_switches,
     }
+    if team_colors:
+        try:
+            overall["team_colors_hex"] = {str(k): bgr_to_hex(v) for k, v in team_colors.items()}
+        except Exception:
+            pass
 
     # ── 分段统计（跳过 halftime）──────────────────────────────────
     if segments:
