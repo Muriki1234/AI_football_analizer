@@ -434,7 +434,7 @@ export const analyzeFrame = async (sessionId, frameIndex = 0) => {
     }
 };
 
-export const queueFeature = async (sessionId, feature) => {
+export const queueFeature = async (sessionId, feature, { mode } = {}) => {
     const res = await authFetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -442,7 +442,8 @@ export const queueFeature = async (sessionId, feature) => {
             input: {
                 action: 'feature',
                 feature: feature,
-                session_id: sessionId
+                session_id: sessionId,
+                ...(mode && { mode }),
             }
         })
     });

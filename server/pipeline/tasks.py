@@ -3054,7 +3054,7 @@ def _render_gemini_video(video_path: str, bboxes_dict: dict,
         return False
 
 
-def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionManager):
+def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionManager, mode: str = "team"):
     """
     多模态 AI 战术分析：默认走 Gemini 2.0 Flash（直接喂视频，支持 60min+），
     AI_BACKEND=qwen 切回老的 Qwen3-VL Flash 路径（≤10min 视频，抽帧分析）。
@@ -3073,6 +3073,10 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
         import json
         sm.update_task(session_id, task_id, status="running", progress=5,
                        stage="loading_data")
+
+        # ── 0. 分析模式：team（战术复盘）或 player（个人特训）──
+        analysis_mode = session.get("ai_summary_mode", "team")
+        print(f"[AI_SUMMARY] analysis_mode={analysis_mode}")
 
         # ── 1. 依赖检查 & 配置 ──
         ai_backend = os.environ.get("AI_BACKEND", "gemini").strip().lower()
@@ -3396,25 +3400,68 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
                     "（球衣颜色 + 号码 + 场上位置）即可。\n\n"
                 )
 
-            _final_sections = (
-                "## 比赛概览\n简述双方控球对比、关键跑动数据、比赛节奏。\n\n"
-                + _player_section
-                + "## 冲刺与爆发\n"
-                "依据下方统计数据里的 `sprints`，给出冲刺次数、平均/最长持续时间、"
-                "峰值速度，并指出若干次冲刺发生的时间点 (events[].time_mm_ss)。"
-                "**绝对指令**：如果 `tracked_player.speed_reliability` 是 `suspect`，或 `sprints.count` 为 0，"
-                "你必须在报告中明确指出：'由于最高速度数据异常且未记录到持续冲刺，该峰值速度极可能是摄像机移动或追踪误差导致的噪点，不代表球员真实爆发力'。"
-                "严禁将此异常速度解释为球员具备出色的瞬间爆发力。\n\n"
-                + "## 场区分布\n"
-                "依据 `pitch_zones`（前/中/后场占比），说明被追踪球员主要活动区域，"
-                "并据此判断角色（边锋/前腰/后腰/中卫 等）。\n\n"
-                + "## 防线穿透时刻\n"
-                "依据 `defensive_breakthroughs.events`（每次穿透的 mm:ss 时间），"
-                "**列出每次穿透的具体时间点**并简评战术意义；count=0 时直接说明本场未观察到突破对方防线。\n\n"
-                + "## 战术观察\n阵型特征、进攻模式、防守组织，基于画面实际观察。\n\n"
-                + "## 改进建议\n3 条具体可执行的训练/战术建议，必须引用上面任意一项具体数据 / 时间点。"
-                "注意：如果速度数据被标记为 suspect，绝对不能基于该异常的高速度提出战术建议。\n\n"
+            # ── 双模态 Prompt 切换 ─────────────────────────────────────────
+            _timestamp_rule = (
+                "**时间戳规则（必须严格遵守）**：当你提到视频中的具体时间点时，"
+                "必须使用 `[MM:SS]` 格式（例如 `[01:15]`、`[23:45]`）。"
+                "这个格式会被前端自动解析为可点击的跳转链接。"
+                "每个关键观察都应该附带至少一个时间戳。\n\n"
             )
+
+            if analysis_mode == "player":
+                # ── 个人特训模式 ──────────────────────────────────────────
+                _final_sections = (
+                    _timestamp_rule
+                    + "## 球员画像\n"
+                    "用一句话介绍这名球员（球衣颜色+号码+场上位置），然后给出整场表现的一句话总评。\n\n"
+                    + _player_section
+                    + "## 关键回合复盘\n"
+                    "列出 3-5 个最值得关注的比赛瞬间，每个必须包含：\n"
+                    "1. 精确时间戳 `[MM:SS]`\n"
+                    "2. 发生了什么（传球/跑位/丢球/射门等）\n"
+                    "3. 做对了什么 或 应该怎么改进\n\n"
+                    + "## 冲刺与体能分析\n"
+                    "依据 `sprints` 数据分析冲刺表现。对比上下半场的冲刺频率和峰值速度，"
+                    "判断体能是否在下半场明显下降。"
+                    "**绝对指令**：如果 `speed_reliability` 是 `suspect` 或 `sprints.count` 为 0，"
+                    "必须明确指出速度数据不可靠。\n\n"
+                    + "## 场区活动热区\n"
+                    "依据 `pitch_zones` 分析活动区域，判断是否符合该位置的战术要求。\n\n"
+                    + "## 本周个人专项训练计划\n"
+                    "基于以上分析，为这名球员量身定制 3-5 条具体的训练建议。\n"
+                    "每条建议必须包含：\n"
+                    "- 训练内容（例如：弱势脚传中练习）\n"
+                    "- 建议时长/组数\n"
+                    "- 针对的具体问题（引用上面的某个时间戳或数据）\n\n"
+                )
+            else:
+                # ── 战术复盘模式（默认）────────────────────────────────────
+                _final_sections = (
+                    _timestamp_rule
+                    + "## 比赛概览\n简述双方控球对比、关键跑动数据、比赛节奏。\n\n"
+                    + _player_section
+                    + "## 关键战术回合\n"
+                    "列出 3-5 个决定比赛走向的关键回合，每个必须包含精确时间戳 `[MM:SS]` "
+                    "和战术层面的分析（阵型变化、防线漏洞、进攻套路等）。\n\n"
+                    + "## 冲刺与爆发\n"
+                    "依据下方统计数据里的 `sprints`，给出冲刺次数、平均/最长持续时间、"
+                    "峰值速度，并指出若干次冲刺发生的时间点 `[MM:SS]`。"
+                    "**绝对指令**：如果 `tracked_player.speed_reliability` 是 `suspect`，或 `sprints.count` 为 0，"
+                    "你必须在报告中明确指出速度数据不可靠。\n\n"
+                    + "## 场区分布\n"
+                    "依据 `pitch_zones`（前/中/后场占比），说明被追踪球员主要活动区域，"
+                    "并据此判断角色。\n\n"
+                    + "## 防线穿透时刻\n"
+                    "依据 `defensive_breakthroughs.events`，"
+                    "**列出每次穿透的具体时间点 `[MM:SS]`** 并简评战术意义。\n\n"
+                    + "## 战术观察\n阵型特征、进攻模式、防守组织，基于画面实际观察。\n\n"
+                    + "## 本周团队战术训练计划\n"
+                    "基于以上分析，为球队制定 3-5 条具体的战术训练建议。\n"
+                    "每条建议必须包含：\n"
+                    "- 训练内容（例如：整体造越位配合练习）\n"
+                    "- 建议时长/组数\n"
+                    "- 针对的具体问题（引用上面的某个时间戳或数据）\n\n"
+                )
 
             # ── Helper：调用 LLM 看一段视频，返回 markdown 字符串 ─────────────
             #   ci_for_progress 用于在 Gemini PROCESSING 等待 / Qwen 抽帧时
@@ -3538,8 +3585,13 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
 
                 if n_chunks == 1:
                     # 单段：直接生成最终报告
+                    _mode_intro = (
+                        "你是一名球员的私人教练，专注分析这名球员的个人表现并提供针对性训练建议。"
+                        if analysis_mode == "player"
+                        else "你是一个专业足球战术分析师，负责分析整场比赛的战术得失。"
+                    )
                     _chunk_prompt = (
-                        f"你是一个专业足球战术分析师。{_video_desc}"
+                        f"{_mode_intro}{_video_desc}"
                         "结合视频和下面的统计数据，生成一份**中文 Markdown 报告**，"
                         "严格按顺序使用以下二级标题：\n\n"
                         + _final_sections
@@ -3581,7 +3633,12 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
             else:
                 sm.update_task(session_id, task_id, progress=90,
                                stage="aggregating_reports")
+                _agg_mode_intro = (
+                    "你是一名球员的私人教练。" if analysis_mode == "player"
+                    else "你是一个专业足球战术分析师。"
+                )
                 _aggregator_prompt = (
+                    f"{_agg_mode_intro}"
                     "你收到了多段视频笔记（一场 90 分钟比赛被切成了 N 段，每段独立观察）。"
                     "请综合所有片段笔记 + 整场统计数据，生成一份最终中文 Markdown 报告，"
                     "严格按顺序使用以下二级标题：\n\n"
@@ -3632,6 +3689,7 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
             "model":           model_name,
             "n_chunks":        n_chunks,
             "char_count":      len(report_md),
+            "analysis_mode":   analysis_mode,
         }
         _finish_task(sm, session_id, task_id, report_path, result=result_data)
 

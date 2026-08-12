@@ -21,7 +21,7 @@ import mimetypes
 from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -294,6 +294,7 @@ async def start_tracking(
 async def queue_feature(
     session_id: str,
     feature: str,
+    mode: str = Query("team"),
     sm: SessionManager = Depends(get_session_manager),
     pool: WorkerPool = Depends(get_worker_pool),
 ) -> QueuedResponse:
@@ -320,6 +321,10 @@ async def queue_feature(
             task_id=existing.get("task_id", session_id),
             status=existing.get("status", "queued"),
         )
+
+    # Pass AI summary mode into session for run_ai_summary to read
+    if feature == "ai_summary":
+        s["ai_summary_mode"] = mode
 
     fn = FEATURE_TASKS[feature]
     task_id = sm.create_task(session_id, feature)

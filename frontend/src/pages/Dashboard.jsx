@@ -32,6 +32,7 @@ import VideoTimelineMarkers from '../components/VideoTimelineMarkers';
 import CanvasOverlay from '../components/CanvasOverlay';
 import MinimapOverlay from '../components/MinimapOverlay';
 import HeatmapCanvas from '../components/HeatmapCanvas';
+import TelestrationCanvas from '../components/TelestrationCanvas';
 import './Dashboard.css';
 
 const PHASE_LABELS = {
@@ -320,7 +321,11 @@ export default function Dashboard() {
     const [minimapOn, setMinimapOn] = useState(false);
     const [overlayOn, setOverlayOn] = useState(true);
     const [aiGenerating, setAiGenerating] = useState(false);
+    const [viewMode, setViewMode] = useState('team'); // 'team' = 战术复盘, 'player' = 个人特训
+    const [drawMode, setDrawMode] = useState(false);
+    const [minimapExpanded, setMinimapExpanded] = useState(false);
     const [isVideoBuffering, setIsVideoBuffering] = useState(false);
+    const telestrationRef = useRef(null);
 
     const analysisKicked = useRef(false);
     const summaryFetched = useRef(false);
@@ -488,9 +493,18 @@ export default function Dashboard() {
     const aiMarkdown = useMemo(() => {
         const txt = taskTextResult(aiSummary);
         if (!txt) return '';
-        // XSS 防线：AI 内容可能含视频里的攻击者输入（jersey/scoreboard 文本），
-        // 走 DOMPurify 过一遍再注入到 DOM。
-        try { return DOMPurify.sanitize(marked.parse(txt)); }
+        try {
+            let html = DOMPurify.sanitize(marked.parse(txt));
+            // 将 [MM:SS] 时间戳转为可点击的跳转链接（在sanitize之后操作，安全）
+            html = html.replace(
+                /\[(\d{1,3}):(\d{2})\]/g,
+                (match, mm, ss) => {
+                    const totalSec = parseInt(mm, 10) * 60 + parseInt(ss, 10);
+                    return `<span class="ai-timestamp" data-seconds="${totalSec}" title="跳转到 ${mm}:${ss}">[${mm}:${ss}]</span>`;
+                }
+            );
+            return html;
+        }
         catch { return DOMPurify.sanitize(txt); }
     }, [aiSummary]);
 
@@ -498,8 +512,12 @@ export default function Dashboard() {
         if (aiGenerating || !sessionId) return;
         setAiGenerating(true);
         try {
-            await queueFeature(sessionId, 'ai_summary');
-            toast.success('AI summary queued — this takes ~1 minute.');
+            await queueFeature(sessionId, 'ai_summary', { mode: viewMode });
+            toast.success(
+                viewMode === 'player'
+                    ? '个人特训报告生成中 — 约需 1 分钟'
+                    : 'AI 战术分析生成中 — 约需 1 分钟'
+            );
         } catch (e) {
             toast.error(e?.message || 'Failed to queue AI summary');
             setAiGenerating(false);
@@ -660,11 +678,26 @@ export default function Dashboard() {
                                     videoRef={heroVideoRef}
                                     visible={overlayOn}
                                 />
-                                <MinimapOverlay
-                                    dataUrl={minimapDataUrl}
-                                    videoRef={heroVideoRef}
-                                    visible={minimapOn}
+                                <TelestrationCanvas
+                                    active={drawMode}
+                                    parentRef={telestrationRef}
+                                    width={heroVideoRef.current?.videoWidth || 1280}
+                                    height={heroVideoRef.current?.videoHeight || 720}
                                 />
+                                <div style={{ position: 'relative' }}>
+                                    <MinimapOverlay
+                                        dataUrl={minimapDataUrl}
+                                        videoRef={heroVideoRef}
+                                        visible={minimapOn}
+                                    />
+                                    {minimapOn && (
+                                        <button
+                                            className="minimap-expand-btn"
+                                            onClick={() => setMinimapExpanded(true)}
+                                            title="放大战术板"
+                                        >⛶</button>
+                                    )}
+                                </div>
                             </div>
                         ) : (
                             <div className="hero-video-card__placeholder">
@@ -712,6 +745,20 @@ export default function Dashboard() {
                                 </button>
                             </div>
 
+                            {/* Draw mode toggle */}
+                            <div className={`drawer__item ${drawMode ? 'is-active' : ''}`}>
+                                <button
+                                    className="drawer__item-head"
+                                    onClick={() => setDrawMode((v) => !v)}
+                                >
+                                    <HiFire />
+                                    <span>战术画板</span>
+                                    <span className={`drawer__toggle ${drawMode ? 'on' : ''}`}>
+                                        {drawMode ? 'ON' : 'OFF'}
+                                    </span>
+                                </button>
+                            </div>
+
                             {/* Data Analysis — always rendered */}
                             <div className="drawer__item is-static">
                                 <div className="drawer__item-head drawer__item-head--static">
@@ -725,13 +772,39 @@ export default function Dashboard() {
                             <div className="drawer__item is-static">
                                 <div className="drawer__item-head drawer__item-head--static">
                                     <HiSparkles />
-                                    <span>AI Analysis</span>
+                                    <span>AI 智能教练</span>
                                 </div>
                                 <div className="drawer__section-body">
+                                    {/* Mode toggle */}
+                                    <div className="ai-mode-toggle">
+                                        <button
+                                            className={`ai-mode-toggle__btn ${viewMode === 'team' ? 'is-active' : ''}`}
+                                            onClick={() => setViewMode('team')}
+                                        >
+                                            🌐 战术复盘
+                                        </button>
+                                        <button
+                                            className={`ai-mode-toggle__btn ${viewMode === 'player' ? 'is-active' : ''}`}
+                                            onClick={() => setViewMode('player')}
+                                        >
+                                            🎯 个人特训
+                                        </button>
+                                    </div>
                                     {aiMarkdown ? (
                                         <div
                                             className="markdown-body"
                                             dangerouslySetInnerHTML={{ __html: aiMarkdown }}
+                                            onClick={(e) => {
+                                                // Timestamp click handler: [MM:SS] links jump the video
+                                                const el = e.target.closest('.ai-timestamp');
+                                                if (el && heroVideoRef.current) {
+                                                    const sec = parseInt(el.dataset.seconds, 10);
+                                                    if (!isNaN(sec)) {
+                                                        heroVideoRef.current.currentTime = sec;
+                                                        heroVideoRef.current.play().catch(() => {});
+                                                    }
+                                                }
+                                            }}
                                         />
                                     ) : aiGenerating ? (
                                         <div className="drawer__loading">
@@ -761,9 +834,9 @@ export default function Dashboard() {
                                         </div>
                                     ) : isDone ? (
                                         <div className="drawer__empty-cta">
-                                            <p>Generate an AI tactical breakdown of this clip.</p>
+                                            <p>{viewMode === 'player' ? '生成你的专属私教报告' : '生成 AI 战术分析报告'}</p>
                                             <button className="btn btn-primary" onClick={handleGenerateAI}>
-                                                <HiSparkles /> Generate AI Summary
+                                                <HiSparkles /> {viewMode === 'player' ? '🎯 开始个人特训分析' : '🌐 开始战术复盘分析'}
                                             </button>
                                         </div>
                                     ) : (
@@ -802,6 +875,33 @@ export default function Dashboard() {
                             </button>
                         </div>
             </aside>
+
+            {/* Expanded minimap tactical board overlay */}
+            {minimapExpanded && (
+                <div className="minimap-board-overlay" onClick={() => setMinimapExpanded(false)}>
+                    <div className="minimap-board" onClick={(e) => e.stopPropagation()}>
+                        <MinimapOverlay
+                            dataUrl={minimapDataUrl}
+                            videoRef={heroVideoRef}
+                            visible={true}
+                            expanded={true}
+                        />
+                        <TelestrationCanvas
+                            active={true}
+                            parentRef={null}
+                            width={900}
+                            height={540}
+                        />
+                        <div className="minimap-board__toolbar">
+                            <button
+                                className="minimap-board__close"
+                                onClick={() => setMinimapExpanded(false)}
+                                title="关闭"
+                            >✕</button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
