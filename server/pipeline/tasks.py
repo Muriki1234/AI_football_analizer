@@ -2820,10 +2820,14 @@ def _split_video_by_duration(video_path: str, chunk_sec: int,
             "-loglevel", "error",
             str(chunk_path),
         ]
-        r = _sp.run(cmd, capture_output=True, text=True, timeout=300)
-        if r.returncode != 0 or not chunk_path.exists() or chunk_path.stat().st_size < 1024:
-            # 单段切失败：用全段原文件兜底，避免整个流程崩
-            print(f"[AI_SUMMARY] chunk split failed for {cur}-{end}s: {r.stderr[:200]}")
+        try:
+            r = _sp.run(cmd, capture_output=True, text=True, timeout=300)
+            if r.returncode != 0 or not chunk_path.exists() or chunk_path.stat().st_size < 1024:
+                # 单段切失败：用全段原文件兜底，避免整个流程崩
+                print(f"[AI_SUMMARY] chunk split failed for {cur}-{end}s: {r.stderr[:200]}")
+                break
+        except _sp.TimeoutExpired as e:
+            print(f"[AI_SUMMARY] chunk split timed out for {cur}-{end}s")
             break
         chunks.append((chunk_path, cur, end))
         cur = end
@@ -2859,11 +2863,15 @@ def _split_video_by_periods(video_path: str, periods_sec: list[tuple[float, floa
                 "-loglevel", "error",
                 str(chunk_path),
             ]
-            r = _sp.run(cmd, capture_output=True, text=True, timeout=300)
-            if (r.returncode != 0 or not chunk_path.exists()
-                    or chunk_path.stat().st_size < 1024):
-                print(f"[AI_SUMMARY] period chunk split failed "
-                      f"({cur}-{seg_end}s): {r.stderr[:200]}")
+            try:
+                r = _sp.run(cmd, capture_output=True, text=True, timeout=300)
+                if (r.returncode != 0 or not chunk_path.exists()
+                        or chunk_path.stat().st_size < 1024):
+                    print(f"[AI_SUMMARY] period chunk split failed "
+                          f"({cur}-{seg_end}s): {r.stderr[:200]}")
+                    break
+            except _sp.TimeoutExpired:
+                print(f"[AI_SUMMARY] period chunk split timed out ({cur}-{seg_end}s)")
                 break
             chunks.append((chunk_path, cur, seg_end))
             cur = seg_end
