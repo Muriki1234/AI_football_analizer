@@ -326,7 +326,7 @@ def _run_samurai_segment(seg_idx: int, session_id: str, output_dir: Path,
                           orig_w: int, orig_h: int, total_orig_frames: int,
                           resize_factor: float, skip_step: int,
                           samurai_script: str, sam2_model_path: str,
-                          samurai_root: str) -> dict:
+                          samurai_root: str, kill_event=None) -> dict:
     """
     Run SAMURAI on ONE segment as a subprocess. Designed to be called from a
     thread pool so multiple segments can run concurrently — each subprocess
@@ -363,15 +363,51 @@ def _run_samurai_segment(seg_idx: int, session_id: str, output_dir: Path,
         "-vf", vf, "-vsync", "0", "-q:v", "2",
         str(frames_dir / "%05d.jpg"),
     ]
-    try:
-        res = subprocess.run(cmd_ext, capture_output=True, text=True, timeout=180)
-    except subprocess.TimeoutExpired as _te:
-        raise RuntimeError(f"[seg {seg_idx}] ffmpeg extract timed out after 180s") from _te
-
-    if res.returncode != 0:
-        raise RuntimeError(
-            f"[seg {seg_idx}] ffmpeg extract failed: {res.stderr[-1000:]}"
+    env = os.environ.copy()
+    env["PYTHONPATH"] = (
+        f"{samurai_root}:{samurai_root}/sam2:" + env.get("PYTHONPATH", "")
+    )
+    env["HYDRA_FULL_ERROR"] = "1"
+    
+    def _run_proc(cmd_args, timeout_sec, timeout_msg, cwd=None):
+        import time
+        proc = subprocess.Popen(
+            cmd_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            env=env, cwd=cwd
         )
+        start_time = time.time()
+        out_data, err_data = "", ""
+        while True:
+            if kill_event and kill_event.is_set():
+                proc.kill()
+                proc.wait()
+                raise RuntimeError(f"[seg {seg_idx}] Aborted by kill event")
+            if time.time() - start_time > timeout_sec:
+                proc.kill()
+                proc.wait()
+                raise RuntimeError(timeout_msg)
+            try:
+                out_chunk, err_chunk = proc.communicate(timeout=1.0)
+                if out_chunk: out_data += out_chunk
+                if err_chunk: err_data += err_chunk
+                break # Process finished
+            except subprocess.TimeoutExpired:
+                continue # Process still running, loop again
+
+        return proc.returncode, out_data, err_data
+
+    try:
+        retcode, out, err = _run_proc(
+            cmd_ext, 180.0,
+            f"[seg {seg_idx}] ffmpeg extract timed out after 180s"
+        )
+        if retcode != 0:
+            raise RuntimeError(
+                f"[seg {seg_idx}] ffmpeg extract failed: {err[-1000:]}"
+            )
+    except Exception as e:
+        raise RuntimeError(str(e))
+
     if not list(frames_dir.glob("*.jpg")):
         raise RuntimeError(f"[seg {seg_idx}] no frames extracted")
 
@@ -395,31 +431,27 @@ def _run_samurai_segment(seg_idx: int, session_id: str, output_dir: Path,
         "--video_output_path", str(output_video),
         "--model_path", sam2_model_path,
     ]
-    env = os.environ.copy()
-    env["PYTHONPATH"] = (
-        f"{samurai_root}:{samurai_root}/sam2:" + env.get("PYTHONPATH", "")
-    )
-    env["HYDRA_FULL_ERROR"] = "1"
+
     # subprocess 超时：基于 segment 长度估算，最少 10 分钟。SAMURAI ≈ 0.5×
     # 视频时长，给 5× 余量。timeout=None 之前能让一个挂死的子进程吃掉整个
     # Serverless worker 时窗 + GPU 显存。
     _seg_sec = max(1.0, (end_frame - start_frame) / 25.0)
     _samurai_timeout = max(600.0, _seg_sec * 5.0)
+    
     try:
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=_samurai_timeout,
-            env=env, cwd=samurai_root,
-        )
-    except subprocess.TimeoutExpired as _te:
-        raise RuntimeError(
+        retcode, out, err = _run_proc(
+            cmd, _samurai_timeout,
             f"[seg {seg_idx}] SAMURAI timed out after {_samurai_timeout/60:.1f} min "
-            f"(segment {start_frame}..{end_frame})"
-        ) from _te
-    if proc.returncode != 0:
-        tail = proc.stderr[-2000:] if proc.stderr else ""
-        raise RuntimeError(
-            f"[seg {seg_idx}] SAMURAI exited {proc.returncode}: {tail}"
+            f"(segment {start_frame}..{end_frame})",
+            cwd=samurai_root
         )
+        if retcode != 0:
+            tail = err[-2000:] if err else ""
+            raise RuntimeError(
+                f"[seg {seg_idx}] SAMURAI exited {retcode}: {tail}"
+            )
+    except Exception as e:
+        raise RuntimeError(str(e))
 
     if not output_txt.exists():
         raise FileNotFoundError(
@@ -733,6 +765,7 @@ def run_samurai_tracking_multi(session_id: str, session: dict,
                 orig_w, orig_h, total_orig_frames,
                 RESIZE_FACTOR, SKIP_STEP,
                 samurai_script, sam2_model_path, samurai_root,
+                kill_event=session.get("_samurai_kill_event")
             )
 
         results = []
