@@ -1,11 +1,12 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
+import PropTypes from 'prop-types';
 
 /**
  * TelestrationCanvas — freehand + arrow drawing overlay for video or minimap.
  *
  * Props:
  *   active     : boolean — when true, canvas captures pointer events
- *   canvasRef  : React ref — parent can read this to do toDataURL() for screenshots
+ *   parentRef  : React ref — parent can read this to do toDataURL() for screenshots
  *   width      : number — logical pixel width (matches video or minimap)
  *   height     : number — logical pixel height
  */
@@ -81,9 +82,7 @@ export default function TelestrationCanvas({ active, parentRef, width, height })
             const canvas = canvasRef.current;
             if (!canvas) return;
             const ctx = canvas.getContext('2d');
-            const dpr = window.devicePixelRatio || 1;
             ctx.save();
-            ctx.scale(dpr, dpr);
             const pts = currentStroke.current;
             if (pts.length >= 2) {
                 ctx.strokeStyle = color;
@@ -220,3 +219,10 @@ function drawArrow(ctx, from, to, color) {
     ctx.closePath();
     ctx.fill();
 }
+
+TelestrationCanvas.propTypes = {
+    active: PropTypes.bool,
+    parentRef: PropTypes.shape({ current: PropTypes.any }),
+    width: PropTypes.number,
+    height: PropTypes.number
+};

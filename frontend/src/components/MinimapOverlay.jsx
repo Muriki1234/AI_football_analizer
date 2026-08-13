@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import PropTypes from 'prop-types';
 
 /**
  * Canvas overlay drawn on top of the main video, synced to currentTime.
@@ -36,6 +37,15 @@ export default function MinimapOverlay({ dataUrl, videoRef, visible }) {
     });
     const [dragging, setDragging] = useState(false);
 
+    // Save to localStorage whenever pos changes
+    useEffect(() => {
+        if (pos) {
+            try {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(pos));
+            } catch { /* ignore */ }
+        }
+    }, [pos]);
+
     useEffect(() => {
         if (!dragging) return;
         const onMove = (e) => {
@@ -50,10 +60,6 @@ export default function MinimapOverlay({ dataUrl, videoRef, visible }) {
         };
         const onUp = () => {
             setDragging(false);
-            // Persist to localStorage
-            try {
-                if (pos) localStorage.setItem(STORAGE_KEY, JSON.stringify(pos));
-            } catch { /* localStorage disabled */ }
         };
         window.addEventListener('mousemove', onMove);
         window.addEventListener('mouseup', onUp);
@@ -61,7 +67,7 @@ export default function MinimapOverlay({ dataUrl, videoRef, visible }) {
             window.removeEventListener('mousemove', onMove);
             window.removeEventListener('mouseup', onUp);
         };
-    }, [dragging, pos]);
+    }, [dragging]);
 
     const handleMouseDown = (e) => {
         e.preventDefault();
@@ -160,9 +166,9 @@ export default function MinimapOverlay({ dataUrl, videoRef, visible }) {
         const stride = data.sample_stride || 1;
         const sampleIndices = data.sample_indices;
         const pickInterp = (targetFrame) => {
-            const N = data.frames.length;
-            if (!sampleIndices || sampleIndices.length === 0) {
-                const idx = Math.min(Math.max(0, targetFrame), N - 1);
+            const N = data.frames?.length || 0;
+            if (!sampleIndices || sampleIndices.length === 0 || N === 0) {
+                const idx = Math.min(Math.max(0, targetFrame), Math.max(0, N - 1));
                 return { a: idx, b: idx, alpha: 0 };
             }
             // 用 stride 估计一个起点，然后线性扫描找到 targetFrame 所在的区间。
@@ -226,8 +232,8 @@ export default function MinimapOverlay({ dataUrl, videoRef, visible }) {
 
             // 取前后两帧 + 插值比例
             const { a, b, alpha } = pickInterp(targetFrame);
-            const frameA = data.frames[a] || [];
-            const frameB = data.frames[b] || [];
+            const frameA = data.frames?.[a] || [];
+            const frameB = data.frames?.[b] || [];
             const mapB = toMap(frameB);
             const ballA = data.ball?.[a];
             const ballB = data.ball?.[b];
@@ -318,3 +324,9 @@ export default function MinimapOverlay({ dataUrl, videoRef, visible }) {
         />
     );
 }
+
+MinimapOverlay.propTypes = {
+    dataUrl: PropTypes.string,
+    videoRef: PropTypes.shape({ current: PropTypes.any }),
+    visible: PropTypes.bool
+};

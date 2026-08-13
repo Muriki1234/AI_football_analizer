@@ -747,36 +747,45 @@ def run_samurai_tracking_multi(session_id: str, session: dict,
             for i in futures.values():
                 seg_attempts[i] = 1
             pending = set(futures.keys())
+            import concurrent.futures
             while pending:
-                for fut in list(as_completed(pending)):
-                    pending.discard(fut)
-                    seg_idx = futures[fut]
-                    try:
-                        r = fut.result()
-                        results.append(r)
-                        done += 1
-                        pct = 5 + int(80 * done / n_segments)
-                        sm.update_status(
-                            session_id, "tracking", progress=pct,
-                            stage=f"samurai_multi ({done}/{n_segments} segments)"
-                        )
-                        print(f"[SAMURAI-MULTI] seg {r['seg_idx']} done "
-                              f"({r['frames_emitted']} sparse frames, "
-                              f"range {r['start']}..{r['end']})")
-                    except Exception as seg_exc:
-                        attempt = seg_attempts[seg_idx]
-                        if attempt < 2:
-                            seg_attempts[seg_idx] += 1
-                            print(f"[SAMURAI-MULTI] seg {seg_idx} attempt "
-                                  f"{attempt} failed: {seg_exc} — retrying")
-                            retry_seg = next(s for (i, s) in all_segs if i == seg_idx)
-                            retry_fut = _submit_segment(pool, seg_idx, retry_seg)
-                            futures[retry_fut] = seg_idx
-                            pending.add(retry_fut)
-                        else:
-                            print(f"[SAMURAI-MULTI] seg {seg_idx} failed "
-                                  f"after {attempt} attempts: {seg_exc} — "
-                                  "interpolation will cover the gap")
+                if session.get("_samurai_kill_event") and session["_samurai_kill_event"].is_set():
+                    print("[SAMURAI-MULTI] Kill event received, shutting down pool", flush=True)
+                    for f in pending:
+                        f.cancel()
+                    raise RuntimeError("SAMURAI multi-segment aborted by timeout")
+                try:
+                    for fut in as_completed(pending, timeout=2.0):
+                        pending.discard(fut)
+                        seg_idx = futures[fut]
+                        try:
+                            r = fut.result()
+                            results.append(r)
+                            done += 1
+                            pct = 5 + int(80 * done / n_segments)
+                            sm.update_status(
+                                session_id, "tracking", progress=pct,
+                                stage=f"samurai_multi ({done}/{n_segments} segments)"
+                            )
+                            print(f"[SAMURAI-MULTI] seg {r['seg_idx']} done "
+                                  f"({r['frames_emitted']} sparse frames, "
+                                  f"range {r['start']}..{r['end']})")
+                        except Exception as seg_exc:
+                            attempt = seg_attempts[seg_idx]
+                            if attempt < 2:
+                                seg_attempts[seg_idx] += 1
+                                print(f"[SAMURAI-MULTI] seg {seg_idx} attempt "
+                                      f"{attempt} failed: {seg_exc} — retrying")
+                                retry_seg = next(s for (i, s) in all_segs if i == seg_idx)
+                                retry_fut = _submit_segment(pool, seg_idx, retry_seg)
+                                futures[retry_fut] = seg_idx
+                                pending.add(retry_fut)
+                            else:
+                                print(f"[SAMURAI-MULTI] seg {seg_idx} failed "
+                                      f"after {attempt} attempts: {seg_exc} — "
+                                      "interpolation will cover the gap")
+                except concurrent.futures.TimeoutError:
+                    pass
 
         if not results:
             raise RuntimeError(

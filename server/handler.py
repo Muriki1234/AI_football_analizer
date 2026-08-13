@@ -748,6 +748,8 @@ def _action_track(session_id: str, s: dict, payload: dict, sm: SessionManager) -
     # while waiting, instant wake when SAMURAI finishes, and no RunPod
     # seconds wasted spinning.
     samurai_done = threading.Event()
+    samurai_kill = threading.Event()
+    s_merged["_samurai_kill_event"] = samurai_kill
     samurai_err: dict = {}
 
     def _samurai_worker():
@@ -790,6 +792,7 @@ def _action_track(session_id: str, s: dict, payload: dict, sm: SessionManager) -
     # 单次 audit 不展开。下一轮 reliability pass 处理。短期靠 RunPod 的
     # job idle timeout 兜底（worker 退出时 SIGKILL 全部子进程）。
     if samurai_thread.is_alive():
+        samurai_kill.set()
         err = f"SAMURAI exceeded {join_timeout/60:.1f} min — abandoning thread"
         log.error(err)
         log.error(

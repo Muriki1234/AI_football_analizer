@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import PropTypes from 'prop-types';
 import './VelocityChart.css';
 
 const data = [
@@ -34,6 +35,12 @@ const CustomTooltip = ({ active, payload, label }) => {
         );
     }
     return null;
+};
+
+CustomTooltip.propTypes = {
+    active: PropTypes.bool,
+    payload: PropTypes.array,
+    label: PropTypes.string
 };
 
 export default function VelocityChart() {

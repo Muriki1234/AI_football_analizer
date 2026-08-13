@@ -22,8 +22,7 @@ import {
     getSummary,
     listTasks,
     artifactUrl,
-    subscribeSession,
-    updateSessionPriority
+    subscribeSession
 } from '../services/api';
 
 import { absUrl, API_KEY } from '../services/config';
@@ -658,6 +657,8 @@ export default function Dashboard() {
                                         if (v.paused) v.play?.().catch(() => { });
                                         else v.pause?.();
                                     }}
+                                    onWaiting={() => setIsVideoBuffering(true)}
+                                    onPlaying={() => setIsVideoBuffering(false)}
                                     className="hero-video-card__player"
                                 />
                                 {isVideoBuffering && (

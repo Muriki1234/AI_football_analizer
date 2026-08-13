@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import PropTypes from 'prop-types';
 
 /**
  * Canvas heatmap of the tracked player's pitch positions.
@@ -38,7 +39,7 @@ export default function HeatmapCanvas({ dataUrl }) {
             const w = Math.floor(entry.contentRect.width);
             if (!w) return;
             const h = Math.floor(w * aspect);
-            setSize({ w, h });
+            setSize(prev => (prev.w === w && prev.h === h) ? prev : { w, h });
         });
         ro.observe(el);
         return () => ro.disconnect();
@@ -158,3 +159,7 @@ export default function HeatmapCanvas({ dataUrl }) {
         </div>
     );
 }
+
+HeatmapCanvas.propTypes = {
+    dataUrl: PropTypes.string
+};

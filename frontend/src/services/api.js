@@ -243,7 +243,8 @@ export const startAnalysis = async (sessionId) => {
         })
     });
 
-    const data = await res.json();
+    let data;
+    try { data = await res.json(); } catch (e) { if (!res.ok) throw new Error(`HTTP Error ${res.status}`); else throw e; }
     if (!res.ok) throw new Error(data.error || 'Failed to start analysis');
 
     // Update session status to queued
@@ -274,7 +275,8 @@ export const startTracking = async (sessionId, bbox, frame = 0, imgDims = null) 
         })
     });
 
-    const data = await res.json();
+    let data;
+    try { data = await res.json(); } catch (e) { if (!res.ok) throw new Error(`HTTP Error ${res.status}`); else throw e; }
     if (!res.ok) throw new Error(data.error || 'Failed to start tracking');
 
     // Update session status
@@ -345,7 +347,8 @@ export const startTrackingMulti = async (sessionId, segments, matchPeriodsFrames
         body: JSON.stringify({ input }),
     });
 
-    const data = await res.json();
+    let data;
+    try { data = await res.json(); } catch (e) { if (!res.ok) throw new Error(`HTTP Error ${res.status}`); else throw e; }
     if (!res.ok) throw new Error(data.error || 'Failed to start multi-segment tracking');
 
     await supabase.from('sessions').update({ status: 'tracking' }).eq('id', sessionId);
@@ -418,7 +421,8 @@ export const analyzeFrame = async (sessionId, frameIndex = 0) => {
                 },
             }),
         });
-        const data = await res.json();
+        let data;
+        try { data = await res.json(); } catch (e) { if (!res.ok) throw new Error(`HTTP Error ${res.status}`); else throw e; }
         if (!res.ok) throw new Error(data.error || 'Failed to analyze frame');
 
         let output;
@@ -448,7 +452,8 @@ export const queueFeature = async (sessionId, feature, { mode } = {}) => {
         })
     });
 
-    const data = await res.json();
+    let data;
+    try { data = await res.json(); } catch (e) { if (!res.ok) throw new Error(`HTTP Error ${res.status}`); else throw e; }
     if (!res.ok) throw new Error(data.error || 'Failed to queue feature');
     return data;
 };
