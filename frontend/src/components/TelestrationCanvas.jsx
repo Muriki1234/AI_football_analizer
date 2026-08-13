@@ -104,15 +104,17 @@ export default function TelestrationCanvas({ active, parentRef, width, height })
         setDrawing(false);
         const pos = getPos(e);
         if (tool === 'pen' && currentStroke.current.length > 1) {
+            const pts = [...currentStroke.current];
             setStrokes(prev => [...prev, {
                 type: 'pen',
-                points: [...currentStroke.current],
+                points: pts,
                 color,
             }]);
         } else if (tool === 'arrow' && arrowStart.current) {
+            const start = { ...arrowStart.current };
             setStrokes(prev => [...prev, {
                 type: 'arrow',
-                from: arrowStart.current,
+                from: start,
                 to: pos,
                 color,
             }]);
