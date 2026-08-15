@@ -225,40 +225,42 @@ export default function VideoTimelineMarkers({ segments, matchPeriods, fps, tota
     return (
         <div className="video-markers" ref={containerRef}>
             <div className="video-markers__controls">
-                <button
-                    type="button"
-                    className="video-markers__play"
-                    onClick={togglePlay}
-                    aria-label={isPlaying ? 'Pause replay' : 'Play replay'}
-                    title={isPlaying ? 'Pause' : 'Play'}
-                >
-                    {isPlaying ? <HiPause /> : <HiPlay />}
-                </button>
-                <button
-                    type="button"
-                    className="video-markers__play"
-                    onClick={toggleMute}
-                    aria-label={isMuted ? 'Unmute' : 'Mute'}
-                    title={isMuted ? 'Unmute' : 'Mute'}
-                >
-                    {isMuted ? <HiSpeakerXMark /> : <HiSpeakerWave />}
-                </button>
-                <button
-                    type="button"
-                    className={`video-markers__play ${drawMode ? 'is-active-draw' : ''}`}
-                    onClick={() => {
-                        // Click pen -> toggle draw mode. If turning ON, auto-pause video
-                        const nextState = !drawMode;
-                        if (onToggleDraw) onToggleDraw(nextState);
-                        const v = videoRef?.current;
-                        if (v && nextState && !v.paused) v.pause?.();
-                    }}
-                    aria-label={drawMode ? 'Exit Drawing Mode' : 'Enter Drawing Mode'}
-                    title="战术画笔"
-                    style={drawMode ? { color: '#38bdf8', background: 'rgba(56, 189, 248, 0.15)' } : {}}
-                >
-                    <HiPencil />
-                </button>
+                <div className="video-markers__actions">
+                    <button
+                        type="button"
+                        className="video-markers__play"
+                        onClick={togglePlay}
+                        aria-label={isPlaying ? 'Pause replay' : 'Play replay'}
+                        title={isPlaying ? 'Pause' : 'Play'}
+                    >
+                        {isPlaying ? <HiPause /> : <HiPlay />}
+                    </button>
+                    <button
+                        type="button"
+                        className="video-markers__play"
+                        onClick={toggleMute}
+                        aria-label={isMuted ? 'Unmute' : 'Mute'}
+                        title={isMuted ? 'Unmute' : 'Mute'}
+                    >
+                        {isMuted ? <HiSpeakerXMark /> : <HiSpeakerWave />}
+                    </button>
+                    <button
+                        type="button"
+                        className={`video-markers__play ${drawMode ? 'is-active-draw' : ''}`}
+                        onClick={() => {
+                            // Click pen -> toggle draw mode. If turning ON, auto-pause video
+                            const nextState = !drawMode;
+                            if (onToggleDraw) onToggleDraw(nextState);
+                            const v = videoRef?.current;
+                            if (v && nextState && !v.paused) v.pause?.();
+                        }}
+                        aria-label={drawMode ? 'Exit Drawing Mode' : 'Enter Drawing Mode'}
+                        title="战术画笔"
+                        style={drawMode ? { color: '#38bdf8', background: 'rgba(56, 189, 248, 0.15)' } : {}}
+                    >
+                        <HiPencil />
+                    </button>
+                </div>
                 <div
                     className="video-markers__track"
                     ref={trackRef}

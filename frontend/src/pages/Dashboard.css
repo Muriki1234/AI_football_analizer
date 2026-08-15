@@ -497,10 +497,15 @@
 }
 
 .video-markers__controls {
-    display: grid;
-    grid-template-columns: 36px minmax(0, 1fr) auto;
+    display: flex;
     align-items: center;
     gap: 0.7rem;
+}
+
+.video-markers__actions {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
 }
 
 .video-markers__play {
@@ -524,6 +529,7 @@
 .video-markers__play svg { font-size: 1.1rem; }
 
 .video-markers__track {
+    flex: 1;
     position: relative;
     height: 28px;
     padding: 0;
@@ -532,6 +538,13 @@
     overflow: hidden;
     border: 1px solid rgba(255, 255, 255, 0.08);
     cursor: pointer;
+}
+
+.video-markers__time {
+    white-space: nowrap;
+    font-size: 0.85rem;
+    color: #94a3b8;
+    font-variant-numeric: tabular-nums;
 }
 
 .video-markers__segments {
@@ -843,15 +856,15 @@
     border-color: rgba(236, 72, 153, 0.5);
 }
 
-/* Stage = the big centerpiece. No longer shifts left when drawer opens. */
+/* Stage = the big centerpiece. Shifts left when drawer opens. */
 .dashboard-v2__stage {
     display: flex;
     justify-content: center;
     padding: 1.5rem;
-    transition: all 0.3s ease;
+    transition: padding-right 0.3s ease;
 }
 .dashboard-v2__stage.drawer-open {
-    /* Let the drawer float over the content naturally */
+    padding-right: calc(33% + 2rem);
 }
 
 .hero-video-card {
@@ -1221,7 +1234,7 @@
 
 /* Responsive: collapse drawer to overlay on smaller screens */
 @media (max-width: 1024px) {
-    .dashboard-v2__stage.drawer-open { padding-right: 1.5rem; }
+    .dashboard-v2__stage.drawer-open { padding-right: calc(420px + 1rem); }
     .dashboard-v2__drawer { width: 90%; max-width: 420px; }
 }
 

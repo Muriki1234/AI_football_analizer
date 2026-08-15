@@ -830,6 +830,20 @@ export default function Dashboard() {
                                 </button>
                             </div>
 
+                            {/* Draw mode toggle */}
+                            <div className={`drawer__item ${drawMode ? 'is-active' : ''}`}>
+                                <button
+                                    className="drawer__item-head"
+                                    onClick={() => setDrawMode((v) => !v)}
+                                >
+                                    <HiFire />
+                                    <span>战术画板</span>
+                                    <span className={`drawer__toggle ${drawMode ? 'on' : ''}`}>
+                                        {drawMode ? 'ON' : 'OFF'}
+                                    </span>
+                                </button>
+                            </div>
+
                             {/* Data Analysis — always rendered */}
                             <div className="drawer__item is-static">
                                 <div className="drawer__item-head drawer__item-head--static">
