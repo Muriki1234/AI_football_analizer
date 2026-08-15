@@ -322,6 +322,8 @@ export default function Dashboard() {
     const [aiGenerating, setAiGenerating] = useState(false);
     const [viewMode, setViewMode] = useState('team'); // 'team' = 战术复盘, 'player' = 个人特训
     const [drawMode, setDrawMode] = useState(false);
+    const [tacticalDrawings, setTacticalDrawings] = useState([]);
+    const [initialStrokes, setInitialStrokes] = useState([]);
     const [minimapExpanded, setMinimapExpanded] = useState(false);
     const [isVideoBuffering, setIsVideoBuffering] = useState(false);
     const telestrationRef = useRef(null);
@@ -642,6 +644,48 @@ export default function Dashboard() {
         );
     }
 
+    const handleToggleDraw = useCallback((mode) => {
+        setDrawMode(mode);
+        if (!mode) {
+            // Save strokes when exiting
+            const strokes = telestrationRef.current?.getStrokes?.() || [];
+            if (heroVideoRef.current) {
+                const time = heroVideoRef.current.currentTime;
+                setTacticalDrawings(prev => {
+                    const existingIdx = prev.findIndex(d => Math.abs(d.time - time) < 0.5);
+                    if (strokes.length === 0) {
+                        if (existingIdx >= 0) {
+                            const next = [...prev];
+                            next.splice(existingIdx, 1);
+                            return next;
+                        }
+                        return prev;
+                    }
+                    if (existingIdx >= 0) {
+                        const next = [...prev];
+                        next[existingIdx] = { time, strokes };
+                        return next;
+                    }
+                    return [...prev, { time, strokes }].sort((a,b) => a.time - b.time);
+                });
+            }
+            telestrationRef.current?.clearCanvas?.();
+        } else {
+            // Enter drawing mode: load strokes if we are near a saved drawing
+            if (heroVideoRef.current) {
+                const time = heroVideoRef.current.currentTime;
+                const existing = tacticalDrawings.find(d => Math.abs(d.time - time) < 0.5);
+                if (existing) {
+                    setInitialStrokes(existing.strokes);
+                } else {
+                    setInitialStrokes([]);
+                }
+            } else {
+                setInitialStrokes([]);
+            }
+        }
+    }, [tacticalDrawings]);
+
     return (
         <div className="dashboard dashboard--v2">
             <div className="bg-grid" />
@@ -757,6 +801,7 @@ export default function Dashboard() {
                                     parentRef={telestrationRef}
                                     width={heroVideoRef.current?.videoWidth || 1280}
                                     height={heroVideoRef.current?.videoHeight || 720}
+                                    initialStrokes={initialStrokes}
                                     onInteractionStart={() => {
                                         if (heroVideoRef.current && !heroVideoRef.current.paused) {
                                             heroVideoRef.current.pause();
@@ -794,10 +839,8 @@ export default function Dashboard() {
                                 videoRef={heroVideoRef}
                                 drawMode={drawMode}
                                 highlights={aiHighlights}
-                                onToggleDraw={(mode) => {
-                                    setDrawMode(mode);
-                                    if (!mode) telestrationRef.current?.clearCanvas?.();
-                                }}
+                                tacticalDrawings={tacticalDrawings}
+                                onToggleDraw={handleToggleDraw}
                             />
                         )}
                     </div>
@@ -834,7 +877,7 @@ export default function Dashboard() {
                             <div className={`drawer__item ${drawMode ? 'is-active' : ''}`}>
                                 <button
                                     className="drawer__item-head"
-                                    onClick={() => setDrawMode((v) => !v)}
+                                    onClick={() => handleToggleDraw(!drawMode)}
                                 >
                                     <HiFire />
                                     <span>战术画板</span>

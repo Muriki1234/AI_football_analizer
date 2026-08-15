@@ -18,7 +18,7 @@ const formatTime = (sec) => {
     return `${m}:${s}`;
 };
 
-export default function VideoTimelineMarkers({ segments, matchPeriods, fps, totalFrames, videoRef, drawMode, onToggleDraw, highlights }) {
+export default function VideoTimelineMarkers({ segments, matchPeriods, fps, totalFrames, videoRef, drawMode, onToggleDraw, highlights, tacticalDrawings = [] }) {
     const containerRef = useRef(null);
     const [currentTime, setCurrentTime] = useState(0);
     const [duration, setDuration] = useState(0);
@@ -330,6 +330,25 @@ export default function VideoTimelineMarkers({ segments, matchPeriods, fps, tota
                                 onClick={(e) => {
                                     e.stopPropagation();
                                     seekTo(hl.time);
+                                }}
+                            />
+                        );
+                    })}
+                    
+                    {/* Tactical Drawing Dots */}
+                    {tacticalDrawings && tacticalDrawings.map((d, i) => {
+                        const pct = duration ? (d.time / duration) * 100 : 0;
+                        if (pct < 0 || pct > 100) return null;
+                        return (
+                            <div
+                                key={`td-${i}`}
+                                className="video-markers__highlight-dot"
+                                style={{ left: `${pct}%`, background: '#38bdf8', borderColor: '#0ea5e9' }}
+                                title="我的战术画板"
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    seekTo(d.time);
+                                    if (onToggleDraw) onToggleDraw(true);
                                 }}
                             />
                         );

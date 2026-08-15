@@ -14,14 +14,18 @@ import { HiPencil, HiArrowUpRight, HiArrowUturnLeft, HiTrash, HiCamera, HiMinus 
  */
 const COLORS = ['#ef4444', '#f59e0b', '#22c55e', '#3b82f6', '#f8fafc'];
 
-export default function TelestrationCanvas({ active, parentRef, width, height, onInteractionStart }) {
+export default function TelestrationCanvas({ active, parentRef, width, height, onInteractionStart, initialStrokes = [] }) {
     const canvasRef = useRef(null);
     const [color, setColor] = useState(COLORS[0]);
-    const [tool, setTool] = useState('pen');      // 'pen' | 'arrow'
+    const [tool, setTool] = useState('arrow');      // 'pen' | 'arrow' | 'dashed-arrow'
     const [lineWidth, setLineWidth] = useState(4);
     const [drawing, setDrawing] = useState(false);
-    const [strokes, setStrokes] = useState([]);    // finished strokes
+    const [strokes, setStrokes] = useState(initialStrokes);    // finished strokes
     const currentStroke = useRef([]);
+
+    useEffect(() => {
+        setStrokes(initialStrokes);
+    }, [initialStrokes]);
 
 
     // Keyboard shortcut for Undo (Ctrl+Z or Cmd+Z)
@@ -48,12 +52,18 @@ export default function TelestrationCanvas({ active, parentRef, width, height, o
         canvas.style.width = `${width || 800}px`;
         canvas.style.height = `${height || 450}px`;
         ctx.scale(dpr, dpr);
-        ctx.clearRect(0, 0, width || 800, height || 450);
-
-        for (const s of strokes) {
-            drawFreehand(ctx, s.points, s.color, s.type === 'arrow', s.lineWidth || 4);
-        }
-    }, [strokes, width, height]);
+        
+        const render = () => {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            for (const s of strokes) {
+                drawFreehand(ctx, s.points, s.color, s.type, s.lineWidth || 4);
+            }
+            if (drawing) {
+                drawFreehand(ctx, currentStroke.current, color, tool, lineWidth);
+            }
+        };
+        requestAnimationFrame(render);
+    }, [strokes, width, height, drawing, color, tool, lineWidth]);
 
     useEffect(() => {
         redraw();
@@ -96,7 +106,7 @@ export default function TelestrationCanvas({ active, parentRef, width, height, o
         
         const pts = currentStroke.current;
         if (pts.length >= 2) {
-            drawFreehand(ctx, pts, color, tool === 'arrow', lineWidth);
+            drawFreehand(ctx, pts, color, tool, lineWidth);
         }
     }, [drawing, active, tool, color, lineWidth, getPos, redraw]);
 
@@ -127,13 +137,11 @@ export default function TelestrationCanvas({ active, parentRef, width, height, o
         redraw();
     }, [redraw]);
 
-    // Expose canvas ref and methods to parent
-    useEffect(() => {
-        if (parentRef && canvasRef.current) {
-            parentRef.current = canvasRef.current;
-            parentRef.current.clearCanvas = handleClear;
-        }
-    }, [parentRef, handleClear]);
+    // Expose methods to parent
+    useImperativeHandle(parentRef, () => ({
+        clearCanvas: handleClear,
+        getStrokes: () => strokes,
+    }), [handleClear, strokes]);
 
     const handleScreenshot = useCallback(() => {
         const canvas = canvasRef.current;
@@ -164,8 +172,17 @@ export default function TelestrationCanvas({ active, parentRef, width, height, o
                 <button
                     className={`draw-toolbar__btn ${tool === 'arrow' ? 'is-active' : ''}`}
                     onClick={() => setTool('arrow')}
-                    title="路线箭头"
+                    title="实线箭头"
                 ><HiArrowUpRight /></button>
+                <button
+                    className={`draw-toolbar__btn ${tool === 'dashed-arrow' ? 'is-active' : ''}`}
+                    onClick={() => setTool('dashed-arrow')}
+                    title="虚线箭头"
+                    style={{ position: 'relative' }}
+                >
+                    <HiArrowUpRight />
+                    <div style={{ position: 'absolute', bottom: 2, left: 6, right: 6, height: 2, borderBottom: '2px dashed currentColor', opacity: 0.7 }} />
+                </button>
                 
                 <div className="draw-toolbar__sep" />
                 
@@ -209,8 +226,10 @@ export default function TelestrationCanvas({ active, parentRef, width, height, o
 
 // ── Drawing helpers ──────────────────────────────────────────────────────────
 
-function drawFreehand(ctx, points, color, isArrow, lineWidth = 4) {
+function drawFreehand(ctx, points, color, type, lineWidth = 4) {
     if (!points || points.length < 2) return;
+    
+    const isArrow = type === 'arrow' || type === 'dashed-arrow';
     
     ctx.strokeStyle = color;
     ctx.lineWidth = lineWidth;
@@ -223,7 +242,7 @@ function drawFreehand(ctx, points, color, isArrow, lineWidth = 4) {
     ctx.shadowOffsetX = 1;
     ctx.shadowOffsetY = 3;
 
-    if (isArrow) {
+    if (type === 'dashed-arrow') {
         ctx.setLineDash([12, 8]); // Dashed lines for arrows (tactical style)
     } else {
         ctx.setLineDash([]);
@@ -286,5 +305,6 @@ TelestrationCanvas.propTypes = {
     parentRef: PropTypes.shape({ current: PropTypes.any }),
     width: PropTypes.number,
     height: PropTypes.number,
-    onInteractionStart: PropTypes.func
+    onInteractionStart: PropTypes.func,
+    initialStrokes: PropTypes.array
 };
