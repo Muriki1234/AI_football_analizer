@@ -23,13 +23,6 @@ export default function TelestrationCanvas({ active, parentRef, width, height, o
     const [strokes, setStrokes] = useState([]);    // finished strokes
     const currentStroke = useRef([]);
 
-    // Expose canvas ref and methods to parent
-    useEffect(() => {
-        if (parentRef && canvasRef.current) {
-            parentRef.current = canvasRef.current;
-            parentRef.current.clearCanvas = handleClear;
-        }
-    }, [parentRef, handleClear]);
 
     // Keyboard shortcut for Undo (Ctrl+Z or Cmd+Z)
     useEffect(() => {
@@ -131,7 +124,16 @@ export default function TelestrationCanvas({ active, parentRef, width, height, o
 
     const handleClear = useCallback(() => {
         setStrokes([]);
-    }, []);
+        redraw();
+    }, [redraw]);
+
+    // Expose canvas ref and methods to parent
+    useEffect(() => {
+        if (parentRef && canvasRef.current) {
+            parentRef.current = canvasRef.current;
+            parentRef.current.clearCanvas = handleClear;
+        }
+    }, [parentRef, handleClear]);
 
     const handleScreenshot = useCallback(() => {
         const canvas = canvasRef.current;
