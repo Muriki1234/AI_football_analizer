@@ -1,0 +1,16 @@
+--- frontend/src/pages/Dashboard.jsx
++++ frontend/src/pages/Dashboard.jsx
+@@ -597,13 +597,11 @@
+         let missingChunks = new Set();
+         
+         class CacheBustingLoader extends (Hls.DefaultConfig.loader || class {}) {
+             load(context, config, callbacks) {
+                 if (context.url && missingChunks.has(context.url.split('?')[0])) {
+-                    const separator = context.url.includes('?') ? '&' : '?';
+-                    context.url = context.url.split(/[\?&]t=/)[0] + separator + 't=' + Date.now();
++                    config.pLoader = undefined; // Avoid infinite recursion if any
+                 }
+                 if (super.load) super.load(context, config, callbacks);
+             }
+         }
+ 

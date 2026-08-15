@@ -507,6 +507,24 @@ export default function Dashboard() {
         catch { return DOMPurify.sanitize(txt); }
     }, [aiSummary]);
 
+    const aiHighlights = useMemo(() => {
+        const txt = taskTextResult(aiSummary);
+        if (!txt) return [];
+        const highlights = [];
+        const regex = /\[(\d{1,3}):(\d{2})\]/g;
+        let match;
+        // Keep track of added times to avoid duplicates
+        const seen = new Set();
+        while ((match = regex.exec(txt)) !== null) {
+            const totalSec = parseInt(match[1], 10) * 60 + parseInt(match[2], 10);
+            if (!seen.has(totalSec)) {
+                seen.add(totalSec);
+                highlights.push({ time: totalSec, label: `[${match[1]}:${match[2]}]` });
+            }
+        }
+        return highlights;
+    }, [aiSummary]);
+
     const handleGenerateAI = async () => {
         if (aiGenerating || !sessionId) return;
         setAiGenerating(true);
@@ -544,6 +562,7 @@ export default function Dashboard() {
         // then interferes with that inner scroll. Locking body alone stops
         // the page-behind-drawer scroll without touching the drawer's own
         // scroll container.
+        if (!drawerOpen) return;
         const prevBody = document.body.style.overflow;
         document.body.style.overflow = 'hidden';
         return () => {
@@ -551,6 +570,52 @@ export default function Dashboard() {
         };
     }, [drawerOpen]);
 
+    // Global hotkeys
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            // Ignore if user is typing in an input field
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.isComposing) return;
+            
+            const v = heroVideoRef.current;
+            switch (e.key.toLowerCase()) {
+                case ' ':
+                    e.preventDefault();
+                    if (v) v.paused ? v.play().catch(()=>{}) : v.pause();
+                    break;
+                case 'arrowleft':
+                    e.preventDefault();
+                    if (v) v.currentTime = Math.max(0, v.currentTime - 5);
+                    break;
+                case 'arrowright':
+                    e.preventDefault();
+                    if (v) v.currentTime = Math.min(v.duration, v.currentTime + 5);
+                    break;
+                case 'm':
+                    e.preventDefault();
+                    setMinimapOn(prev => !prev);
+                    break;
+                case 'd':
+                    e.preventDefault();
+                    setDrawMode(prev => !prev);
+                    break;
+                case 'f':
+                    e.preventDefault();
+                    if (v) {
+                        const wrap = v.parentElement;
+                        if (document.fullscreenElement) {
+                            document.exitFullscreen().catch(()=>{});
+                        } else {
+                            wrap.requestFullscreen().catch(()=>{});
+                        }
+                    }
+                    break;
+                default:
+                    break;
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, []);
 
 
     const handleNewPlayer = () => {
@@ -657,6 +722,14 @@ export default function Dashboard() {
                                         if (v.paused) v.play?.().catch(() => { });
                                         else v.pause?.();
                                     }}
+                                    onDoubleClick={(e) => {
+                                        const wrap = e.currentTarget.parentElement;
+                                        if (document.fullscreenElement) {
+                                            document.exitFullscreen().catch(()=>{});
+                                        } else {
+                                            wrap.requestFullscreen().catch(()=>{});
+                                        }
+                                    }}
                                     onWaiting={() => setIsVideoBuffering(true)}
                                     onPlaying={() => setIsVideoBuffering(false)}
                                     className="hero-video-card__player"
@@ -684,6 +757,11 @@ export default function Dashboard() {
                                     parentRef={telestrationRef}
                                     width={heroVideoRef.current?.videoWidth || 1280}
                                     height={heroVideoRef.current?.videoHeight || 720}
+                                    onInteractionStart={() => {
+                                        if (heroVideoRef.current && !heroVideoRef.current.paused) {
+                                            heroVideoRef.current.pause();
+                                        }
+                                    }}
                                 />
                                 <div style={{ position: 'relative' }}>
                                     <MinimapOverlay
@@ -714,6 +792,12 @@ export default function Dashboard() {
                                 fps={session?.video_fps}
                                 totalFrames={session?.total_frames}
                                 videoRef={heroVideoRef}
+                                drawMode={drawMode}
+                                highlights={aiHighlights}
+                                onToggleDraw={(mode) => {
+                                    setDrawMode(mode);
+                                    if (!mode) telestrationRef.current?.clearCanvas?.();
+                                }}
                             />
                         )}
                     </div>
@@ -742,20 +826,6 @@ export default function Dashboard() {
                                     <span>Minimap Overlay</span>
                                     <span className={`drawer__toggle ${minimapOn ? 'on' : ''}`}>
                                         {minimapOn ? 'ON' : 'OFF'}
-                                    </span>
-                                </button>
-                            </div>
-
-                            {/* Draw mode toggle */}
-                            <div className={`drawer__item ${drawMode ? 'is-active' : ''}`}>
-                                <button
-                                    className="drawer__item-head"
-                                    onClick={() => setDrawMode((v) => !v)}
-                                >
-                                    <HiFire />
-                                    <span>战术画板</span>
-                                    <span className={`drawer__toggle ${drawMode ? 'on' : ''}`}>
-                                        {drawMode ? 'ON' : 'OFF'}
                                     </span>
                                 </button>
                             </div>
@@ -892,6 +962,11 @@ export default function Dashboard() {
                             parentRef={null}
                             width={900}
                             height={540}
+                            onInteractionStart={() => {
+                                if (heroVideoRef.current && !heroVideoRef.current.paused) {
+                                    heroVideoRef.current.pause();
+                                }
+                            }}
                         />
                         <div className="minimap-board__toolbar">
                             <button

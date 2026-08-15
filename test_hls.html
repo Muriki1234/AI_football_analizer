@@ -1,0 +1,7 @@
+<!DOCTYPE html>
+<html><body>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.4.12"></script>
+<script>
+    console.log(Object.keys(Hls.DefaultConfig).filter(k => k.toLowerCase().includes('loader') || k.toLowerCase().includes('xhr')));
+</script>
+</body></html>
