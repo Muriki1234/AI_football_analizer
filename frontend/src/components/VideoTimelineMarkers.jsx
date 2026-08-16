@@ -343,7 +343,7 @@ export default function VideoTimelineMarkers({ segments, matchPeriods, fps, tota
                             <div
                                 key={`td-${i}`}
                                 className="video-markers__highlight-dot"
-                                style={{ left: `${pct}%`, top: '-4px', background: '#38bdf8', borderColor: '#0ea5e9' }}
+                                style={{ left: `${pct}%`, marginTop: '16px', background: '#38bdf8', borderColor: '#0ea5e9' }}
                                 title="我的战术画板"
                                 onClick={(e) => {
                                     e.stopPropagation();
