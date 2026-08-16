@@ -323,6 +323,28 @@ export const saveMatchPeriods = async (sessionId, periods) => {
     if (error) throw error;
 };
 
+export const saveTacticalDrawings = async (sessionId, tacticalDrawings) => {
+    const { data: row, error: getErr } = await supabase
+        .from('sessions')
+        .select('extra')
+        .eq('id', sessionId)
+        .single();
+    if (getErr) throw getErr;
+
+    let extra = row?.extra;
+    if (typeof extra === 'string') {
+        try { extra = JSON.parse(extra); } catch { extra = {}; }
+    }
+    extra = { ...(extra || {}), tactical_drawings: tacticalDrawings };
+
+    const { error } = await supabase
+        .from('sessions')
+        .update({ extra })
+        .eq('id', sessionId);
+    if (error) throw error;
+};
+
+
 export const startTrackingMulti = async (sessionId, segments, matchPeriodsFrames = null, clientFps = null) => {
     const session = await getSession(sessionId);
 

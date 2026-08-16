@@ -22,7 +22,8 @@ import {
     getSummary,
     listTasks,
     artifactUrl,
-    subscribeSession
+    subscribeSession,
+    saveTacticalDrawings
 } from '../services/api';
 
 import { absUrl, API_KEY } from '../services/config';
@@ -323,6 +324,7 @@ export default function Dashboard() {
     const [viewMode, setViewMode] = useState('team'); // 'team' = 战术复盘, 'player' = 个人特训
     const [drawMode, setDrawMode] = useState(false);
     const [tacticalDrawings, setTacticalDrawings] = useState([]);
+    const loadedDrawings = useRef(false);
     const [initialStrokes, setInitialStrokes] = useState([]);
     const [minimapExpanded, setMinimapExpanded] = useState(false);
     const [isVideoBuffering, setIsVideoBuffering] = useState(false);
@@ -349,6 +351,20 @@ export default function Dashboard() {
         const id = setInterval(() => setColdStartSec(Math.floor((Date.now() - t0) / 1000)), 1000);
         return () => clearInterval(id);
     }, [isColdStart]);
+
+    // Load drawings from session DB once
+    useEffect(() => {
+        if (session && !loadedDrawings.current) {
+            loadedDrawings.current = true;
+            let extra = session.extra;
+            if (typeof extra === 'string') {
+                try { extra = JSON.parse(extra); } catch { extra = {}; }
+            }
+            if (extra?.tactical_drawings) {
+                setTacticalDrawings(extra.tactical_drawings);
+            }
+        }
+    }, [session]);
 
     const phaseLabel = isColdStart
         ? `Warming up GPU… (cold start ~30s, elapsed ${coldStartSec}s)`
@@ -653,20 +669,28 @@ export default function Dashboard() {
                 const time = heroVideoRef.current.currentTime;
                 setTacticalDrawings(prev => {
                     const existingIdx = prev.findIndex(d => Math.abs(d.time - time) < 0.5);
+                    let nextDrawings = prev;
+                    
                     if (strokes.length === 0) {
                         if (existingIdx >= 0) {
-                            const next = [...prev];
-                            next.splice(existingIdx, 1);
-                            return next;
+                            nextDrawings = [...prev];
+                            nextDrawings.splice(existingIdx, 1);
                         }
-                        return prev;
+                    } else {
+                        if (existingIdx >= 0) {
+                            nextDrawings = [...prev];
+                            nextDrawings[existingIdx] = { time, strokes };
+                        } else {
+                            nextDrawings = [...prev, { time, strokes }].sort((a,b) => a.time - b.time);
+                        }
                     }
-                    if (existingIdx >= 0) {
-                        const next = [...prev];
-                        next[existingIdx] = { time, strokes };
-                        return next;
-                    }
-                    return [...prev, { time, strokes }].sort((a,b) => a.time - b.time);
+                    
+                    // Save to DB in background
+                    saveTacticalDrawings(sessionId, nextDrawings).catch(err => {
+                        console.error('Failed to save tactical drawings:', err);
+                    });
+                    
+                    return nextDrawings;
                 });
             }
             telestrationRef.current?.clearCanvas?.();
