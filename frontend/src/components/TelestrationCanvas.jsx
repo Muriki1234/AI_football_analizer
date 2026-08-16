@@ -17,7 +17,8 @@ const COLORS = ['#ef4444', '#f59e0b', '#22c55e', '#3b82f6', '#f8fafc'];
 export default function TelestrationCanvas({ active, parentRef, width, height, onInteractionStart, initialStrokes = [] }) {
     const canvasRef = useRef(null);
     const [color, setColor] = useState(COLORS[0]);
-    const [tool, setTool] = useState('arrow');      // 'pen' | 'arrow' | 'dashed-arrow'
+    const [tool, setTool] = useState('pen'); // 'pen' | 'arrow'
+    const [isDashed, setIsDashed] = useState(false);
     const [lineWidth, setLineWidth] = useState(4);
     const [drawing, setDrawing] = useState(false);
     const [strokes, setStrokes] = useState(initialStrokes);    // finished strokes
@@ -56,10 +57,10 @@ export default function TelestrationCanvas({ active, parentRef, width, height, o
         const render = () => {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             for (const s of strokes) {
-                drawFreehand(ctx, s.points, s.color, s.type, s.lineWidth || 4);
+                drawFreehand(ctx, s.points, s.color, s.type, s.lineWidth || 4, s.isDashed);
             }
             if (drawing) {
-                drawFreehand(ctx, currentStroke.current, color, tool, lineWidth);
+                drawFreehand(ctx, currentStroke.current, color, tool, lineWidth, isDashed);
             }
         };
         requestAnimationFrame(render);
@@ -106,9 +107,9 @@ export default function TelestrationCanvas({ active, parentRef, width, height, o
         
         const pts = currentStroke.current;
         if (pts.length >= 2) {
-            drawFreehand(ctx, pts, color, tool, lineWidth);
+            drawFreehand(ctx, pts, color, tool, lineWidth, isDashed);
         }
-    }, [drawing, active, tool, color, lineWidth, getPos, redraw]);
+    }, [drawing, active, tool, color, lineWidth, isDashed, getPos, redraw]);
 
     const handlePointerUp = useCallback((e) => {
         if (!drawing) return;
@@ -122,6 +123,7 @@ export default function TelestrationCanvas({ active, parentRef, width, height, o
                 points: pts,
                 color,
                 lineWidth,
+                isDashed,
             }]);
         }
         currentStroke.current = [];
@@ -172,21 +174,20 @@ export default function TelestrationCanvas({ active, parentRef, width, height, o
                 <button
                     className={`draw-toolbar__btn ${tool === 'arrow' ? 'is-active' : ''}`}
                     onClick={() => setTool('arrow')}
-                    title="实线箭头"
+                    title="箭头"
                 ><HiArrowUpRight /></button>
-                <button
-                    className={`draw-toolbar__btn ${tool === 'dashed-arrow' ? 'is-active' : ''}`}
-                    onClick={() => setTool('dashed-arrow')}
-                    title="虚线箭头"
-                    style={{ position: 'relative' }}
-                >
-                    <HiArrowUpRight />
-                    <div style={{ position: 'absolute', bottom: 2, left: 6, right: 6, height: 2, borderBottom: '2px dashed currentColor', opacity: 0.7 }} />
-                </button>
-                
                 <div className="draw-toolbar__sep" />
                 
-                {/* Line width selectors */}
+                {/* Line width & style selectors */}
+                <button
+                    className={`draw-toolbar__btn ${isDashed ? 'is-active' : ''}`}
+                    onClick={() => setIsDashed(!isDashed)}
+                    title="切换虚线"
+                    style={{ position: 'relative', width: '32px' }}
+                >
+                    <div style={{ position: 'absolute', top: '50%', left: 4, right: 4, height: 0, borderBottom: '2px dashed currentColor' }} />
+                </button>
+                <div className="draw-toolbar__sep" />
                 <button
                     className={`draw-toolbar__btn ${lineWidth === 2 ? 'is-active' : ''}`}
                     onClick={() => setLineWidth(2)}
@@ -226,10 +227,10 @@ export default function TelestrationCanvas({ active, parentRef, width, height, o
 
 // ── Drawing helpers ──────────────────────────────────────────────────────────
 
-function drawFreehand(ctx, points, color, type, lineWidth = 4) {
+function drawFreehand(ctx, points, color, type, lineWidth = 4, isDashed = false) {
     if (!points || points.length < 2) return;
     
-    const isArrow = type === 'arrow' || type === 'dashed-arrow';
+    const isArrow = type === 'arrow';
     
     ctx.strokeStyle = color;
     ctx.lineWidth = lineWidth;
@@ -242,8 +243,8 @@ function drawFreehand(ctx, points, color, type, lineWidth = 4) {
     ctx.shadowOffsetX = 1;
     ctx.shadowOffsetY = 3;
 
-    if (type === 'dashed-arrow') {
-        ctx.setLineDash([12, 8]); // Dashed lines for arrows (tactical style)
+    if (isDashed) {
+        ctx.setLineDash([12, 8]);
     } else {
         ctx.setLineDash([]);
     }
@@ -269,13 +270,21 @@ function drawFreehand(ctx, points, color, type, lineWidth = 4) {
         
         // Draw arrowhead at the very end
         const end = points[points.length - 1];
-        // Calculate tangent using a point slightly before the end for stability
-        const p2 = points[Math.max(0, points.length - 5)];
+        
+        // Calculate tangent using a point backwards from the end for stability
+        let p2 = points[Math.max(0, points.length - 2)];
+        for (let i = points.length - 2; i >= 0; i--) {
+            if (Math.hypot(end.x - points[i].x, end.y - points[i].y) > 8) {
+                p2 = points[i];
+                break;
+            }
+        }
+        
         const dx = end.x - p2.x;
         const dy = end.y - p2.y;
         
-        // If the stroke is too short, don't draw arrow head
-        if (Math.hypot(dx, dy) < 5) return;
+        // If the stroke is too short or dx/dy is 0, don't draw arrow head
+        if (dx === 0 && dy === 0) return;
         
         const angle = Math.atan2(dy, dx);
         const headLen = 18;
