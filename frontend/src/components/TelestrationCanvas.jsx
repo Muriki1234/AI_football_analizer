@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback, useEffect } from 'react';
+import { useRef, useState, useCallback, useEffect, useImperativeHandle } from 'react';
 import PropTypes from 'prop-types';
 import { HiPencil, HiArrowUpRight, HiArrowUturnLeft, HiTrash, HiCamera, HiMinus } from 'react-icons/hi2';
 
