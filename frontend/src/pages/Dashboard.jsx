@@ -686,9 +686,12 @@ export default function Dashboard() {
                     }
                     
                     // Save to DB in background
-                    saveTacticalDrawings(sessionId, nextDrawings).catch(err => {
-                        console.error('Failed to save tactical drawings:', err);
-                    });
+                    saveTacticalDrawings(sessionId, nextDrawings)
+                        .then(() => toast.success('战术画板已保存'))
+                        .catch(err => {
+                            console.error('Failed to save tactical drawings:', err);
+                            toast.error('保存战术画板失败');
+                        });
                     
                     return nextDrawings;
                 });
@@ -800,6 +803,10 @@ export default function Dashboard() {
                                     }}
                                     onWaiting={() => setIsVideoBuffering(true)}
                                     onPlaying={() => setIsVideoBuffering(false)}
+                                    onPause={() => setIsVideoBuffering(false)}
+                                    onCanPlay={() => setIsVideoBuffering(false)}
+                                    onLoadedData={() => setIsVideoBuffering(false)}
+                                    onSeeked={() => setIsVideoBuffering(false)}
                                     className="hero-video-card__player"
                                 />
                                 {isVideoBuffering && (
@@ -832,20 +839,12 @@ export default function Dashboard() {
                                         }
                                     }}
                                 />
-                                <div style={{ position: 'relative' }}>
-                                    <MinimapOverlay
-                                        dataUrl={minimapDataUrl}
-                                        videoRef={heroVideoRef}
-                                        visible={minimapOn}
-                                    />
-                                    {minimapOn && (
-                                        <button
-                                            className="minimap-expand-btn"
-                                            onClick={() => setMinimapExpanded(true)}
-                                            title="放大战术板"
-                                        >⛶</button>
-                                    )}
-                                </div>
+                                <MinimapOverlay
+                                    dataUrl={minimapDataUrl}
+                                    videoRef={heroVideoRef}
+                                    visible={minimapOn}
+                                    onExpand={() => setMinimapExpanded(true)}
+                                />
                             </div>
                         ) : (
                             <div className="hero-video-card__placeholder">

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { HiPause, HiPlay, HiSpeakerWave, HiSpeakerXMark, HiPencil } from 'react-icons/hi2';
+import { HiPause, HiPlay, HiSpeakerWave, HiSpeakerXMark, HiPencil, HiArrowsPointingOut } from 'react-icons/hi2';
 
 const SEGMENT_STYLES = {
     first_half: { color: '#3498db', label: 'First Half' },
@@ -138,13 +138,15 @@ export default function VideoTimelineMarkers({ segments, matchPeriods, fps, tota
 
     if (items.length === 0) return null;
 
-    const seekTo = (sec) => {
+    const seekTo = (sec, autoPlay = true) => {
         const v = videoRef?.current;
         if (!v) return;
         const target = Math.max(0, Math.min(sec, v.duration || sec));
         v.currentTime = target;
         setCurrentTime(target);
-        v.play?.().catch(() => { });
+        if (autoPlay) {
+            v.play?.().catch(() => { });
+        }
     };
 
     const togglePlay = () => {
@@ -260,6 +262,23 @@ export default function VideoTimelineMarkers({ segments, matchPeriods, fps, tota
                     >
                         <HiPencil />
                     </button>
+                    <button
+                        type="button"
+                        className="video-markers__play"
+                        onClick={() => {
+                            const wrap = videoRef?.current?.parentElement;
+                            if (!wrap) return;
+                            if (document.fullscreenElement) {
+                                document.exitFullscreen().catch(()=>{});
+                            } else {
+                                wrap.requestFullscreen().catch(()=>{});
+                            }
+                        }}
+                        aria-label="Toggle Fullscreen"
+                        title="全屏 (F)"
+                    >
+                        <HiArrowsPointingOut />
+                    </button>
                 </div>
                 <div
                     className="video-markers__track"
@@ -348,7 +367,7 @@ export default function VideoTimelineMarkers({ segments, matchPeriods, fps, tota
                                 onClick={(e) => {
                                     e.stopPropagation();
                                     if (videoRef?.current) videoRef.current.pause();
-                                    seekTo(d.time);
+                                    seekTo(d.time, false);
                                     if (onToggleDraw) onToggleDraw(true);
                                 }}
                             />

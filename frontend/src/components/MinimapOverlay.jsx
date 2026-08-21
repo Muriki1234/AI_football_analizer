@@ -11,8 +11,9 @@ import PropTypes from 'prop-types';
  */
 const STORAGE_KEY = 'pitchlogic.minimapPos';
 
-export default function MinimapOverlay({ dataUrl, videoRef, visible }) {
+export default function MinimapOverlay({ dataUrl, videoRef, visible, onExpand }) {
     const canvasRef = useRef(null);
+    const wrapperRef = useRef(null);
     const dragRef = useRef(null);
     const [data, setData] = useState(null);
 
@@ -71,17 +72,17 @@ export default function MinimapOverlay({ dataUrl, videoRef, visible }) {
 
     const handleMouseDown = (e) => {
         e.preventDefault();
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        const canvasRect = canvas.getBoundingClientRect();
+        const wrapper = wrapperRef.current;
+        if (!wrapper) return;
+        const wrapperRect = wrapper.getBoundingClientRect();
         // Find the parent video wrapper for clamping bounds
-        const parent = canvas.parentElement?.getBoundingClientRect()
+        const parent = wrapper.parentElement?.getBoundingClientRect()
             || { left: 0, top: 0, width: 9999, height: 9999 };
         dragRef.current = {
             startX: e.clientX,
             startY: e.clientY,
-            posX: canvasRect.left - parent.left,
-            posY: canvasRect.top - parent.top,
+            posX: wrapperRect.left - parent.left,
+            posY: wrapperRect.top - parent.top,
             parent: { width: parent.width, height: parent.height },
         };
         setDragging(true);
@@ -93,7 +94,7 @@ export default function MinimapOverlay({ dataUrl, videoRef, visible }) {
     // visible area.
     useEffect(() => {
         if (!visible || !pos) return;
-        const el = canvasRef.current;
+        const el = wrapperRef.current;
         if (!el?.parentElement) return;
         const parent = el.parentElement;
         const ro = new ResizeObserver(() => {
@@ -315,18 +316,34 @@ export default function MinimapOverlay({ dataUrl, videoRef, visible }) {
         : {};
 
     return (
-        <canvas
-            ref={canvasRef}
+        <div
             className={`minimap-overlay ${dragging ? 'is-dragging' : ''}`}
-            style={style}
+            style={{ ...style, position: 'absolute', zIndex: 10 }}
             onMouseDown={handleMouseDown}
             title="Drag to move"
-        />
+            ref={wrapperRef}
+        >
+            <canvas
+                ref={canvasRef}
+                style={{ display: 'block' }}
+            />
+            {onExpand && (
+                <button
+                    className="minimap-expand-btn"
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        onExpand();
+                    }}
+                    title="放大战术板"
+                >⛶</button>
+            )}
+        </div>
     );
 }
 
 MinimapOverlay.propTypes = {
     dataUrl: PropTypes.string,
     videoRef: PropTypes.shape({ current: PropTypes.any }),
-    visible: PropTypes.bool
+    visible: PropTypes.bool,
+    onExpand: PropTypes.func
 };
