@@ -44,21 +44,11 @@ export default function Upload() {
                 });
                 toast.success('预处理完成，体积大幅缩减！', { id: compressToastId });
             } catch (err) {
-                if (err.message === 'DEVICE_INCAPABLE') {
-                    toast.error('🚨 您的设备性能不足，无法完成 AI 预处理。为了保证分析质量，请您下载剪映或 Handbrake，将视频导出为 1080p 后再次上传。', { id: compressToastId, duration: 10000 });
-                    setIsCompressing(false);
-                    done();
-                    setFile(null);
-                    setPreview(null);
-                    return; // 强行拦截上传
-                }
-                // 其他未知错误，默默容错，继续原图上传（或者也拦截，根据产品策略。目前采用直接抛出错误拦截）
-                toast.error('预处理失败：' + err.message, { id: compressToastId });
+                console.warn('AI Pre-processing failed, gracefully falling back to original upload:', err);
+                toast.error('本地加速暂不可用，正在为您切换为云端原生上传', { id: compressToastId, duration: 4000 });
+                // 优雅降级：直接用原始视频上传，不要 return 拦截
+                finalFile = f;
                 setIsCompressing(false);
-                done();
-                setFile(null);
-                setPreview(null);
-                return;
             }
             setIsCompressing(false);
         }

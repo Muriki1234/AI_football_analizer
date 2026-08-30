@@ -95,10 +95,9 @@ export const compressVideoIfNeeded = async (file, onProgress) => {
         return compressedFile;
     } catch (err) {
         console.error('Compression failed:', err);
-        // 如果出错（比如不支持 SharedArrayBuffer，或者内存爆了被捕获），抛出专门的错误
         if (ffmpeg) {
             try { await ffmpeg.unmount('/workerfs'); } catch (e) {}
         }
-        throw new Error('DEVICE_INCAPABLE');
+        throw err;
     }
 };
