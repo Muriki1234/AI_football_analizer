@@ -81,6 +81,7 @@ export default function MultiSegmentConfig() {
                 if (!total && s?.video_url) {
                     const probed = await new Promise((resolve) => {
                         const v = document.createElement('video');
+                        v.crossOrigin = 'anonymous';
                         v.preload = 'metadata';
                         v.src = s.video_url;
                         v.addEventListener('loadedmetadata', () => {

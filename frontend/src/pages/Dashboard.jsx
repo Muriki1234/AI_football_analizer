@@ -605,6 +605,7 @@ export default function Dashboard() {
                             <div className="hero-video-card__player-wrap">
                                 <video
                                     ref={heroVideoRef}
+                                    crossOrigin="anonymous"
                                     src={session?.video_url}
                                     autoPlay
                                     muted
