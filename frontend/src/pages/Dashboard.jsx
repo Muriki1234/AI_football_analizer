@@ -637,6 +637,20 @@ export default function Dashboard() {
                         }
                     }
                     break;
+                case ',':
+                    e.preventDefault();
+                    if (v) {
+                        v.pause();
+                        v.currentTime = Math.max(0, v.currentTime - 0.04); // Approx 1 frame at 25fps
+                    }
+                    break;
+                case '.':
+                    e.preventDefault();
+                    if (v) {
+                        v.pause();
+                        v.currentTime = Math.min(v.duration, v.currentTime + 0.04); // Approx 1 frame at 25fps
+                    }
+                    break;
                 default:
                     break;
             }
