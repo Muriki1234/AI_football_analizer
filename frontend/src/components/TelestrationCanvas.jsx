@@ -15,7 +15,7 @@ import { FiCircle } from 'react-icons/fi';
  */
 const COLORS = ['#ef4444', '#f59e0b', '#22c55e', '#3b82f6', '#f8fafc'];
 
-export default function TelestrationCanvas({ active, parentRef, width, height, onInteractionStart, initialStrokes = [] }) {
+export default function TelestrationCanvas({ active, parentRef, videoRef, width, height, onInteractionStart, initialStrokes = [] }) {
     const canvasRef = useRef(null);
     const [color, setColor] = useState(COLORS[0]);
     const [tool, setTool] = useState('pen'); // 'pen' | 'arrow'
@@ -147,13 +147,33 @@ export default function TelestrationCanvas({ active, parentRef, width, height, o
     }), [handleClear, strokes]);
 
     const handleScreenshot = useCallback(() => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
+        const drawCanvas = canvasRef.current;
+        const video = videoRef?.current;
+        if (!drawCanvas) return;
+
+        // Composite the video frame and the drawing strokes
+        const compositeCanvas = document.createElement('canvas');
+        compositeCanvas.width = drawCanvas.width;
+        compositeCanvas.height = drawCanvas.height;
+        const ctx = compositeCanvas.getContext('2d');
+        
+        // 1. Draw the underlying video frame
+        if (video) {
+            ctx.drawImage(video, 0, 0, compositeCanvas.width, compositeCanvas.height);
+        } else {
+            // Fallback to a dark background if video isn't available
+            ctx.fillStyle = '#0f172a';
+            ctx.fillRect(0, 0, compositeCanvas.width, compositeCanvas.height);
+        }
+        
+        // 2. Draw the strokes layer
+        ctx.drawImage(drawCanvas, 0, 0, compositeCanvas.width, compositeCanvas.height);
+
         const link = document.createElement('a');
-        link.download = `tactical_board_${Date.now()}.png`;
-        link.href = canvas.toDataURL('image/png');
+        link.download = `tactical_screenshot_${Date.now()}.png`;
+        link.href = compositeCanvas.toDataURL('image/png', 0.95);
         link.click();
-    }, []);
+    }, [videoRef]);
 
     return (
         <>
