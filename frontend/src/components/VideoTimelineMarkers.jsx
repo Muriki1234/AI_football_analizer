@@ -139,6 +139,9 @@ export default function VideoTimelineMarkers({ segments, matchPeriods, fps, tota
     if (items.length === 0) return null;
 
     const seekTo = (sec, autoPlay = true) => {
+        if (drawMode && onToggleDraw) {
+            onToggleDraw(false);
+        }
         const v = videoRef?.current;
         if (!v) return;
         const target = Math.max(0, Math.min(sec, v.duration || sec));
@@ -185,6 +188,9 @@ export default function VideoTimelineMarkers({ segments, matchPeriods, fps, tota
     const trackRef = useRef(null);
 
     const updateSeek = useCallback((clientX) => {
+        if (drawMode && onToggleDraw) {
+            onToggleDraw(false);
+        }
         const v = videoRef?.current;
         const track = trackRef.current;
         if (!v || !track || !activeDuration) return;
@@ -193,7 +199,7 @@ export default function VideoTimelineMarkers({ segments, matchPeriods, fps, tota
         const target = pct * activeDuration;
         v.currentTime = target;
         setCurrentTime(target);
-    }, [videoRef, activeDuration]);
+    }, [videoRef, activeDuration, drawMode, onToggleDraw]);
 
     const handlePointerDown = (e) => {
         // e.preventDefault(); // allow focus
@@ -361,8 +367,8 @@ export default function VideoTimelineMarkers({ segments, matchPeriods, fps, tota
                         return (
                             <div
                                 key={`td-${i}`}
-                                className="video-markers__highlight-dot"
-                                style={{ left: `${pct}%`, marginTop: '16px', background: '#38bdf8', borderColor: '#0ea5e9' }}
+                                className="video-markers__tactical-dot"
+                                style={{ left: `${pct}%` }}
                                 title="我的战术画板"
                                 onClick={(e) => {
                                     e.stopPropagation();

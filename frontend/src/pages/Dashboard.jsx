@@ -703,7 +703,7 @@ export default function Dashboard() {
                 const time = heroVideoRef.current.currentTime;
                 const existing = tacticalDrawings.find(d => Math.abs(d.time - time) < 0.5);
                 if (existing) {
-                    setInitialStrokes(existing.strokes);
+                    setInitialStrokes([...existing.strokes]);
                 } else {
                     setInitialStrokes([]);
                 }
