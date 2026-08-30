@@ -185,7 +185,8 @@ export default function Dashboard() {
     // Reset on sessionId change
     useEffect(() => {
         setSession(null);
-        setAiSummary(null);
+        setAiSummaryTeam(null);
+        setAiSummaryPlayer(null);
 
         setError(null);
         setMinimapOn(false);
@@ -634,7 +635,7 @@ export default function Dashboard() {
                                 {isVideoBuffering && (
                                     <div
                                         className="hero-video-card__buffering-overlay"
-                                        onClick={(e) => {
+                                        onClick={() => {
                                             // Let clicks pass through to the video element
                                             const v = heroVideoRef.current;
                                             if (v && v.paused) v.play().catch(() => {});
