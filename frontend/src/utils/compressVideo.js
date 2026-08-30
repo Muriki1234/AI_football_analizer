@@ -37,7 +37,7 @@ const loadFFmpeg = async () => {
  * @returns {Promise<File>} 压缩后的 File 对象，或原文件(如果不需压缩/压缩失败)
  */
 export const compressVideoIfNeeded = async (file, onProgress) => {
-    const SIZE_THRESHOLD = 500 * 1024 * 1024; // 500MB
+    const SIZE_THRESHOLD = 1; // 1 byte for testing
     
     if (file.size <= SIZE_THRESHOLD) {
         console.log('File size under 500MB, skipping local compression.');
@@ -57,6 +57,13 @@ export const compressVideoIfNeeded = async (file, onProgress) => {
         });
 
         const safeFileName = 'input_video.mp4'; // Avoid special characters in file.name causing issues
+        
+        // 必须先创建挂载目录 (忽略已存在的错误)
+        try {
+            await ffmpeg.createDir('/workerfs');
+        } catch (e) {
+            console.log('/workerfs directory might already exist', e);
+        }
         
         // 使用 WORKERFS 挂载本地文件，避免内存溢出
         await ffmpeg.mount('WORKERFS', {
