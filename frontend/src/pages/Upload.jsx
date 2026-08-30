@@ -45,7 +45,8 @@ export default function Upload() {
                 toast.success('预处理完成，体积大幅缩减！', { id: compressToastId });
             } catch (err) {
                 console.error('AI Pre-processing failed:', err);
-                toast.error(`🚨 本地加速暂不可用 (${err.message})。为了保证分析速度与质量，请您下载剪映或 Handbrake，将视频导出为 1080p 后再次上传。`, { id: compressToastId, duration: 10000 });
+                const errMsg = err?.message || (typeof err === 'string' ? err : '未知错误');
+                toast.error(`🚨 本地加速暂不可用 (${errMsg})。为了保证分析速度与质量，请您下载剪映或 Handbrake，将视频导出为 1080p 后再次上传。`, { id: compressToastId, duration: 10000 });
                 
                 // 必须拦截上传，绝不原图上传！
                 setIsCompressing(false);
