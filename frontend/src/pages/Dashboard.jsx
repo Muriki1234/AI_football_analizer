@@ -298,7 +298,14 @@ export default function Dashboard() {
         if (!isDone || summaryFetched.current) return;
         summaryFetched.current = true;
         getSummary(sessionId).then((s) => {
-            if (s) setAiSummary((prev) => prev || s);
+            if (s) {
+                // Determine mode by task_type, or just set it to team by default
+                if (s.task_type === 'ai_summary_player') {
+                    setAiSummaryPlayer((prev) => prev || s);
+                } else {
+                    setAiSummaryTeam((prev) => prev || s);
+                }
+            }
         }).catch(() => { });
     }, [isDone, sessionId]);
 
@@ -361,11 +368,6 @@ export default function Dashboard() {
             setAiGenerating(false);
         }
     };
-
-    // Clear the local "generating" flag when the result actually arrives
-    useEffect(() => {
-        if (currentSummary) setAiGenerating(false);
-    }, [currentSummary]);
 
     // Body scroll lock while the drawer is open. Without it, scrolling
     // anywhere over the drawer that *isn't* a deep overflow:auto container
@@ -464,18 +466,7 @@ export default function Dashboard() {
         });
     };
 
-    if (!sessionId) {
-        return (
-            <div className="dashboard dashboard--v2">
-                <div className="bg-grid" />
-                <StepNav />
-                <div className="dashboard__error-banner">
-                    <HiExclamationCircle /> No session. Upload a video first.
-                </div>
-                <button className="btn btn-primary" onClick={() => navigate('/upload')}>Go to Upload</button>
-            </div>
-        );
-    }
+
 
     const handleToggleDraw = useCallback((mode) => {
         setDrawMode(mode);
@@ -528,7 +519,20 @@ export default function Dashboard() {
                 setInitialStrokes([]);
             }
         }
-    }, [tacticalDrawings]);
+    }, [tacticalDrawings, sessionId]);
+
+    if (!sessionId) {
+        return (
+            <div className="dashboard dashboard--v2">
+                <div className="bg-grid" />
+                <StepNav />
+                <div className="dashboard__error-banner">
+                    <HiExclamationCircle /> No session. Upload a video first.
+                </div>
+                <button className="btn btn-primary" onClick={() => navigate('/upload')}>Go to Upload</button>
+            </div>
+        );
+    }
 
     return (
         <div className="dashboard dashboard--v2">
@@ -610,7 +614,7 @@ export default function Dashboard() {
                                         if (v.paused) v.play?.().catch(() => { });
                                         else v.pause?.();
                                     }}
-                                    onDoubleClick={(e) => {
+                                    onDoubleClick={(e) => { e.preventDefault();
                                         const wrap = e.currentTarget.parentElement;
                                         if (document.fullscreenElement) {
                                             document.exitFullscreen().catch(()=>{});
