@@ -1,6 +1,7 @@
 import { useRef, useState, useCallback, useEffect, useImperativeHandle } from 'react';
 import PropTypes from 'prop-types';
 import { HiPencil, HiArrowUpRight, HiArrowUturnLeft, HiTrash, HiCamera, HiMinus } from 'react-icons/hi2';
+import { FiCircle } from 'react-icons/fi';
 
 /**
  * TelestrationCanvas — freehand + arrow drawing overlay for video or minimap.
@@ -176,6 +177,11 @@ export default function TelestrationCanvas({ active, parentRef, width, height, o
                     onClick={() => setTool('arrow')}
                     title="箭头"
                 ><HiArrowUpRight /></button>
+                <button
+                    className={`draw-toolbar__btn ${tool === 'circle' ? 'is-active' : ''}`}
+                    onClick={() => setTool('circle')}
+                    title="圆圈"
+                ><FiCircle /></button>
                 <div className="draw-toolbar__sep" />
                 
                 {/* Line width & style selectors */}
@@ -231,6 +237,7 @@ function drawFreehand(ctx, points, color, type, lineWidth = 4, isDashed = false)
     if (!points || points.length < 2) return;
     
     const isArrow = type === 'arrow';
+    const isCircle = type === 'circle';
     
     ctx.strokeStyle = color;
     ctx.lineWidth = lineWidth;
@@ -250,31 +257,45 @@ function drawFreehand(ctx, points, color, type, lineWidth = 4, isDashed = false)
     }
 
     ctx.beginPath();
-    ctx.moveTo(points[0].x, points[0].y);
     
-    // Smooth quadratic curve drawing
-    for (let i = 1; i < points.length - 1; i++) {
-        const xc = (points[i].x + points[i + 1].x) / 2;
-        const yc = (points[i].y + points[i + 1].y) / 2;
-        ctx.quadraticCurveTo(points[i].x, points[i].y, xc, yc);
-    }
-    // Line to the final point
-    if (points.length > 2) {
-        ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
+    if (isCircle) {
+        // Draw ellipse based on start and end points
+        const start = points[0];
+        const end = points[points.length - 1];
+        const rx = Math.abs(end.x - start.x) / 2;
+        const ry = Math.abs(end.y - start.y) / 2;
+        const cx = Math.min(start.x, end.x) + rx;
+        const cy = Math.min(start.y, end.y) + ry;
+        
+        ctx.ellipse(cx, cy, rx, ry, 0, 0, 2 * Math.PI);
+    } else {
+        // Freehand / Arrow path
+        ctx.moveTo(points[0].x, points[0].y);
+        
+        // Smooth quadratic curve drawing
+        for (let i = 1; i < points.length - 1; i++) {
+            const xc = (points[i].x + points[i + 1].x) / 2;
+            const yc = (points[i].y + points[i + 1].y) / 2;
+            ctx.quadraticCurveTo(points[i].x, points[i].y, xc, yc);
+        }
+        // Line to the final point
+        if (points.length > 2) {
+            ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
+        }
     }
     
     ctx.stroke();
 
-    if (isArrow) {
+    if (isArrow && !isCircle) {
         ctx.setLineDash([]); // Reset line dash for the arrowhead
         
         // Draw arrowhead at the very end
         const end = points[points.length - 1];
         
         // Calculate tangent using a point backwards from the end for stability
-        let p2 = points[Math.max(0, points.length - 2)];
+        let p2 = points[0];
         for (let i = points.length - 2; i >= 0; i--) {
-            if (Math.hypot(end.x - points[i].x, end.y - points[i].y) > 8) {
+            if (Math.hypot(end.x - points[i].x, end.y - points[i].y) > 20) {
                 p2 = points[i];
                 break;
             }
@@ -283,8 +304,8 @@ function drawFreehand(ctx, points, color, type, lineWidth = 4, isDashed = false)
         const dx = end.x - p2.x;
         const dy = end.y - p2.y;
         
-        // If the stroke is too short or dx/dy is 0, don't draw arrow head
-        if (dx === 0 && dy === 0) return;
+        // If the stroke is effectively a dot, don't draw arrow head
+        if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
         
         const angle = Math.atan2(dy, dx);
         const headLen = 18;
