@@ -3728,7 +3728,7 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
 
         # ── 7. 落盘 + 完成任务 ──
         sm.update_task(session_id, task_id, progress=95, stage="saving_report")
-        report_path = output_dir / "ai_summary.md"
+        report_path = output_dir / f"ai_summary_{analysis_mode}.md"
         with open(report_path, "w", encoding="utf-8") as f:
             f.write(report_md)
 

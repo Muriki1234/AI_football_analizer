@@ -310,9 +310,14 @@ async def queue_feature(
     if s.get("status") != "analysis_done":
         raise HTTPException(status_code=409, detail="Analysis is not complete yet.")
 
+    real_task_type = feature
+    if feature == "ai_summary":
+        real_task_type = f"ai_summary_{mode}"
+        s["ai_summary_mode"] = mode
+
     existing_tasks = [
         t for t in sm.list_tasks(session_id)
-        if t.get("task_type") == feature
+        if t.get("task_type") == real_task_type
         and t.get("status") in ("queued", "running", "done")
     ]
     if existing_tasks:
@@ -322,12 +327,8 @@ async def queue_feature(
             status=existing.get("status", "queued"),
         )
 
-    # Pass AI summary mode into session for run_ai_summary to read
-    if feature == "ai_summary":
-        s["ai_summary_mode"] = mode
-
     fn = FEATURE_TASKS[feature]
-    task_id = sm.create_task(session_id, feature)
+    task_id = sm.create_task(session_id, real_task_type)
 
     def _on_error(exc: BaseException) -> None:
         sm.update_task(session_id, task_id, status="failed", error=str(exc))

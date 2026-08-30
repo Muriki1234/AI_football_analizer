@@ -312,7 +312,8 @@ export default function Dashboard() {
     );
 
     const [session, setSession] = useState(null);
-    const [aiSummary, setAiSummary] = useState(null);
+    const [aiSummaryTeam, setAiSummaryTeam] = useState(null);
+    const [aiSummaryPlayer, setAiSummaryPlayer] = useState(null);
     const [aiProgress, setAiProgress] = useState(0);   // 0-100, mirrors the ai_summary task row
 
     const [error, setError] = useState(null);
@@ -441,9 +442,13 @@ export default function Dashboard() {
 
         const applyTasks = (tasks = []) => {
             for (const t of tasks) {
-
-                if (t.task_type === 'ai_summary') {
-                    setAiSummary(t.result || null);
+                if (t.task_type === 'ai_summary' || t.task_type === 'ai_summary_team') {
+                    setAiSummaryTeam(t.result || null);
+                    // Only update progress if we are in team mode, or if progress is generic
+                    // We'll update aiProgress in a more comprehensive way below
+                    setAiProgress(Math.max(0, Math.min(100, Number(t.progress) || 0)));
+                } else if (t.task_type === 'ai_summary_player') {
+                    setAiSummaryPlayer(t.result || null);
                     setAiProgress(Math.max(0, Math.min(100, Number(t.progress) || 0)));
                 }
             }
@@ -482,8 +487,11 @@ export default function Dashboard() {
             onTask: (t) => {
                 realtimeEvents.current += 1;
 
-                if (t.task_type === 'ai_summary') {
-                    setAiSummary(t.result || null);
+                if (t.task_type === 'ai_summary' || t.task_type === 'ai_summary_team') {
+                    setAiSummaryTeam(t.result || null);
+                    setAiProgress(Math.max(0, Math.min(100, Number(t.progress) || 0)));
+                } else if (t.task_type === 'ai_summary_player') {
+                    setAiSummaryPlayer(t.result || null);
                     setAiProgress(Math.max(0, Math.min(100, Number(t.progress) || 0)));
                 }
             },
@@ -505,28 +513,30 @@ export default function Dashboard() {
     const overlayDataUrl = session?.overlay_data_url || null;
     const heatmapDataUrl = session?.heatmap_data_url || null;
 
-    const playerSummary = session?.player_summary || null;
+    const playerSummaryJson = session?.player_summary || null;
+    
+    const currentSummary = viewMode === 'player' ? aiSummaryPlayer : aiSummaryTeam;
 
     const aiMarkdown = useMemo(() => {
-        const txt = taskTextResult(aiSummary);
+        const txt = taskTextResult(currentSummary);
         if (!txt) return '';
         try {
             let html = DOMPurify.sanitize(marked.parse(txt));
             // 将 [MM:SS] 时间戳转为可点击的跳转链接（在sanitize之后操作，安全）
             html = html.replace(
                 /\[(\d{1,3}):(\d{2})\]/g,
-                (match, mm, ss) => {
-                    const totalSec = parseInt(mm, 10) * 60 + parseInt(ss, 10);
-                    return `<span class="ai-timestamp" data-seconds="${totalSec}" title="跳转到 ${mm}:${ss}">[${mm}:${ss}]</span>`;
+                (match, m, s) => {
+                    const sec = parseInt(m, 10) * 60 + parseInt(s, 10);
+                    return `<button class="ai-timestamp" data-seconds="${sec}">${match}</button>`;
                 }
             );
             return html;
         }
         catch { return DOMPurify.sanitize(txt); }
-    }, [aiSummary]);
+    }, [currentSummary]);
 
     const aiHighlights = useMemo(() => {
-        const txt = taskTextResult(aiSummary);
+        const txt = taskTextResult(currentSummary);
         if (!txt) return [];
         const highlights = [];
         const regex = /\[(\d{1,3}):(\d{2})\]/g;
@@ -541,7 +551,7 @@ export default function Dashboard() {
             }
         }
         return highlights;
-    }, [aiSummary]);
+    }, [currentSummary]);
 
     const handleGenerateAI = async () => {
         if (aiGenerating || !sessionId) return;
@@ -561,8 +571,8 @@ export default function Dashboard() {
 
     // Clear the local "generating" flag when the result actually arrives
     useEffect(() => {
-        if (aiSummary) setAiGenerating(false);
-    }, [aiSummary]);
+        if (currentSummary) setAiGenerating(false);
+    }, [currentSummary]);
 
     // Body scroll lock while the drawer is open. Without it, scrolling
     // anywhere over the drawer that *isn't* a deep overflow:auto container
@@ -916,7 +926,7 @@ export default function Dashboard() {
                                     <HiChartBar />
                                     <span>Data Analysis</span>
                                 </div>
-                                <DataAnalysisPanel playerSummary={playerSummary} />
+                                <DataAnalysisPanel playerSummary={playerSummaryJson} />
                             </div>
 
                             {/* AI Analysis — generate-on-demand */}
