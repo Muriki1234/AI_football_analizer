@@ -29,6 +29,7 @@ import CanvasOverlay from '../components/CanvasOverlay';
 import MinimapOverlay from '../components/MinimapOverlay';
 import HeatmapCanvas from '../components/HeatmapCanvas';
 import TelestrationCanvas from '../components/TelestrationCanvas';
+import DataAnalysisPanel from '../components/DataAnalysisPanel';
 import './Dashboard.css';
 
 const PHASE_LABELS = {
@@ -108,6 +109,7 @@ export default function Dashboard() {
     const [aiProgress, setAiProgress] = useState(0);   // 0-100, mirrors the ai_summary task row
 
     const [error, setError] = useState(null);
+    const [videoSize, setVideoSize] = useState({ width: 1280, height: 720 });
 
     const [drawerOpen, setDrawerOpen] = useState(false);
     const [minimapOn, setMinimapOn] = useState(false);
@@ -616,6 +618,7 @@ export default function Dashboard() {
                                             wrap.requestFullscreen().catch(()=>{});
                                         }
                                     }}
+                                    onLoadedMetadata={(e) => setVideoSize({ width: e.currentTarget.videoWidth || 1280, height: e.currentTarget.videoHeight || 720 })}
                                     onWaiting={() => setIsVideoBuffering(true)}
                                     onPlaying={() => setIsVideoBuffering(false)}
                                     onPause={() => setIsVideoBuffering(false)}
@@ -646,8 +649,8 @@ export default function Dashboard() {
                                     active={drawMode}
                                     parentRef={telestrationRef}
                                     videoRef={heroVideoRef}
-                                    width={heroVideoRef.current?.videoWidth || 1280}
-                                    height={heroVideoRef.current?.videoHeight || 720}
+                                    width={videoSize.width}
+                                    height={videoSize.height}
                                     initialStrokes={initialStrokes}
                                     onInteractionStart={() => {
                                         if (heroVideoRef.current && !heroVideoRef.current.paused) {
