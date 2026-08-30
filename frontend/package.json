@@ -12,6 +12,9 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1063.0",
     "@aws-sdk/s3-request-presigner": "^3.1063.0",
+    "@ffmpeg/core": "^0.12.10",
+    "@ffmpeg/ffmpeg": "^0.12.15",
+    "@ffmpeg/util": "^0.12.2",
     "@supabase/supabase-js": "^2.45.6",
     "axios": "^1.13.5",
     "dompurify": "^3.4.6",
@@ -24,6 +27,7 @@
     "react-dropzone": "^15.0.0",
     "react-hot-toast": "^2.6.0",
     "react-icons": "^5.5.0",
+    "react-is": "^19.2.8",
     "react-router-dom": "^7.13.0",
     "recharts": "^3.7.0",
     "source-map": "^0.8.0"

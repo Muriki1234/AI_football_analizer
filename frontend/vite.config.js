@@ -14,6 +14,10 @@ export default defineConfig({
     sourcemap: false,   // 显式关闭，防未来配置变更把 source 泄漏到 prod
   },
   server: {
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+    },
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:8000',

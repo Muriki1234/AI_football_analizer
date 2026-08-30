@@ -3,13 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { useDropzone } from 'react-dropzone';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
-import {
-    HiCloudArrowUp,
-    HiPlay,
-    HiArrowRight,
-    HiXMark,
-} from 'react-icons/hi2';
+import { HiCloudArrowUp, HiPlay, HiArrowRight, HiXMark } from 'react-icons/hi2';
 import { uploadVideo } from '../services/api';
+import { compressVideoIfNeeded } from '../utils/compressVideo';
 import { useProgress } from '../components/ProgressBar';
 import StepNav from '../components/StepNav';
 import './Upload.css';
@@ -18,6 +14,8 @@ export default function Upload() {
     const [file, setFile] = useState(null);
     const [preview, setPreview] = useState(null);
     const [uploadPct, setUploadPct] = useState(0);
+    const [isCompressing, setIsCompressing] = useState(false);
+    const [compressPct, setCompressPct] = useState(0);
     const [uploadSuccess, setUploadSuccess] = useState(false);
     const [uploadedVideoId, setUploadedVideoId] = useState(null);
     const navigate = useNavigate();
@@ -29,11 +27,43 @@ export default function Upload() {
         setFile(f);
         setPreview(URL.createObjectURL(f));
         setUploadPct(0);
+        setCompressPct(0);
         setUploadSuccess(false);
 
-        // 上传进度 indeterminate：Supabase JS SDK 的 .upload() 不暴露进度，
-        // 之前 onProgress 只在结束时 fire 一次 100%，UI "0% 卡半小时然后跳 100%"
-        // 看起来跟挂了一样。改成显示已耗时让用户知道还在动。
+        let finalFile = f;
+        start();
+
+        // 1. 本地压缩预处理 (拦截长视频)
+        if (f.size > 500 * 1024 * 1024) {
+            setIsCompressing(true);
+            const compressToastId = toast.loading('正在为您进行 AI 预处理...');
+            try {
+                finalFile = await compressVideoIfNeeded(f, (pct) => {
+                    setCompressPct(pct);
+                    toast.loading(`正在为您进行 AI 预处理... ${pct}%`, { id: compressToastId });
+                });
+                toast.success('预处理完成，体积大幅缩减！', { id: compressToastId });
+            } catch (err) {
+                if (err.message === 'DEVICE_INCAPABLE') {
+                    toast.error('🚨 您的设备性能不足，无法完成 AI 预处理。为了保证分析质量，请您下载剪映或 Handbrake，将视频导出为 1080p 后再次上传。', { id: compressToastId, duration: 10000 });
+                    setIsCompressing(false);
+                    done();
+                    setFile(null);
+                    setPreview(null);
+                    return; // 强行拦截上传
+                }
+                // 其他未知错误，默默容错，继续原图上传（或者也拦截，根据产品策略。目前采用直接抛出错误拦截）
+                toast.error('预处理失败：' + err.message, { id: compressToastId });
+                setIsCompressing(false);
+                done();
+                setFile(null);
+                setPreview(null);
+                return;
+            }
+            setIsCompressing(false);
+        }
+
+        // 2. 上传处理
         const tStart = Date.now();
         const toastId = toast.loading('Uploading video…');
         const tickHandle = setInterval(() => {
@@ -43,10 +73,7 @@ export default function Upload() {
             toast.loading(`Uploading video… ${mm}:${ss} elapsed`, { id: toastId });
         }, 1000);
         try {
-            start();
-            const data = await uploadVideo(f, (pct) => {
-                // 保留 onProgress 兼容性：SDK 只会在结束时 fire 100，作用是
-                // 让按钮文字从 indeterminate 变成 done。
+            const data = await uploadVideo(finalFile, (pct) => {
                 setUploadPct(pct);
             });
             clearInterval(tickHandle);
@@ -143,7 +170,7 @@ export default function Upload() {
                             <button
                                 className="upload-preview__clear"
                                 onClick={clearFile}
-                                disabled={!uploadSuccess && uploadPct > 0 && uploadPct < 100}
+                                disabled={(!uploadSuccess && uploadPct > 0 && uploadPct < 100) || isCompressing}
                                 title="Remove"
                             >
                                 <HiXMark />
@@ -157,16 +184,18 @@ export default function Upload() {
                                     <p className="upload-preview__filename">{file.name}</p>
                                     <p className="upload-preview__filesize">
                                         {(file.size / (1024 * 1024)).toFixed(1)} MB
-                                        {!uploadSuccess && ' · uploading…'}
+                                        {!uploadSuccess && (
+                                            isCompressing ? ` · AI pre-processing: ${compressPct}%` : ' · uploading…'
+                                        )}
                                     </p>
                                 </div>
                             </div>
                             <button
                                 className={`btn ${uploadSuccess ? 'btn-success' : 'btn-primary'}`}
                                 onClick={goToTrim}
-                                disabled={!uploadSuccess}
+                                disabled={!uploadSuccess || isCompressing}
                             >
-                                {uploadSuccess ? 'Continue' : 'Uploading…'}
+                                {uploadSuccess ? 'Continue' : (isCompressing ? 'Pre-processing...' : 'Uploading…')}
                                 <HiArrowRight />
                             </button>
                         </div>
