@@ -88,7 +88,6 @@ export default function Trimmer() {
                 const dur = await new Promise((resolve) => {
                     if (!s?.video_url) return resolve(0);
                     const v = document.createElement('video');
-                    v.crossOrigin = 'anonymous';
                     v.preload = 'metadata';
                     v.src = s.video_url;
                     let settled = false;
@@ -340,7 +339,6 @@ export default function Trimmer() {
                 {videoUrl && (
                     <video
                         ref={videoRef}
-                        crossOrigin="anonymous"
                         src={videoUrl}
                         className="trim-page__video"
                         controls
