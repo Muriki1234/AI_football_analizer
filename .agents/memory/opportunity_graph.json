@@ -1,0 +1,107 @@
+{
+  "nodes": {
+    "18_zone_radar": {
+      "id": "18_zone_radar",
+      "title": "20-Zone Spatial Analytics (JDP 4×5 Matrix)",
+      "description": "Juego de Posición tactical grid expanding classic 18-zone model into a 4×5 matrix (4 pitch depths × 5 vertical corridors, highlighting Zone 14 & Half-spaces)",
+      "status": "VALIDATED",
+      "tier": "backlog",
+      "created_at": "2026-09-17T04:07:41.352075Z",
+      "notes": [
+        {
+          "time": "2026-09-17T11:37:55.669508+00:00",
+          "status": "EXPLORING",
+          "note": "Active implementation and test suite authoring for 18-zone radar"
+        },
+        {
+          "time": "2026-09-17T11:38:00.063557+00:00",
+          "status": "VALIDATED",
+          "note": "Full Vitest unit test suite (5 test cases) covering 20-zone (JDP 4×5) matrix, Zone 14 badges, half-space occupancy, KPI cards, and timestamp seeking verified passing"
+        }
+      ],
+      "activated_at": "2026-09-17T04:07:41.458023Z"
+    },
+    "vertical_crop_916": {
+      "id": "vertical_crop_916",
+      "title": "9:16 Vertical Video Highlight Generator",
+      "description": "Cinematic pan & scan",
+      "status": "VALIDATED",
+      "tier": "backlog",
+      "created_at": "2026-09-17T04:07:41.418069Z",
+      "notes": [
+        {
+          "time": "2026-09-17T11:38:29.383545+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-17T11:38:34.041530+00:00",
+          "status": "EXPLORING",
+          "note": "Testing and benchmarking vertical crop pan & scan logic"
+        },
+        {
+          "time": "2026-09-17T11:39:10.577597+00:00",
+          "status": "VALIDATED",
+          "note": "9 automated unittests covering edge clamping, missing target interpolation, and jitter damping verified passing. Algorithm-only benchmark: 3000-frame trajectory smoothing in 3ms (pure memory calculation, excluding video decoding and YOLO/SAM tracking I/O)"
+        }
+      ],
+      "activated_at": "2026-09-17T11:38:29.383418+00:00"
+    },
+    "jersey_tracklet_voting": {
+      "id": "jersey_tracklet_voting",
+      "title": "Jersey Number Temporal Tracklet Voting Engine",
+      "description": "Candidate robust player identification using upper-torso spatial cropping and Dirichlet temporal confidence histogram voting over tracklet windows to resolve motion blur & occlusion",
+      "status": "VALIDATED",
+      "tier": "backlog",
+      "created_at": "2026-09-17T11:39:35.651365+00:00",
+      "created_session_id": "session_night_20260917",
+      "notes": [
+        {
+          "time": "2026-09-17T11:39:55.464792+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-17T11:40:01.867848+00:00",
+          "status": "EXPLORING",
+          "note": "Authoring jersey_voting.py prototype and automated unit tests"
+        },
+        {
+          "time": "2026-09-17T11:40:51.150032+00:00",
+          "status": "VALIDATED",
+          "note": "7 automated unittests covering torso cropping, digit sanitization, and temporal Dirichlet voting verified passing. Algorithm-only benchmark: 22 players over 500 frames in 1ms (pure in-memory voting logic, excluding single-frame vision OCR)"
+        }
+      ],
+      "activated_at": "2026-09-17T11:39:55.464672+00:00"
+    },
+    "pitch_control_voronoi": {
+      "id": "pitch_control_voronoi",
+      "title": "Lightweight Spearman Pitch Control & Voronoi Territory Estimator",
+      "description": "Physics-based spatial dominance & time-to-intercept model computing territorial dominance and passing lane openness from 2D player coordinates",
+      "status": "VALIDATED",
+      "tier": "backlog",
+      "created_at": "2026-09-17T11:41:17.900616+00:00",
+      "created_session_id": "session_night_20260917",
+      "notes": [
+        {
+          "time": "2026-09-17T11:41:22.800344+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-17T11:41:27.991370+00:00",
+          "status": "EXPLORING",
+          "note": "Authoring pitch_control.py prototype with Spearman time-to-intercept model"
+        },
+        {
+          "time": "2026-09-17T11:42:23.634041+00:00",
+          "status": "VALIDATED",
+          "note": "8 automated unittests covering Spearman time-to-intercept, pitch control logistic probability, 2D territory grid, and passing lane openness verified passing. Algorithm-only benchmark: 21×14 spatial grid with 22 players evaluated in 3ms (pure kinematic vector calculation)"
+        }
+      ],
+      "activated_at": "2026-09-17T11:41:22.800224+00:00"
+    }
+  },
+  "edges": [],
+  "updated_at": "2026-09-17T11:42:23.634163+00:00"
+}

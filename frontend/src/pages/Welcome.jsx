@@ -24,8 +24,15 @@ function sessionStage(s) {
     const st = s.status || 'uploaded';
     if (['analysis_done'].includes(st))
         return { label: 'Done', cls: 'badge--done', tier: 'done' };
-    if (['tracking', 'samurai_multi_pending', 'samurai_done', 'analyzing', 'queued'].includes(st))
+    if (['tracking', 'samurai_multi_pending', 'samurai_done', 'analyzing', 'queued'].includes(st)) {
+        const lastUpdated = new Date(s.updated_at || s.created_at).getTime();
+        const minsSinceUpdate = (Date.now() - lastUpdated) / 60000;
+        if (minsSinceUpdate > 20) {
+            // It's a zombie. Mark it as failed so the user can restart it.
+            return { label: 'Failed (Timeout)', cls: 'badge--failed', tier: 'needs-pick' };
+        }
         return { label: 'Analyzing…', cls: 'badge--progress', tier: 'in-progress' };
+    }
     if (['tracking_failed', 'analysis_failed', 'failed'].includes(st))
         return { label: 'Failed', cls: 'badge--failed', tier: 'needs-pick' };
     // status === 'uploaded'

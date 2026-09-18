@@ -1,11 +1,11 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDropzone } from 'react-dropzone';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 import { HiCloudArrowUp, HiPlay, HiArrowRight, HiXMark } from 'react-icons/hi2';
 import { uploadVideo } from '../services/api';
-import { compressVideoIfNeeded } from '../utils/compressVideo';
+import { compressVideoIfNeeded, abortCompression } from '../utils/compressVideo';
 import { useProgress } from '../components/ProgressBar';
 import StepNav from '../components/StepNav';
 import './Upload.css';
@@ -18,8 +18,26 @@ export default function Upload() {
     const [compressPct, setCompressPct] = useState(0);
     const [uploadSuccess, setUploadSuccess] = useState(false);
     const [uploadedVideoId, setUploadedVideoId] = useState(null);
+    const abortRef = useRef(false);
     const navigate = useNavigate();
     const { start, done } = useProgress();
+
+    const clearFile = () => {
+        setFile(null);
+        if (preview) URL.revokeObjectURL(preview);
+        setPreview(null);
+        setUploadSuccess(false);
+        setUploadPct(0);
+        setCompressPct(0);
+        setIsCompressing(false);
+    };
+
+    const handleCancel = (e) => {
+        e.stopPropagation();
+        abortRef.current = true;
+        abortCompression();
+        clearFile();
+    };
 
     const onDrop = useCallback(async (acceptedFiles) => {
         if (!acceptedFiles.length) return;
@@ -29,19 +47,29 @@ export default function Upload() {
         setUploadPct(0);
         setCompressPct(0);
         setUploadSuccess(false);
+        abortRef.current = false;
 
         let finalFile = f;
         start();
 
-        // 1. 本地压缩预处理 (拦截长视频)
-        if (f.size > 500 * 1024 * 1024) {
+        // 1. 本地压缩预处理
+        //    - 若大于 2.5GB，强制压缩
+        //    - 若在 1GB ~ 2.5GB 之间，且文件名不包含 _compressed，压缩
+        //    - 若小于 1GB，跳过压缩
+        const isAlreadyCompressed = f.name.toLowerCase().includes('_compressed');
+        const isOver2_5GB = f.size > 2.5 * 1024 * 1024 * 1024;
+        const isOver1GB = f.size > 1024 * 1024 * 1024;
+        
+        if (isOver2_5GB || (isOver1GB && !isAlreadyCompressed)) {
             setIsCompressing(true);
             const compressToastId = toast.loading('正在为您进行 AI 预处理...');
             try {
                 finalFile = await compressVideoIfNeeded(f, (pct) => {
+                    if (abortRef.current) abortCompression();
                     setCompressPct(pct);
                     toast.loading(`正在为您进行 AI 预处理... ${pct}%`, { id: compressToastId });
                 });
+                if (abortRef.current) return;
                 toast.success('预处理完成，体积大幅缩减！', { id: compressToastId });
             } catch (err) {
                 console.error('AI Pre-processing failed:', err);
@@ -97,13 +125,6 @@ export default function Upload() {
         maxFiles: 1,
     });
 
-    const clearFile = () => {
-        setFile(null);
-        if (preview) URL.revokeObjectURL(preview);
-        setPreview(null);
-        setUploadSuccess(false);
-        setUploadPct(0);
-    };
 
     const goToTrim = () => {
         if (!uploadSuccess || !uploadedVideoId) return;
@@ -164,9 +185,8 @@ export default function Upload() {
                             <video src={preview} controls className="upload-preview__video" />
                             <button
                                 className="upload-preview__clear"
-                                onClick={clearFile}
-                                disabled={(!uploadSuccess && uploadPct > 0 && uploadPct < 100) || isCompressing}
-                                title="Remove"
+                                onClick={handleCancel}
+                                title="Cancel and Remove"
                             >
                                 <HiXMark />
                             </button>

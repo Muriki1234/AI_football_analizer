@@ -42,18 +42,26 @@ export const captureVideoFrame = (videoUrl, frameIdx = 0, fps = 25, quality = 0.
 
         video.addEventListener('seeked', () => {
             try {
+                let targetW = video.videoWidth;
+                let targetH = video.videoHeight;
+                const MAX_DIM = 1920;
+                if (targetW > MAX_DIM || targetH > MAX_DIM) {
+                    const scale = Math.min(MAX_DIM / targetW, MAX_DIM / targetH);
+                    targetW = Math.round(targetW * scale);
+                    targetH = Math.round(targetH * scale);
+                }
                 const canvas = document.createElement('canvas');
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
+                canvas.width = targetW;
+                canvas.height = targetH;
                 const ctx = canvas.getContext('2d');
-                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                ctx.drawImage(video, 0, 0, targetW, targetH);
                 const dataUrl = canvas.toDataURL('image/jpeg', quality);
                 cleanup();
                 resolve({
                     dataUrl,
                     base64: dataUrl.split(',')[1],
-                    width: canvas.width,
-                    height: canvas.height,
+                    width: targetW,
+                    height: targetH,
                 });
             } catch (e) {
                 cleanup();

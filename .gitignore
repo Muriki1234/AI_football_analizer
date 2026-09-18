@@ -73,3 +73,5 @@ uploads/
 frontend/test_trim.js
 frontend/test_upload.cjs
 frontend/test_upload.js
+server/query_rest.py
+server/query_session.py

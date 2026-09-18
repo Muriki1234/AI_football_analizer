@@ -1,0 +1,10 @@
+[
+  {
+    "id": "PITFALL-01",
+    "observed_in_session": "session_night_20260917",
+    "evidence": "In-memory benchmark measured 1-3ms, but end-to-end video pipeline requires frame decoding, YOLO and SAM2 tracking.",
+    "action_taken": "Required explicit 'Algorithm-only Benchmark' prefix and scope boundary in reports and tests.",
+    "result": "Resolved boundary conflation without distorting pipeline expectations.",
+    "reusable_lesson": "Never claim 1-3ms end-to-end pipeline latency from in-memory array operations."
+  }
+]

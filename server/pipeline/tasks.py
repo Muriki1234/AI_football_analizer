@@ -539,7 +539,7 @@ def _yolo_parallel_worker(args: dict) -> str:
         }, f, protocol=4)
 
     print(f"[YOLO-PAR] seg {seg_idx} done: frames {seg_start}–{seg_end}, "
-          f"pkl={out_path.name}")
+          f"pkl={out_path.name}", flush=True)
     return str(out_path)
 
 
@@ -558,8 +558,9 @@ def _run_yolo_parallel(video_path: str, total_frames: int, n_segs: int,
     from .analysis_core import YOLO_BATCH_SIZE
 
     seg_size = total_frames // n_segs
-    # batch_size per subprocess — reduce to avoid OOM when running n_segs parallel GPU procs
-    batch_size = max(8, YOLO_BATCH_SIZE // n_segs)
+    # batch_size per subprocess — increase to fully utilize VRAM since we run sequentially
+    # and have 24GB available. 11 processes * 16 batch_size = 176 frames per batch across GPU.
+    batch_size = max(16, YOLO_BATCH_SIZE // n_segs)
     seg_args = []
     for i in range(n_segs):
         start = i * seg_size
@@ -727,20 +728,19 @@ def run_samurai_tracking_multi(session_id: str, session: dict,
         # But if the video is already 720p, 0.5x gives 360p which is too blurry
         # for SAM2 to track small players. So we only resize if > 720p.
         RESIZE_FACTOR = 1.0 if orig_h <= 720 else 0.5
+        
+        # User explicitly requested to NEVER increase SKIP_STEP because it ruins
+        # SAM2's temporal memory accuracy (players move too fast between frames).
         SKIP_STEP = 10
 
         n_segments = len(segs_sorted)
 
         # Adaptive parallelism: scale with resolution.
-        # Baseline: 1080p (1920×1080 ≈ 2.07M pixels) → 8 parallel SAMURAI.
-        # Each SAMURAI proc loads full-res frames; bigger frames = more RAM.
-        # At 2880×1800 (5.18M px, ~2.5× baseline), 8 procs OOM the 46GB
-        # RunPod worker. Scale down proportionally.
-        # Normally the 1080p downscale in handler.py ensures we always hit
-        # _res_factor=1.0; this is a safety net if downscale failed.
+        # Baseline: 1080p (1920×1080 ≈ 2.07M pixels)
         _BASELINE_PX = 1920 * 1080  # 2.07M
         _res_factor = max(1.0, (orig_w * orig_h) / _BASELINE_PX)
-        _env_cap = int(os.environ.get("SAMURAI_MAX_PARALLEL", "10"))
+        # Sequential mode default cap is 11 to safely fill 46GB RAM
+        _env_cap = int(os.environ.get("SAMURAI_MAX_PARALLEL", "11"))
         # √ scaling: SAMURAI internally resizes by 0.5×, so linear scaling
         # overcorrects. sqrt gives 10→6 at 2880×1800 instead of 10→4.
         MAX_PARALLEL = max(2, int(_env_cap / (_res_factor ** 0.5)))
@@ -996,15 +996,17 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         # the 46GB RunPod worker. Scale YOLO segs down proportionally.
         _BASELINE_PX = 1920 * 1080
         _yolo_res_factor = max(1.0, (_vid_w * _vid_h) / _BASELINE_PX)
-        _samurai_concurrent = "_samurai_done_event" in session
-        # √ scaling: less aggressive than linear, matches SAMURAI formula
-        # Since we now downscale to 720p, we have 2x more RAM overhead available,
-        # so we can push baseline parallelism to 6 YOLO procs (balanced with 10 SAMURAI).
-        _default_segs = max(1, int(6 / (_yolo_res_factor ** 0.5)))
+        # Disable multi-process YOLO-PAR by default. 11 PyTorch processes on a single GPU
+        # without MPS causes severe CUDA context contention, 100% CPU bottleneck from
+        # 11 concurrent cv2 video decoders, and terrible performance (5fps total).
+        # We rely on the `run_merged_streaming_pipeline` (single process, CUDA streams)
+        # which is vastly faster and uses the GPU efficiently.
+        _base_segs = 0
+        _default_segs = max(1, int(_base_segs / (_yolo_res_factor ** 0.5)))
         n_yolo_segs = int(os.environ.get("PARALLEL_YOLO_SEGS", str(_default_segs)))
         if _yolo_res_factor > 1.05:
             print(f"[YOLO-PAR] ⚠️  HIGH-RES SAFETY NET: res={_vid_w}x{_vid_h} "
-                  f"({_yolo_res_factor:.1f}x baseline), segs reduced 6→{n_yolo_segs}",
+                  f"({_yolo_res_factor:.1f}x baseline), segs reduced {_base_segs}→{n_yolo_segs}",
                   flush=True)
         else:
             print(f"[YOLO-PAR] res={_vid_w}x{_vid_h}, segs={n_yolo_segs}", flush=True)

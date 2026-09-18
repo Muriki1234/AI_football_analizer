@@ -25,7 +25,17 @@ const STATUS_META = {
 //   - 设了半场没追踪人 → "Pick players" (MultiSegmentConfig 页)
 //   - 其他 / 老数据    → "Uploaded"
 function resolveMeta(s) {
-    const base = STATUS_META[s.status] || STATUS_META.uploaded;
+    let base = STATUS_META[s.status] || STATUS_META.uploaded;
+    
+    // Check for zombies (dead workers stuck in running state)
+    if (['tracking', 'samurai_multi_pending', 'samurai_done', 'analyzing', 'queued'].includes(s.status)) {
+        const lastUpdated = new Date(s.updated_at || s.created_at).getTime();
+        const minsSinceUpdate = (Date.now() - lastUpdated) / 60000;
+        if (minsSinceUpdate > 20) {
+            base = { ...STATUS_META.analysis_failed, label: 'Failed (Timeout)' };
+        }
+    }
+
     if (s.status !== 'uploaded') return base;
     const periods = Array.isArray(s.match_periods_sec) ? s.match_periods_sec : null;
     if (!periods || periods.length === 0) {

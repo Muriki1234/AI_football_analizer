@@ -10,12 +10,16 @@ export default async function handler(req, res) {
   const user = await requireSupabaseUser(req, res);
   if (!user) return;
 
-  const jobId = req.query.id;
+  let jobId = req.query.id;
   if (!jobId) {
     return res.status(400).json({ error: 'Job ID is required' });
   }
 
-  const runpodUrl = process.env.RUNPOD_ENDPOINT_URL;
+  let runpodUrl = process.env.RUNPOD_ENDPOINT_URL;
+  if (jobId.startsWith('cpu:')) {
+      jobId = jobId.substring(4);
+      runpodUrl = process.env.RUNPOD_CPU_ENDPOINT_URL || runpodUrl;
+  }
   const runpodKey = process.env.RUNPOD_API_KEY;
 
   if (!runpodUrl || !runpodKey) {

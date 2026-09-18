@@ -1,0 +1,167 @@
+[
+  {
+    "timestamp": "2026-09-17T04:53:19.860543+00:00",
+    "session_id": "session_night_01",
+    "version": "v5.1",
+    "metrics": {
+      "session_switches": 0,
+      "lifetime_switches": 0,
+      "memory_fidelity": 100.0,
+      "validation_rate": 0.0,
+      "leverage_index": 0.0,
+      "verified_bugs": 0,
+      "validated_prototypes": 0
+    }
+  },
+  {
+    "timestamp": "2026-09-17T04:53:25.370284+00:00",
+    "session_id": "session_night_01",
+    "version": "v5.1",
+    "metrics": {
+      "session_switches": 0,
+      "lifetime_switches": 0,
+      "memory_fidelity": 100.0,
+      "validation_rate": 0.0,
+      "leverage_index": 0.0,
+      "verified_bugs": 0,
+      "validated_prototypes": 0
+    }
+  },
+  {
+    "timestamp": "2026-09-17T06:00:43.239452+00:00",
+    "session_id": "idle",
+    "version": "v5.1",
+    "metrics": {
+      "session_switches": 0,
+      "lifetime_switches": 0,
+      "memory_fidelity": null,
+      "validation_rate": 0.0,
+      "leverage_index": 0.0,
+      "verified_bugs": 0,
+      "validated_prototypes": 0
+    }
+  },
+  {
+    "timestamp": "2026-09-17T11:42:48.793154+00:00",
+    "session_id": "session_night_20260917",
+    "version": "v5.1",
+    "metrics": {
+      "session_switches": 3,
+      "lifetime_switches": 3,
+      "memory_fidelity": 100.0,
+      "validation_rate": 100.0,
+      "leverage_index": 29.5,
+      "verified_bugs": 1,
+      "validated_prototypes": 4
+    }
+  },
+  {
+    "timestamp": "2026-09-18T00:18:00.291599+00:00",
+    "session_id": "session_night_20260917",
+    "version": "v5.1",
+    "metrics": {
+      "session_switches": 3,
+      "lifetime_switches": 3,
+      "memory_fidelity": 100.0,
+      "validation_rate": 100.0,
+      "leverage_index": 29.5,
+      "verified_bugs": 1,
+      "validated_prototypes": 4
+    }
+  },
+  {
+    "timestamp": "2026-09-18T00:20:22.905635+00:00",
+    "session_id": "session_night_20260917",
+    "version": "v5.1",
+    "metrics": {
+      "session_switches": 3,
+      "lifetime_switches": 3,
+      "memory_fidelity": 100.0,
+      "validation_rate": 100.0,
+      "leverage_index": 29.5,
+      "verified_bugs": 1,
+      "validated_prototypes": 4
+    }
+  },
+  {
+    "timestamp": "2026-09-18T00:29:42.106250+00:00",
+    "session_id": "session_night_20260917",
+    "version": "v5.1",
+    "metrics": {
+      "session_switches": 3,
+      "lifetime_switches": 3,
+      "memory_fidelity": 100.0,
+      "validation_rate": 100.0,
+      "leverage_index": 29.5,
+      "session_yield": 20.0,
+      "verified_bugs": 1,
+      "validated_prototypes": 4
+    }
+  },
+  {
+    "timestamp": "2026-09-18T00:45:54.141614+00:00",
+    "session_id": "session_night_20260917",
+    "version": "v5.2",
+    "status": "PENDING_EVALUATION",
+    "metrics": {
+      "session_yield": 11.0,
+      "session_switches": 3,
+      "session_redundant_loops": 0,
+      "memory_fidelity": 100.0,
+      "validation_rate": 100.0,
+      "cumulative_leverage": 30.5,
+      "session_bugs": 1,
+      "session_prototypes": 2,
+      "session_pitfalls": 1
+    },
+    "operational_metadata": {
+      "opportunity_count": 4,
+      "action_count": 4,
+      "event_count": 26
+    }
+  },
+  {
+    "timestamp": "2026-09-18T01:03:26.657446+00:00",
+    "session_id": "session_night_20260917",
+    "version": "v5.2",
+    "status": "CONFIRMED",
+    "metrics": {
+      "session_yield": 11.0,
+      "session_switches": 3,
+      "session_redundant_loops": 0,
+      "memory_fidelity": 100.0,
+      "validation_rate": 100.0,
+      "cumulative_leverage": 30.5,
+      "session_bugs": 1,
+      "session_prototypes": 2,
+      "session_pitfalls": 1
+    },
+    "operational_metadata": {
+      "opportunity_count": 4,
+      "action_count": 4,
+      "event_count": 26
+    }
+  },
+  {
+    "timestamp": "2026-09-18T01:04:40.432921+00:00",
+    "session_id": "session_night_20260917",
+    "version": "v5.2",
+    "status": "PENDING_EVALUATION",
+    "metrics": {
+      "session_yield": 11.0,
+      "session_switches": 3,
+      "session_redundant_loops": 0,
+      "memory_fidelity": 100.0,
+      "validation_rate": 100.0,
+      "cumulative_leverage": 30.5,
+      "session_bugs": 1,
+      "session_prototypes": 2,
+      "session_pitfalls": 1
+    },
+    "operational_metadata": {
+      "opportunity_count": 4,
+      "action_count": 4,
+      "event_count": 26
+    }
+  }
+]

@@ -14,8 +14,9 @@ import { FiCircle } from 'react-icons/fi';
  *   onInteractionStart : function — called when drawing begins, useful for pausing video
  */
 const COLORS = ['#ef4444', '#f59e0b', '#22c55e', '#3b82f6', '#f8fafc'];
+const DEFAULT_STROKES = [];
 
-export default function TelestrationCanvas({ active, parentRef, videoRef, width, height, onInteractionStart, initialStrokes = [] }) {
+export default function TelestrationCanvas({ active, parentRef, videoRef, width, height, onInteractionStart, initialStrokes = DEFAULT_STROKES }) {
     const canvasRef = useRef(null);
     const [color, setColor] = useState(COLORS[0]);
     const [tool, setTool] = useState('pen'); // 'pen' | 'arrow'
@@ -43,29 +44,46 @@ export default function TelestrationCanvas({ active, parentRef, videoRef, width,
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [active]);
 
+    // Keep track of the pending rAF
+    const rAF = useRef(null);
+
     // Redraw all strokes whenever they change
     const redraw = useCallback(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
-        const ctx = canvas.getContext('2d');
-        const dpr = window.devicePixelRatio || 1;
-        canvas.width = (width || 800) * dpr;
-        canvas.height = (height || 450) * dpr;
-        canvas.style.width = `${width || 800}px`;
-        canvas.style.height = `${height || 450}px`;
-        ctx.scale(dpr, dpr);
         
-        const render = () => {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (rAF.current) {
+            cancelAnimationFrame(rAF.current);
+        }
+        
+        rAF.current = requestAnimationFrame(() => {
+            const ctx = canvas.getContext('2d');
+            const dpr = window.devicePixelRatio || 1;
+            const targetW = (width || 800) * dpr;
+            const targetH = (height || 450) * dpr;
+            
+            if (canvas.width !== targetW || canvas.height !== targetH) {
+                canvas.width = targetW;
+                canvas.height = targetH;
+                canvas.style.width = `${width || 800}px`;
+                canvas.style.height = `${height || 450}px`;
+                ctx.scale(dpr, dpr);
+            } else {
+                // If we didn't resize, we must clear explicitly. (Resize clears automatically)
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                // Also need to ensure scale is correct in case someone messed with it, 
+                // but since we only set it on resize, we should be fine, or we can just resetTransform:
+                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            }
+            
             for (const s of strokes) {
                 drawFreehand(ctx, s.points, s.color, s.type, s.lineWidth || 4, s.isDashed);
             }
             if (drawing) {
                 drawFreehand(ctx, currentStroke.current, color, tool, lineWidth, isDashed);
             }
-        };
-        requestAnimationFrame(render);
-    }, [strokes, width, height, drawing, color, tool, lineWidth]);
+        });
+    }, [strokes, width, height, drawing, color, tool, lineWidth, isDashed]);
 
     useEffect(() => {
         redraw();

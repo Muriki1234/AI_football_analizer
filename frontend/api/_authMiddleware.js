@@ -100,19 +100,6 @@ export async function requireSessionOwner(req, res, sessionId, userJwt) {
         return null;
     }
 
-    // 用 user 的 JWT 做查询 → 走 RLS。这样如果有人传了别人的 session_id，
-    // RLS 会让查询返回 0 行，single() 报错。
-    try {
-        const { data, error } = await supabase
-            .from('sessions')
-            .select('id, user_id, video_url, status')
-            .eq('id', sessionId)
-            .maybeSingle()
-            .setHeader?.('Authorization', `Bearer ${userJwt}`);
-        // setHeader 不是所有 supabase-js 版本都支持；下面用一种更稳的方式重做
-        void data; void error;
-    } catch { /* ignore */ }
-
     try {
         // 创建一个带用户 JWT 的临时 client，这样 RLS 用 auth.uid() = user.id 评估
         const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {

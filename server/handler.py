@@ -50,6 +50,7 @@ from .config import settings
 from .models.weights import ensure_weights
 from .pipeline import tasks as pipeline_tasks
 from .storage.db import SessionManager
+from .routes.analysis import _run_auto_full_replay
 
 log = logging.getLogger(__name__)
 
@@ -340,11 +341,10 @@ def _download_video_once(url: str, dest: Path) -> None:
     _stream_download(url, dest)
 
 
-_MAX_ANALYSIS_HEIGHT = 720  # downscale anything above this to 720p to accelerate YOLO/SAMURAI
-
+_MAX_ANALYSIS_HEIGHT = 1080  # downscale anything above 1080p (e.g. 4K) to accelerate YOLO/SAMURAI
 
 def _maybe_normalize_video(video_path: Path) -> bool:
-    """If the video is taller than 1080p or >30fps, re-encode in-place.
+    """If the video is taller than 1080p, >30fps, or excessively large, re-encode in-place.
 
     YOLO internally resizes to 640px, SAMURAI uses RESIZE_FACTOR=0.5.
     >1080p or >30fps is wasted data that just eats RAM and slows down parallel processing.
@@ -373,11 +373,20 @@ def _maybe_normalize_video(video_path: Path) -> bool:
         print(f"[NORMALIZE] ⚠️  ffprobe failed: {exc} — skipping normalization check", flush=True)
         return True  # can't determine, assume ok
 
+    file_size_mb = video_path.stat().st_size / (1024 * 1024)
+
     needs_downscale = h > _MAX_ANALYSIS_HEIGHT
     needs_decimate = fps > 31.0  # Allow some margin for 30.03, 30.0, etc.
 
+    # User request: "小于1gb就不用搞了"
+    # If the file is < 1024 MB and is at most 1080p, we respect the user's pre-compression
+    # and skip normalization entirely. (We still downscale 4K even if it's <1GB to avoid OOM).
+    if file_size_mb < 1024.0 and h <= 1080:
+        needs_downscale = False
+        needs_decimate = False
+
     if not needs_downscale and not needs_decimate:
-        print(f"[NORMALIZE] ✅ Video is {w}x{h} @ {fps:.1f}fps, no normalization needed", flush=True)
+        print(f"[NORMALIZE] ✅ Video is {w}x{h} @ {fps:.1f}fps ({file_size_mb:.1f} MB), no normalization needed", flush=True)
         return True
 
     print(f"[NORMALIZE] 🔄 Video is {w}x{h} @ {fps:.1f}fps, normalizing to "
@@ -731,84 +740,43 @@ def _action_track(session_id: str, s: dict, payload: dict, sm: SessionManager) -
     s_merged = {**s, "start_frame": segments[0]["start_frame"]}
     samurai_cache_path = str(sm.session_output_dir(session_id) / "samurai_tracking.pkl")
     sm.update_status(session_id, "tracking", progress=1,
-                     stage="samurai_multi_pending",
+                     stage="samurai_multi_start",
                      samurai_cache_path=samurai_cache_path,
-                     # Pin the periods on the session so downstream code
-                     # (analysis, render) can read them without re-parsing
-                     # the payload.
                      match_periods_frames=[list(p) for p in match_periods])
 
     s_merged = sm.get_session(session_id) or s_merged
 
     print(f"[TRACK] launching SAMURAI ({len(segments)} segment(s) across "
-          f"{len(match_periods)} period(s)) || merged analysis in parallel")
+          f"{len(match_periods)} period(s)) SEQUENTIALLY before analysis")
 
-    # Event-based handoff between SAMURAI thread and analysis thread.
-    # Replaces the old filesystem busy-poll (sleep 1s in a loop): zero CPU
-    # while waiting, instant wake when SAMURAI finishes, and no RunPod
-    # seconds wasted spinning.
-    samurai_done = threading.Event()
-    samurai_kill = threading.Event()
-    s_merged["_samurai_kill_event"] = samurai_kill
-    samurai_err: dict = {}
-
-    def _samurai_worker():
-        try:
-            pipeline_tasks.run_samurai_tracking_multi(
-                session_id, s_merged, segments, sm
-            )
-        except Exception as e:
-            samurai_err["exc"] = e
-            log.exception("SAMURAI multi-segment failed")
-        finally:
-            samurai_done.set()
-
-    samurai_thread = threading.Thread(target=_samurai_worker, daemon=True)
-    samurai_thread.start()
-
-    # Run analysis on this thread, concurrently with SAMURAI subprocesses.
-    # run_global_analysis blocks on `samurai_done` (passed via attribute on
-    # session dict) right before the summary step.
-    s_merged["_samurai_done_event"] = samurai_done
+    # 1. Run SAMURAI
     try:
-        pipeline_tasks.run_global_analysis(session_id, s_merged, sm)
-    finally:
-        # Scale the thread.join() cap with video length too — 900s (15 min)
-        # was fine for 30-min clips but broke 1.5h+ matches. Use 2× video
-        # duration with a 15-min floor, computed from the same total_frames
-        # we probed earlier.
-        join_timeout = max(900.0, 2.0 * (total_frames_hint / 25.0))
-        samurai_thread.join(timeout=join_timeout)
-
-    # Daemon thread 超时后仍可能 is_alive=True：上一版直接 return ok，等于
-    # 静默丢任务，DB 里 status=analysis_done 但 SAMURAI 还在背后跑 / 没结果。
-    # 现在显式检查、写入失败状态、return error。
-    #
-    # ⚠️ P2.4 已知缺陷（暂未修）：abandon 的 daemon thread 里 SAMURAI 是用
-    # ProcessPoolExecutor 起的子进程跑的 —— Python interpreter 退出时这些
-    # 子进程不一定能被回收，可能继续在 GPU 上跑直到 RunPod 杀掉整个容器。
-    # 真正的修法是让 run_samurai_tracking_multi 周期性检查
-    # session["_samurai_kill_event"] 并主动 shutdown executor，跨层改动较大，
-    # 单次 audit 不展开。下一轮 reliability pass 处理。短期靠 RunPod 的
-    # job idle timeout 兜底（worker 退出时 SIGKILL 全部子进程）。
-    if samurai_thread.is_alive():
-        samurai_kill.set()
-        err = f"SAMURAI exceeded {join_timeout/60:.1f} min — abandoning thread"
-        log.error(err)
-        log.error(
-            "[samurai-leak] daemon thread still alive — subprocess workers may "
-            "continue eating GPU until container shutdown. See P2.4 comment."
+        pipeline_tasks.run_samurai_tracking_multi(
+            session_id, s_merged, segments, sm
         )
+    except Exception as e:
+        log.exception("SAMURAI multi-segment failed")
+        err = f"SAMURAI failed: {e}"
         try:
             sm.update_status(session_id, "tracking_failed", error=err)
         except Exception:
             pass
         return {"error": err}
 
-    if samurai_err:
-        return {"error": f"SAMURAI failed: {samurai_err['exc']}"}
+    # 2. Run Global Analysis (YOLO)
+    print(f"[TRACK] SAMURAI finished successfully. Launching Global Analysis (YOLO)...")
+    try:
+        pipeline_tasks.run_global_analysis(session_id, s_merged, sm)
+    except Exception as e:
+        log.exception("Global analysis failed")
+        err = f"Analysis failed: {e}"
+        try:
+            sm.update_status(session_id, "tracking_failed", error=err)
+        except Exception:
+            pass
+        return {"error": err}
 
-    _run_auto_full_replay(session_id, sm)
+    # _run_auto_full_replay(session_id, sm)
     return {"ok": True, "session": sm.get_session(session_id)}
 
 
@@ -921,6 +889,28 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
         if _needs_video:
             _ensure_local_video(session_id, video_url or s.get("video_url", ""), sm)
             s = sm.get_session(session_id)
+
+        # Protect against duplicate runs (e.g. from UI refresh)
+        if action in ["track", "analyze"]:
+            status = s.get("status")
+            if status in ["processing", "tracking", "analyzing"]:
+                import datetime
+                updated_at_str = s.get("updated_at") or s.get("created_at")
+                is_zombie = False
+                if updated_at_str:
+                    try:
+                        updated_at = datetime.datetime.fromisoformat(updated_at_str.replace("Z", "+00:00"))
+                        now = datetime.datetime.now(datetime.timezone.utc)
+                        mins_since = (now - updated_at).total_seconds() / 60.0
+                        if mins_since > 20:
+                            is_zombie = True
+                            log.warning(f"Session {session_id} is '{status}' but stale for {mins_since:.1f}m. Allowing restart.")
+                    except Exception:
+                        pass
+                
+                if not is_zombie:
+                    log.warning(f"Session {session_id} is already in '{status}'. Preventing duplicate run.")
+                    return {"error": f"Session is already {status}. Cannot start a new run."}
 
         return fn(session_id, s, payload, sm)
     except Exception as exc:

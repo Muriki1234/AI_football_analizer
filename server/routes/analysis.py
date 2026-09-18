@@ -203,7 +203,7 @@ async def start_analysis(
 
     def _analyze_then_replay() -> None:
         pipeline_tasks.run_global_analysis(session_id, s, sm)
-        _run_auto_full_replay(session_id, sm)
+        # _run_auto_full_replay(session_id, sm)
 
     pool.submit_gpu(_analyze_then_replay, on_error=_on_error)
     return QueuedResponse(task_id=session_id, status="analyzing")
@@ -281,7 +281,7 @@ async def start_tracking(
             return
         # Phase 2: global analysis (also catches its own errors → analysis_failed).
         pipeline_tasks.run_global_analysis(session_id, s_after, sm)
-        _run_auto_full_replay(session_id, sm)
+        # _run_auto_full_replay(session_id, sm)
 
     pool.submit_gpu(_track_then_analyze, on_error=_on_error)
     return QueuedResponse(task_id=session_id, status="tracking")

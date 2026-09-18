@@ -16,12 +16,8 @@ import './Configuration.css';
 // 加了 break 后预期 4→8 结果变 1→2，反直觉。降到 5s：
 //   - 5秒以下：1 segment（SAMURAI 在 100帧内开 4 进程并行 overhead 大于收益）
 //   - 5秒以上：5 segments
-const SEGS_PER_PERIOD = 5;
+const TOTAL_SEGS = 11;
 const MIN_PERIOD_FOR_MULTI_SEG = 5;   // 秒
-function segCountForPeriod(periodSec) {
-    if (!Number.isFinite(periodSec) || periodSec < MIN_PERIOD_FOR_MULTI_SEG) return 1;
-    return SEGS_PER_PERIOD;
-}
 
 /**
  * Distribute N keyframes across a (start, end) frame range.
@@ -33,6 +29,36 @@ function keyframesIn(startFrame, endFrame, n) {
     return Array.from({ length: n }, (_, i) =>
         Math.floor(startFrame + (i / n) * span)
     );
+}
+
+function distributeSegments(periodsFr, fps) {
+    // Total duration across all periods
+    const totalSec = periodsFr.reduce((sum, pr) => sum + (pr.endFrame - pr.startFrame) / fps, 0);
+    
+    // Initial proportional distribution
+    const counts = periodsFr.map(pr => {
+        const periodSec = (pr.endFrame - pr.startFrame) / fps;
+        if (!Number.isFinite(periodSec) || periodSec < MIN_PERIOD_FOR_MULTI_SEG) return 1;
+        return Math.max(1, Math.round((periodSec / totalSec) * TOTAL_SEGS));
+    });
+
+    // Adjust sum to exactly TOTAL_SEGS
+    while (counts.reduce((a, b) => a + b, 0) !== TOTAL_SEGS) {
+        const sum = counts.reduce((a, b) => a + b, 0);
+        if (sum < TOTAL_SEGS) {
+            // Find longest period and add 1
+            const maxIdx = periodsFr.reduce((maxI, pr, i, arr) => 
+                (pr.endFrame - pr.startFrame) > (arr[maxI].endFrame - arr[maxI].startFrame) ? i : maxI, 0);
+            counts[maxIdx]++;
+        } else {
+            // Find longest period > 1 and subtract 1
+            const maxIdx = counts.reduce((maxI, c, i, arr) => 
+                (c > 1 && (maxI === -1 || counts[i] > counts[maxI])) ? i : maxI, -1);
+            if (maxIdx !== -1) counts[maxIdx]--;
+            else break; // safety breakout
+        }
+    }
+    return counts;
 }
 
 export default function MultiSegmentConfig() {
@@ -59,6 +85,7 @@ export default function MultiSegmentConfig() {
     const [activeIdx, setActiveIdx] = useState(0);
     const [starting, setStarting] = useState(false);
     const detectedSegs = useRef(new Set());
+    const nudgeTimeout = useRef(null);
 
     // 1. Compute keyframe indices.
     //    Sources for the match periods, in priority order:
@@ -108,14 +135,13 @@ export default function MultiSegmentConfig() {
                 }));
                 setPeriodsFrames(periodsFr);
 
-                // Build the segment list — each period contributes up to
-                // SEGS_PER_PERIOD keyframes, tagged with their periodIdx so
-                // the nudge buttons can clamp inside the right range.
+                // Build the segment list — each period contributes its share of the 11 segments
                 const newSegments = [];
                 const indices = [];
+                const segmentCounts = distributeSegments(periodsFr, fps);
+                
                 periodsFr.forEach((pr, periodIdx) => {
-                    const periodSec = (pr.endFrame - pr.startFrame) / fps;
-                    const n = segCountForPeriod(periodSec);
+                    const n = segmentCounts[periodIdx];
                     keyframesIn(pr.startFrame, pr.endFrame, n).forEach((f) => {
                         indices.push(f);
                         newSegments.push({
@@ -218,6 +244,8 @@ export default function MultiSegmentConfig() {
      * forward, hits Retry-detect (auto-triggered by frame change), picks again.
      */
     const nudgeFrame = (idx, delta) => {
+        if (nudgeTimeout.current) clearTimeout(nudgeTimeout.current);
+
         setSegments((prev) => prev.map((s, i) => {
             if (i !== idx) return s;
             // Clamp inside this segment's PERIOD (not the whole video).
@@ -229,7 +257,7 @@ export default function MultiSegmentConfig() {
             return {
                 ...s,
                 frame: newFrame,
-                detecting: false,
+                detecting: true, // Mark as true to instantly block the queue and show spinner
                 error: null,
                 players: [],
                 frameUrl: null,
@@ -238,6 +266,13 @@ export default function MultiSegmentConfig() {
                 selectedPlayerId: null,
             };
         }));
+
+        // Release the lock after 600ms of inactivity to trigger the actual API call
+        nudgeTimeout.current = setTimeout(() => {
+            setSegments((prev) => prev.map((s, i) => 
+                i === idx ? { ...s, detecting: false } : s
+            ));
+        }, 600);
     };
 
     const setSelectedFor = (idx, bbox, playerId) => {
@@ -432,6 +467,13 @@ export default function MultiSegmentConfig() {
                                     <button
                                         type="button"
                                         className="mseg__nudge-btn"
+                                        onClick={() => nudgeFrame(activeIdx, -150)}
+                                        disabled={!active || active.frame - 150 < (active.periodStartFrame ?? 0)}
+                                        title="−150 frames (≈5 seconds back)"
+                                    >−150</button>
+                                    <button
+                                        type="button"
+                                        className="mseg__nudge-btn"
                                         onClick={() => nudgeFrame(activeIdx, -30)}
                                         disabled={!active || active.frame - 30 < (active.periodStartFrame ?? 0)}
                                         title="−30 frames (≈1 second back)"
@@ -443,7 +485,7 @@ export default function MultiSegmentConfig() {
                                         disabled={!active || active.frame - 5 < (active.periodStartFrame ?? 0)}
                                         title="−5 frames"
                                     >−5</button>
-                                    <span className="mseg__frame-display">
+                                    <span className="mseg__frame-display" style={{ padding: '0 0.5rem' }}>
                                         Frame {active?.frame ?? 0}
                                     </span>
                                     <button
@@ -460,6 +502,13 @@ export default function MultiSegmentConfig() {
                                         disabled={!active || active.frame + 30 >= (active.periodEndFrame ?? totalFrames)}
                                         title="+30 frames (≈1 second forward)"
                                     >+30</button>
+                                    <button
+                                        type="button"
+                                        className="mseg__nudge-btn"
+                                        onClick={() => nudgeFrame(activeIdx, 150)}
+                                        disabled={!active || active.frame + 150 >= (active.periodEndFrame ?? totalFrames)}
+                                        title="+150 frames (≈5 seconds forward)"
+                                    >+150</button>
                                 </div>
                             </>
                         )}

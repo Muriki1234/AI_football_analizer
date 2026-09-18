@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  # The AI PyTorch Backend (RunPod simulation or local dev)
+  backend:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    container_name: ai_football_backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./server:/app/server
+      - ./samurai:/app/samurai
+    env_file:
+      - server/.env
+    # Requires NVIDIA Container Toolkit for local GPU passthrough
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # The React Frontend
+  frontend:
+    image: node:20-alpine
+    container_name: ai_football_frontend
+    working_dir: /app/frontend
+    volumes:
+      - ./frontend:/app/frontend
+    ports:
+      - "5173:5173"
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    environment:
+      - NODE_ENV=development

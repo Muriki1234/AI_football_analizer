@@ -126,3 +126,36 @@ def download_from_r2(remote_key: str, local_path: Path) -> bool:
     except ClientError as e:
         log.error(f"R2 download failed for {remote_key}: {e}")
         return False
+
+def delete_directory_from_r2(prefix: str) -> bool:
+    """
+    Deletes all objects under a specific prefix (e.g. session_id/).
+    """
+    client = get_r2_client()
+    if not client or not settings.R2_BUCKET_NAME:
+        return False
+        
+    try:
+        if not prefix.endswith('/'):
+            prefix += '/'
+            
+        paginator = client.get_paginator('list_objects_v2')
+        pages = paginator.paginate(Bucket=settings.R2_BUCKET_NAME, Prefix=prefix)
+        
+        objects_to_delete = []
+        for page in pages:
+            if 'Contents' in page:
+                for obj in page['Contents']:
+                    objects_to_delete.append({'Key': obj['Key']})
+                    
+        if objects_to_delete:
+            # delete_objects allows max 1000 per request, but we rarely exceed that per session
+            for i in range(0, len(objects_to_delete), 1000):
+                client.delete_objects(
+                    Bucket=settings.R2_BUCKET_NAME,
+                    Delete={'Objects': objects_to_delete[i:i+1000]}
+                )
+        return True
+    except ClientError as e:
+        log.error(f"R2 batch delete failed for prefix {prefix}: {e}")
+        return False

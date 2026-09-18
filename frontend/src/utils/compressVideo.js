@@ -30,6 +30,16 @@ const loadFFmpeg = async () => {
     }
 };
 
+export const abortCompression = () => {
+    if (ffmpegInstance) {
+        try {
+            console.log('Terminating FFmpeg instance...');
+            ffmpegInstance.terminate();
+        } catch(e) {}
+        ffmpegInstance = null; // force reload next time
+    }
+};
+
 /**
  * 压缩大于 threshold 的视频
  * @param {File} file - 原始视频文件
@@ -37,10 +47,15 @@ const loadFFmpeg = async () => {
  * @returns {Promise<File>} 压缩后的 File 对象，或原文件(如果不需压缩/压缩失败)
  */
 export const compressVideoIfNeeded = async (file, onProgress) => {
-    const SIZE_THRESHOLD = 1; // 1 byte for testing
+    const SIZE_THRESHOLD_1GB = 1024 * 1024 * 1024; // 1GB
+    const SIZE_THRESHOLD_2_5GB = 2.5 * 1024 * 1024 * 1024; // 2.5GB
+    const isAlreadyCompressed = file.name.toLowerCase().includes('_compressed');
     
-    if (file.size <= SIZE_THRESHOLD) {
-        console.log('File size under 500MB, skipping local compression.');
+    const needsCompression = file.size > SIZE_THRESHOLD_2_5GB || 
+                            (file.size > SIZE_THRESHOLD_1GB && !isAlreadyCompressed);
+    
+    if (!needsCompression) {
+        console.log('File does not need compression, skipping local compression.');
         return file;
     }
     

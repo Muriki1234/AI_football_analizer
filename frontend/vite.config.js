@@ -3,6 +3,12 @@ import react from '@vitejs/plugin-react'
 
 // https://vitejs.dev/config/
 export default defineConfig({
+  test: {
+    environment: 'jsdom',
+    setupFiles: './src/setupTests.js',
+    globals: true,
+    isolate: false,
+  },
   plugins: [react()],
   // 生产 build 时 strip 掉 console.* 和 debugger —— 之前 console.warn/error 全
   // ship 到客户端，给逆向工程开门，也增加 bundle 体积。保留 console.error 反而

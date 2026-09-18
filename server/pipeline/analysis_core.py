@@ -56,7 +56,7 @@ except ImportError:
 
 # ── 配置 ────────────────────────────────────────────────────────────────────
 YOLO_DETECTION_STRIDE = 3    # 每3帧检测一次（原2）
-YOLO_BATCH_SIZE       = 60   # 单批处理帧数（60 = 更好GPU利用率）
+YOLO_BATCH_SIZE       = 240  # 单批处理帧数（240 = 彻底填满剩余的24GB VRAM以换取极速吞吐）
 KEYPOINT_STRIDE       = 20   # 每20帧检测一次关键点
 MINIMAP_SMOOTH_WINDOW = 25
 SPEED_SMOOTH_WINDOW   = 7
@@ -180,7 +180,7 @@ def stream_video_chunks(video_path: str, chunk_size: int = 500):
 
 
 def stream_video_chunks_range(video_path: str, start_frame: int, end_frame: int,
-                               chunk_size: int = 500):
+                               chunk_size: int = 150):
     """Like stream_video_chunks but only reads [start_frame, end_frame)."""
     cap = cv2.VideoCapture(video_path, cv2.CAP_FFMPEG)
     if start_frame > 0:
@@ -608,7 +608,7 @@ class Tracker:
             elapsed = _time.perf_counter() - t_start
             eta = (elapsed / ratio) * (1.0 - ratio) if ratio > 0 else 0.0
             print(f"[YOLO] {frames_done}/{total_frames} frames "
-                  f"({ratio*100:.0f}%)  elapsed {elapsed:.0f}s  ETA {eta:.0f}s")
+                  f"({ratio*100:.0f}%)  elapsed {elapsed:.0f}s  ETA {eta:.0f}s", flush=True)
             if progress_callback:
                 progress_callback(ratio, frames_done, total_frames, eta)
 
@@ -932,7 +932,7 @@ def run_merged_streaming_pipeline(video_path: str, total_frames: int,
                                    tracker: 'Tracker',
                                    kpt_detector: 'KeypointDetector',
                                    cam_estimator: 'CameraMovementEstimator',
-                                   chunk_size: int = 500,
+                                   chunk_size: int = 1500,
                                    progress_callback=None,
                                    sample_frame_indices=None,
                                    sampled_frames_out: dict = None) -> tuple:
@@ -1343,10 +1343,14 @@ class ViewTransformer:
                 df["x"]  = x_smooth
                 df["y"]  = y_smooth
 
-                for i, row in df.iterrows():
-                    if tid in otracks[i] and not np.isnan(row["x"]):
-                        otracks[i][tid]["position_transformed"] = [row["x"],  row["y"]]
-                        otracks[i][tid]["position_minimap"]     = [row["mx"], row["my"]]
+                arr_x = df["x"].to_numpy()
+                arr_y = df["y"].to_numpy()
+                arr_mx = df["mx"].to_numpy()
+                arr_my = df["my"].to_numpy()
+                for i in range(len(df)):
+                    if tid in otracks[i] and not np.isnan(arr_x[i]):
+                        otracks[i][tid]["position_transformed"] = [float(arr_x[i]),  float(arr_y[i])]
+                        otracks[i][tid]["position_minimap"]     = [float(arr_mx[i]), float(arr_my[i])]
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1914,7 +1918,7 @@ def render_minimap_frame(frame_idx: int, tracks: dict,
 def run_segment_detection(video_path: str, start_frame: int, end_frame: int,
                            yolo_model_path: str, kpt_model_path: str,
                            batch_size: int = 15,
-                           chunk_size: int = 500) -> tuple:
+                           chunk_size: int = 150) -> tuple:
     """
     Run YOLO detection + keypoint detection + optical flow on one video segment
     [start_frame, end_frame). Called from _yolo_parallel_worker subprocesses.

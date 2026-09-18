@@ -28,6 +28,7 @@ const CanvasOverlay = ({ dataUrl, videoRef, visible }) => {
         const fps = overlayData.fps || 25.0;
 
         let animationFrameId;
+        let lastRenderedFrameIdx = -1;
 
         const renderLoop = () => {
             if (video.paused || video.ended) {
@@ -55,6 +56,15 @@ const CanvasOverlay = ({ dataUrl, videoRef, visible }) => {
                 trackH = 720;
             }
 
+            // Calculate current frame index based on time and fps
+            const currentFrameIdx = Math.floor(currentTime * fps);
+            
+            // Skip redrawing if the frame and resolution haven't changed
+            if (currentFrameIdx === lastRenderedFrameIdx && canvas.width === trackW && canvas.height === trackH) {
+                return;
+            }
+            lastRenderedFrameIdx = currentFrameIdx;
+
             // Match canvas internal resolution to tracking resolution (or video natural resolution)
             if (canvas.width !== trackW || canvas.height !== trackH) {
                 canvas.width = trackW;
@@ -62,9 +72,6 @@ const CanvasOverlay = ({ dataUrl, videoRef, visible }) => {
             }
 
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-            // Calculate current frame index based on time and fps
-            const currentFrameIdx = Math.floor(currentTime * fps);
             
             if (currentFrameIdx >= 0 && currentFrameIdx < overlayData.frames.length) {
                 const frameData = overlayData.frames[currentFrameIdx];

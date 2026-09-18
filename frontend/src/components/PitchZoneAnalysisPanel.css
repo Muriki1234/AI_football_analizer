@@ -1,0 +1,250 @@
+.pitch-zone-panel {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+  position: relative;
+  overflow: hidden;
+}
+
+.pitch-zone-panel__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: var(--space-md);
+}
+
+.pitch-zone-panel__title-group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.pitch-zone-panel__icon {
+  font-size: 1.25rem;
+  color: var(--color-accent);
+}
+
+.pitch-zone-panel__title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.pitch-zone-panel__subtitle {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+.pitch-zone-panel__badge {
+  font-size: 0.75rem;
+  padding: 3px 10px;
+  background: var(--color-accent-glow);
+  color: var(--color-accent);
+  border-radius: var(--radius-full);
+  font-weight: 600;
+  border: 1px solid var(--color-accent-dim);
+  letter-spacing: 0.03em;
+}
+
+/* 18-Zone Mini Pitch Grid */
+.pitch-grid-wrapper {
+  background: rgba(10, 14, 23, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.pitch-grid-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.pitch-grid-header__label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.pitch-grid-legend {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
+.pitch-grid-legend__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.pitch-grid-board {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 3px;
+  background: #0f1e17;
+  padding: 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  position: relative;
+}
+
+.pitch-grid-cell {
+  aspect-ratio: 1.4;
+  background: rgba(26, 71, 42, 0.35);
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  border-radius: 2px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.pitch-grid-cell:hover {
+  border-color: var(--color-accent);
+  transform: scale(1.03);
+  z-index: 2;
+}
+
+.pitch-grid-cell--halfspace {
+  background: rgba(0, 180, 216, 0.12);
+  border-color: rgba(0, 180, 216, 0.3);
+}
+
+.pitch-grid-cell--zone14 {
+  background: rgba(245, 158, 11, 0.2);
+  border: 1px solid rgba(245, 158, 11, 0.6);
+  box-shadow: inset 0 0 10px rgba(245, 158, 11, 0.2);
+}
+
+.pitch-grid-cell__name {
+  font-size: 0.65rem;
+  color: var(--color-text-muted);
+  font-weight: 500;
+  pointer-events: none;
+}
+
+.pitch-grid-cell__pct {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  pointer-events: none;
+}
+
+/* Key Metrics Cards */
+.pitch-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: var(--space-sm);
+}
+
+.pitch-metric-card {
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pitch-metric-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.pitch-metric-card__label {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.pitch-metric-card__val {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.pitch-metric-card__val--accent {
+  color: var(--color-accent);
+}
+
+.pitch-metric-card__val--warning {
+  color: var(--color-warning);
+}
+
+.pitch-metric-card__sub {
+  font-size: 0.7rem;
+  color: var(--color-text-secondary);
+}
+
+/* Analyst Report Section */
+.pitch-analyst-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  background: rgba(0, 0, 0, 0.2);
+  border-left: 3px solid var(--color-accent);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  padding: var(--space-md);
+}
+
+.pitch-analyst-section__title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-accent);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.pitch-analyst-section__text {
+  font-size: 0.88rem;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.pitch-timestamp-btn {
+  background: rgba(0, 229, 155, 0.12);
+  color: var(--color-accent);
+  border: 1px solid rgba(0, 229, 155, 0.3);
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  margin: 0 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  transition: all 0.15s ease;
+  vertical-align: baseline;
+}
+
+.pitch-timestamp-btn:hover {
+  background: var(--color-accent);
+  color: #0a0e17;
+  border-color: var(--color-accent);
+  transform: translateY(-1px);
+}

@@ -1,0 +1,22 @@
+{
+  "resolved_bugs": [
+    {
+      "id": "BUG_TELESTRATION_INFINITE_RERENDER_OOM",
+      "bug_id": "BUG_TELESTRATION_INFINITE_RERENDER_OOM",
+      "title": "TelestrationCanvas 工具栏点击触发无限重渲染与 4.1GB OOM 堆内存崩溃",
+      "description": "TelestrationCanvas 工具栏点击触发无限重渲染与 4.1GB OOM 堆内存崩溃",
+      "root_cause": "initialStrokes = [] 默认形参在每次状态更新重渲染时产生新对象引用，触发 useEffect(..., [initialStrokes]) 再次 setStrokes，形成无限死循环，吃满 4.1GB V8 堆内存引发 OOM 崩溃",
+      "files_changed": [
+        "frontend/src/components/TelestrationCanvas.jsx",
+        "frontend/vite.config.js",
+        "frontend/package.json"
+      ],
+      "tests_run": "npx vitest run src/components/__tests__/TelestrationCanvas.test.jsx",
+      "lines_changed": 3,
+      "tests_passed": true,
+      "rollback": false,
+      "session_id": "session_night_20260917",
+      "evidence": "Vitest 单元测试 `changes tool on toolbar button click` 修复前因 4.1GB OOM 崩溃（356s 超时），修复后全套 16 个前端测试 851ms 全绿通过，生产 build 0 错误构建成功"
+    }
+  ]
+}

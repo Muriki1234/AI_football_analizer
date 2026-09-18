@@ -77,6 +77,12 @@ export default async function handler(req, res) {
       body: JSON.stringify({ input: serverInput }),
     });
     const data = await response.json();
+    
+    // IF this was a CPU task, prefix the ID so status.js knows which endpoint to poll
+    if (isCpuTask && cpuUrl && data.id) {
+        data.id = `cpu:${data.id}`;
+    }
+    
     return res.status(response.status).json(data);
   } catch (error) {
     console.error('RunPod proxy error:', error);

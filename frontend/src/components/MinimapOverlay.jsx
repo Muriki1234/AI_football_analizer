@@ -138,26 +138,37 @@ export default function MinimapOverlay({ dataUrl, videoRef, visible, onExpand })
             PAD + (y / pitchWid) * drawH,
         ];
 
+        let pitchCache = null;
+
         const drawPitch = () => {
-            ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
-            ctx.fillRect(0, 0, W, H);
-            ctx.fillStyle = '#1a472a';
-            ctx.fillRect(PAD, PAD, drawW, drawH);
-            ctx.strokeStyle = 'rgba(255,255,255,0.55)';
-            ctx.lineWidth = 1.2;
-            ctx.strokeRect(PAD, PAD, drawW, drawH);
-            ctx.beginPath();
-            ctx.moveTo(PAD + drawW / 2, PAD);
-            ctx.lineTo(PAD + drawW / 2, PAD + drawH);
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.arc(PAD + drawW / 2, PAD + drawH / 2, drawH * 0.13, 0, Math.PI * 2);
-            ctx.stroke();
-            const pbW = drawW * (2015 / pitchLen);
-            const pbH = drawH * (4100 / pitchWid);
-            const pbY = PAD + (drawH - pbH) / 2;
-            ctx.strokeRect(PAD, pbY, pbW, pbH);
-            ctx.strokeRect(PAD + drawW - pbW, pbY, pbW, pbH);
+            if (!pitchCache) {
+                pitchCache = document.createElement('canvas');
+                pitchCache.width = W * dpr;
+                pitchCache.height = H * dpr;
+                const pctx = pitchCache.getContext('2d');
+                pctx.scale(dpr, dpr);
+                pctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+                pctx.fillRect(0, 0, W, H);
+                pctx.fillStyle = '#1a472a';
+                pctx.fillRect(PAD, PAD, drawW, drawH);
+                pctx.strokeStyle = 'rgba(255,255,255,0.55)';
+                pctx.lineWidth = 1.2;
+                pctx.strokeRect(PAD, PAD, drawW, drawH);
+                pctx.beginPath();
+                pctx.moveTo(PAD + drawW / 2, PAD);
+                pctx.lineTo(PAD + drawW / 2, PAD + drawH);
+                pctx.stroke();
+                pctx.beginPath();
+                pctx.arc(PAD + drawW / 2, PAD + drawH / 2, drawH * 0.13, 0, Math.PI * 2);
+                pctx.stroke();
+                const pbW = drawW * (2015 / pitchLen);
+                const pbH = drawH * (4100 / pitchWid);
+                const pbY = PAD + (drawH - pbH) / 2;
+                pctx.strokeRect(PAD, pbY, pbW, pbH);
+                pctx.strokeRect(PAD + drawW - pbW, pbY, pbW, pbH);
+            }
+            // drawImage takes coordinates in the destination canvas's pixel space
+            ctx.drawImage(pitchCache, 0, 0, W, H);
         };
 
         // JSON 后端按 5Hz 降采样（每 200ms 一帧），如果按"最近样本"取，

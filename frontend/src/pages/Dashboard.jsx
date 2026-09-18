@@ -191,21 +191,38 @@ export default function Dashboard() {
         setError(null);
         setMinimapOn(false);
         setAiGenerating(false);
+        loadedDrawings.current = false;
         analysisKicked.current = false;
         summaryFetched.current = false;
     }, [sessionId]);
 
-    // Kick off pipeline on mount
+    // Kick off pipeline on mount (only if not already started)
     useEffect(() => {
         if (!sessionId) return;
         if (analysisKicked.current) return;
         analysisKicked.current = true;
         (async () => {
             try {
+                // Fetch the session FIRST to check its status. 
+                // If the user refreshed the page, the session might already be tracking.
+                let currentSession = session;
+                if (!currentSession) {
+                    currentSession = await getSession(sessionId).catch(() => null);
+                }
+                const status = currentSession?.status;
+                if (['queued', 'processing', 'tracking', 'analyzing', 'analysis_done'].includes(status)) {
+                    // Check if it's a zombie (dead worker)
+                    const lastUpdated = new Date(currentSession?.updated_at || currentSession?.created_at).getTime();
+                    const minsSinceUpdate = (Date.now() - lastUpdated) / 60000;
+                    if (minsSinceUpdate <= 20) {
+                        console.log(`Session is already in state: ${status} (updated ${Math.round(minsSinceUpdate)}m ago). Skipping auto-start.`);
+                        return;
+                    }
+                    console.log(`Session is ${status} but stale for >20 mins. Assuming dead worker and allowing restart.`);
+                }
+
                 if (multiSegments && multiSegments.length > 0) {
-                    // Multi-segment path — pass period_idx and the match
-                    // periods themselves so the backend can run period-aware
-                    // SAMURAI + skip non-match frames in analysis/render.
+                    // Multi-segment path
                     const segments = multiSegments.map((seg) => ({
                         frame: seg.frame,
                         bbox: seg.bbox,

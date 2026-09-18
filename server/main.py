@@ -121,6 +121,7 @@ async def lifespan(app: FastAPI):
 
 def _cleanup_expired_sessions(sm: SessionManager) -> None:
     import shutil
+    from .storage.r2 import delete_directory_from_r2
 
     # Watchdog for zombie tasks
     try:
@@ -138,6 +139,7 @@ def _cleanup_expired_sessions(sm: SessionManager) -> None:
             up = settings.upload_root / sid
             if up.exists():
                 shutil.rmtree(up, ignore_errors=True)
+            delete_directory_from_r2(sid)
             sm.delete_session(sid)
         except Exception as exc:
             log.warning("cleanup: failed to purge %s: %s", sid, exc)
