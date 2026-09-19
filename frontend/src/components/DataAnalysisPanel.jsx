@@ -4,14 +4,31 @@ import {
 } from 'recharts';
 
 const StatRow = ({ icon, label, value, sub }) => (
-    <div className="stat-card">
-        <div className="stat-card__icon">{icon}</div>
-        <div className="stat-card__info">
-            <span className="stat-card__label">{label}</span>
-            <span className="stat-card__value">
+    <div className="stat-row">
+        <div className="stat-row__icon">{icon}</div>
+        <div className="stat-row__main">
+            <div className="stat-row__label">{label}</div>
+            <div className="stat-row__value">
                 {value}
-                {sub && <span className="stat-card__sub">{sub}</span>}
-            </span>
+                {sub && (
+                    <span
+                        className="stat-row__sub"
+                        style={{
+                            marginLeft: '6px',
+                            fontSize: '0.72rem',
+                            color: '#f59e0b',
+                            background: 'rgba(245, 158, 11, 0.15)',
+                            padding: '2px 5px',
+                            borderRadius: '4px',
+                            fontWeight: 600,
+                            verticalAlign: 'middle',
+                            display: 'inline-block'
+                        }}
+                    >
+                        ⚠️ {sub}
+                    </span>
+                )}
+            </div>
         </div>
     </div>
 );
