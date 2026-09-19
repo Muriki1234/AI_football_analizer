@@ -908,8 +908,9 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
                     except Exception:
                         pass
                 
-                if not is_zombie:
-                    log.warning(f"Session {session_id} is already in '{status}'. Preventing duplicate run.")
+                progress = s.get("progress") or 0
+                if not is_zombie and progress > 1:
+                    log.warning(f"Session {session_id} is already in '{status}' (progress={progress}%). Preventing duplicate run.")
                     return {"error": f"Session is already {status}. Cannot start a new run."}
 
         return fn(session_id, s, payload, sm)

@@ -279,8 +279,8 @@ export const startTracking = async (sessionId, bbox, frame = 0, imgDims = null) 
     try { data = await res.json(); } catch (e) { if (!res.ok) throw new Error(`HTTP Error ${res.status}`); else throw e; }
     if (!res.ok) throw new Error(data.error || 'Failed to start tracking');
 
-    // Update session status
-    await supabase.from('sessions').update({ status: 'tracking' }).eq('id', sessionId);
+    // Update session status to queued so backend worker won't mistake it for an already-running duplicate
+    await supabase.from('sessions').update({ status: 'queued' }).eq('id', sessionId);
 
     return data;
 };
@@ -372,8 +372,8 @@ export const startTrackingMulti = async (sessionId, segments, matchPeriodsFrames
     let data;
     try { data = await res.json(); } catch (e) { if (!res.ok) throw new Error(`HTTP Error ${res.status}`); else throw e; }
     if (!res.ok) throw new Error(data.error || 'Failed to start multi-segment tracking');
-
-    await supabase.from('sessions').update({ status: 'tracking' }).eq('id', sessionId);
+    // Update session status to queued so backend worker won't mistake it for an already-running duplicate
+    await supabase.from('sessions').update({ status: 'queued' }).eq('id', sessionId);
     return data;
 };
 
