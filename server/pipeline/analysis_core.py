@@ -953,7 +953,7 @@ def run_merged_streaming_pipeline(video_path: str, total_frames: int,
                                    tracker: 'Tracker',
                                    kpt_detector: 'KeypointDetector',
                                    cam_estimator: 'CameraMovementEstimator' = None,
-                                   chunk_size: int = 1500,
+                                   chunk_size: int = 500,
                                    progress_callback=None,
                                    sample_frame_indices=None,
                                    sampled_frames_out: dict = None) -> tuple:
@@ -1076,11 +1076,37 @@ def run_merged_streaming_pipeline(video_path: str, total_frames: int,
 
     t_start = _time.perf_counter()
 
+    # Detection accelerator setup (Prefetch + Adaptive Temporal Stride)
+    enable_adaptive_stride = (os.environ.get("ENABLE_ADAPTIVE_STRIDE", "1").strip().lower() not in ("0", "false", "no"))
+    accelerator = None
+    last_thumb = None
+    if enable_adaptive_stride:
+        try:
+            from .detection_accelerator import LongVideoDetectionAccelerator
+            accelerator = LongVideoDetectionAccelerator(
+                min_grass_ratio=0.20,
+                base_stride=YOLO_DETECTION_STRIDE,
+                min_stride=max(1, YOLO_DETECTION_STRIDE - 1),
+                max_stride=YOLO_DETECTION_STRIDE + 2,
+            )
+            print(f"[MERGED] LongVideoDetectionAccelerator initialized (base={YOLO_DETECTION_STRIDE}, "
+                  f"min={max(1, YOLO_DETECTION_STRIDE - 1)}, max={YOLO_DETECTION_STRIDE + 2}, min_grass=0.20)")
+        except Exception as _acc_err:
+            print(f"[MERGED] Could not initialize LongVideoDetectionAccelerator ({_acc_err}), using static stride")
+            accelerator = None
+
+    try:
+        from .detection_accelerator import stream_video_chunks_safe
+        video_stream_func = stream_video_chunks_safe
+    except Exception as _stream_imp_err:
+        print(f"[MERGED] Using standard stream_video_chunks ({_stream_imp_err})")
+        video_stream_func = stream_video_chunks
+
     # 2-worker pool: one runs YOLO (CUDA stream A), one runs KPT (stream B).
     # Optical flow we run inline on the orchestrator thread — it's CPU-only
     # and short enough that it overlaps naturally with the GPU work above.
     with ThreadPoolExecutor(max_workers=2) as pool:
-        for start_idx, chunk in stream_video_chunks(video_path, chunk_size):
+        for start_idx, chunk in video_stream_func(video_path, chunk_size):
             # Snapshot any sample frames the team-color stage asked for
             if sampled_frames_out is not None and sample_set:
                 end_idx = start_idx + len(chunk)
@@ -1088,9 +1114,26 @@ def run_merged_streaming_pipeline(video_path: str, total_frames: int,
                     if start_idx <= fidx < end_idx and fidx not in sampled_frames_out:
                         sampled_frames_out[fidx] = chunk[fidx - start_idx].copy()
 
-            # YOLO frame indices (stride 3) — submit first, GPU starts working
-            # while we compute optical flow on CPU.
-            det_local = list(range(0, len(chunk), YOLO_DETECTION_STRIDE))
+            # Dynamic / Adaptive YOLO frame selection
+            det_local = None
+            acc_stats = None
+            if accelerator is not None:
+                try:
+                    det_local, last_thumb, acc_stats = accelerator.plan_chunk(
+                        chunk,
+                        start_idx=start_idx,
+                        prev_thumb=last_thumb,
+                        max_consecutive_skip=25,
+                    )
+                except Exception as _plan_err:
+                    print(f"[MERGED] accelerator.plan_chunk error ({_plan_err}), fallback to static stride")
+                    det_local = None
+
+            if det_local is None or len(det_local) == 0:
+                det_local = list(range(0, len(chunk), YOLO_DETECTION_STRIDE))
+            elif acc_stats:
+                print(f"[ACCEL] frames {start_idx}..{start_idx + len(chunk)}: planned {len(det_local)}/{len(chunk)} detections ({acc_stats['reduction_pct']}% skipped)")
+
             det_frames = [chunk[j] for j in det_local]
             yolo_batches = [det_frames[i:i+YOLO_BATCH_SIZE]
                             for i in range(0, len(det_frames), YOLO_BATCH_SIZE)]
