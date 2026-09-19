@@ -345,7 +345,12 @@ def _run_samurai_segment(seg_idx: int, session_id: str, output_dir: Path,
     new_h = int(orig_h * resize_factor)
 
     # Per-segment frame extraction dir + bbox seed file
-    frames_dir = output_dir / f"samurai_frames_{seg_idx}"
+    # Use /dev/shm (Linux RAM disk) if available to avoid container overlayfs / network disk I/O
+    shm_base = Path("/dev/shm")
+    if shm_base.exists() and os.access(shm_base, os.W_OK):
+        frames_dir = shm_base / f"samurai_{session_id}_{seg_idx}"
+    else:
+        frames_dir = output_dir / f"samurai_frames_{seg_idx}"
     frames_dir.mkdir(parents=True, exist_ok=True)
     init_txt = output_dir / f"input_bbox_{seg_idx}.txt"
     output_video = output_dir / f"samurai_temp_{seg_idx}.mp4"
@@ -405,40 +410,37 @@ def _run_samurai_segment(seg_idx: int, session_id: str, output_dir: Path,
             raise RuntimeError(
                 f"[seg {seg_idx}] ffmpeg extract failed: {err[-1000:]}"
             )
-    except Exception as e:
-        raise RuntimeError(str(e))
 
-    if not list(frames_dir.glob("*.jpg")):
-        raise RuntimeError(f"[seg {seg_idx}] no frames extracted")
+        if not list(frames_dir.glob("*.jpg")):
+            raise RuntimeError(f"[seg {seg_idx}] no frames extracted")
 
-    # Write seed bbox (scaled to resize_factor; clamped to new dims)
-    bx = max(0.0, min(bbox["x"] * resize_factor, new_w - 2.0))
-    by = max(0.0, min(bbox["y"] * resize_factor, new_h - 2.0))
-    bw = max(1.0, min(bbox["w"] * resize_factor, new_w - bx))
-    bh = max(1.0, min(bbox["h"] * resize_factor, new_h - by))
-    if bw < 8 or bh < 8:
-        raise ValueError(
-            f"[seg {seg_idx}] bbox too small after scaling: {bw:.1f}x{bh:.1f}"
-        )
-    with open(init_txt, "w") as f:
-        f.write(f"{bx},{by},{bw},{bh}\n")
+        # Write seed bbox (scaled to resize_factor; clamped to new dims)
+        bx = max(0.0, min(bbox["x"] * resize_factor, new_w - 2.0))
+        by = max(0.0, min(bbox["y"] * resize_factor, new_h - 2.0))
+        bw = max(1.0, min(bbox["w"] * resize_factor, new_w - bx))
+        bh = max(1.0, min(bbox["h"] * resize_factor, new_h - by))
+        if bw < 8 or bh < 8:
+            raise ValueError(
+                f"[seg {seg_idx}] bbox too small after scaling: {bw:.1f}x{bh:.1f}"
+            )
+        with open(init_txt, "w") as f:
+            f.write(f"{bx},{by},{bw},{bh}\n")
 
-    # Spawn SAMURAI subprocess
-    cmd = [
-        "python", samurai_script,
-        "--video_path", str(frames_dir),
-        "--txt_path", str(init_txt),
-        "--video_output_path", str(output_video),
-        "--model_path", sam2_model_path,
-    ]
+        # Spawn SAMURAI subprocess
+        cmd = [
+            "python", samurai_script,
+            "--video_path", str(frames_dir),
+            "--txt_path", str(init_txt),
+            "--video_output_path", str(output_video),
+            "--model_path", sam2_model_path,
+        ]
 
-    # subprocess 超时：基于 segment 长度估算，最少 10 分钟。SAMURAI ≈ 0.5×
-    # 视频时长，给 5× 余量。timeout=None 之前能让一个挂死的子进程吃掉整个
-    # Serverless worker 时窗 + GPU 显存。
-    _seg_sec = max(1.0, (end_frame - start_frame) / 25.0)
-    _samurai_timeout = max(600.0, _seg_sec * 5.0)
-    
-    try:
+        # subprocess 超时：基于 segment 长度估算，最少 10 分钟。SAMURAI ≈ 0.5×
+        # 视频时长，给 5× 余量。timeout=None 之前能让一个挂死的子进程吃掉整个
+        # Serverless worker 时窗 + GPU 显存。
+        _seg_sec = max(1.0, (end_frame - start_frame) / 25.0)
+        _samurai_timeout = max(600.0, _seg_sec * 5.0)
+        
         retcode, out, err = _run_proc(
             cmd, _samurai_timeout,
             f"[seg {seg_idx}] SAMURAI timed out after {_samurai_timeout/60:.1f} min "
@@ -450,44 +452,49 @@ def _run_samurai_segment(seg_idx: int, session_id: str, output_dir: Path,
             raise RuntimeError(
                 f"[seg {seg_idx}] SAMURAI exited {retcode}: {tail}"
             )
-    except Exception as e:
-        raise RuntimeError(str(e))
 
-    if not output_txt.exists():
-        raise FileNotFoundError(
-            f"[seg {seg_idx}] SAMURAI produced no bbox output at {output_txt}"
-        )
+        if not output_txt.exists():
+            raise FileNotFoundError(
+                f"[seg {seg_idx}] SAMURAI produced no bbox output at {output_txt}"
+            )
 
-    # Parse + scale back to original coords. Output file format:
-    # frame_id, [class], x, y, w, h
-    scale_back = 1.0 / resize_factor
-    sparse_bboxes: dict[int, list[float]] = {}
-    with open(output_txt) as f:
-        for line in f:
-            parts = line.strip().split(",")
-            if len(parts) < 6:
-                continue
-            fid = int(parts[0])
-            original_fid = start_frame + (fid * skip_step)
-            x = float(parts[2]); y = float(parts[3])
-            w = float(parts[4]); h = float(parts[5])
-            if w > 0 and h > 0 and original_fid < total_orig_frames:
-                sparse_bboxes[original_fid] = [
-                    x * scale_back, y * scale_back,
-                    w * scale_back, h * scale_back,
-                ]
+        # Parse + scale back to original coords. Output file format:
+        # frame_id, [class], x, y, w, h
+        scale_back = 1.0 / resize_factor
+        sparse_bboxes: dict[int, list[float]] = {}
+        with open(output_txt) as f:
+            for line in f:
+                parts = line.strip().split(",")
+                if len(parts) < 6:
+                    continue
+                fid = int(parts[0])
+                original_fid = start_frame + (fid * skip_step)
+                x = float(parts[2]); y = float(parts[3])
+                w = float(parts[4]); h = float(parts[5])
+                if w > 0 and h > 0 and original_fid < total_orig_frames:
+                    sparse_bboxes[original_fid] = [
+                        x * scale_back, y * scale_back,
+                        w * scale_back, h * scale_back,
+                    ]
 
-    # Clean up extracted frames immediately to bound disk usage
-    import shutil
-    shutil.rmtree(frames_dir, ignore_errors=True)
-
-    return {
-        "seg_idx": seg_idx,
-        "start": start_frame,
-        "end": end_frame,
-        "sparse_bboxes": sparse_bboxes,
-        "frames_emitted": len(sparse_bboxes),
-    }
+        return {
+            "seg_idx": seg_idx,
+            "start": start_frame,
+            "end": end_frame,
+            "sparse_bboxes": sparse_bboxes,
+            "frames_emitted": len(sparse_bboxes),
+        }
+    finally:
+        # Clean up extracted frames immediately to bound disk/RAM usage
+        import shutil
+        shutil.rmtree(frames_dir, ignore_errors=True)
+        # Clean up per-segment temporary artifacts
+        for _tmp in (init_txt, output_video, output_txt):
+            try:
+                if _tmp.exists():
+                    _tmp.unlink()
+            except Exception:
+                pass
 
 
 # ── Parallel YOLO detection workers ─────────────────────────────────────────
@@ -1056,6 +1063,10 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         # regression turns up.
         use_merged = os.environ.get("MERGED_STREAMING", "1") != "0"
 
+        # Optical flow is disabled by default (ENABLE_OPTICAL_FLOW=0) to save CPU and avoid noisy shifts.
+        # Keypoint homography already completely handles perspective and camera movement.
+        enable_opt_flow = os.environ.get("ENABLE_OPTICAL_FLOW", "0") == "1"
+
         # Merged path may fail (e.g. ultralytics+CUDA-streams compat). On any
         # exception, log the traceback so we can debug, then fall back to the
         # legacy 3-pass path so the user's analysis still completes.
@@ -1064,7 +1075,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             from .analysis_core import run_merged_streaming_pipeline
             try:
                 kp = KeypointDetector(kpt_path)
-                cam = CameraMovementEstimator.from_video_path(video_path)
+                cam = CameraMovementEstimator.from_video_path(video_path) if enable_opt_flow else None
 
                 tracks, cam_mov, kps = run_merged_streaming_pipeline(
                     video_path, total,
@@ -1075,7 +1086,8 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                 )
                 tracks["ball"] = tracker.interpolate_ball_positions(tracks["ball"])
                 tracker.add_position_to_tracks(tracks)
-                cam.add_adjust_positions_to_tracks(tracks, cam_mov)
+                if cam and enable_opt_flow:
+                    cam.add_adjust_positions_to_tracks(tracks, cam_mov)
                 vt = ViewTransformer()
                 vt.add_transformed_position_to_tracks(tracks, kps)
                 vt.interpolate_2d_positions(tracks)
@@ -1110,9 +1122,12 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
 
             sm.update_status(session_id, "analyzing", progress=35, stage="camera_motion")
             _t = _time.perf_counter()
-            cam     = CameraMovementEstimator.from_video_path(video_path)
-            cam_mov = cam.get_camera_movement_streamed(video_path, total)
-            cam.add_adjust_positions_to_tracks(tracks, cam_mov)
+            if enable_opt_flow:
+                cam     = CameraMovementEstimator.from_video_path(video_path)
+                cam_mov = cam.get_camera_movement_streamed(video_path, total)
+                cam.add_adjust_positions_to_tracks(tracks, cam_mov)
+            else:
+                cam_mov = [[0.0, 0.0]] * total
             _bench("camera_motion", _t)
             _check_memory_and_gc()
 

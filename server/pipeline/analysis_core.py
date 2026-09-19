@@ -952,7 +952,7 @@ class KeypointDetector:
 def run_merged_streaming_pipeline(video_path: str, total_frames: int,
                                    tracker: 'Tracker',
                                    kpt_detector: 'KeypointDetector',
-                                   cam_estimator: 'CameraMovementEstimator',
+                                   cam_estimator: 'CameraMovementEstimator' = None,
                                    chunk_size: int = 1500,
                                    progress_callback=None,
                                    sample_frame_indices=None,
@@ -984,8 +984,9 @@ def run_merged_streaming_pipeline(video_path: str, total_frames: int,
     sample_set = set(int(i) for i in (sample_frame_indices or [])
                      if 0 <= int(i) < total_frames)
 
-    # Optical flow state — must carry across chunk boundaries
-    flow_state = {"old_gray": None, "old_pts": None}
+    # Optical flow is disabled by default (ENABLE_OPTICAL_FLOW=0) to save CPU and avoid noisy shifts.
+    enable_optical_flow = (os.environ.get("ENABLE_OPTICAL_FLOW", "0") == "1") and (cam_estimator is not None)
+    flow_state = {"old_gray": None, "old_pts": None} if enable_optical_flow else None
     OPT_FLOW_STRIDE = 3
 
     # CUDA streams for YOLO/KPT parallelism. If CUDA isn't available we still
@@ -1095,25 +1096,20 @@ def run_merged_streaming_pipeline(video_path: str, total_frames: int,
                             for i in range(0, len(det_frames), YOLO_BATCH_SIZE)]
             yolo_futures = [pool.submit(_run_yolo_batch, b) for b in yolo_batches]
 
-            # Run optical flow on this thread while GPU is busy with YOLO.
-            # We need flow results to decide pan-trigger keypoint frames, so
-            # KPT submission has to wait for flow to finish — but flow is CPU,
-            # so it overlaps with YOLO's GPU time and adds little wall-clock.
-            _run_optical_flow_chunk(chunk, start_idx)
+            # Run optical flow on this thread while GPU is busy with YOLO (if enabled)
+            if enable_optical_flow:
+                _run_optical_flow_chunk(chunk, start_idx)
 
-            # Pan-trigger augmentation (parity with legacy single-pass path):
-            # any sampled-flow frame whose motion magnitude exceeds the
-            # pan threshold gets an extra keypoint detection, even if it's
-            # off the regular KEYPOINT_STRIDE schedule. Prevents homography
-            # drift during whip-pans.
+            # Regular keypoint detection on KEYPOINT_STRIDE schedule
             kpt_local_set = {j for j in range(len(chunk))
                               if (start_idx + j) % KEYPOINT_STRIDE == 0}
-            pan_thresh_sq = kpt_detector._PAN_TRIGGER_PX ** 2
-            for j in range(len(chunk)):
-                fi = start_idx + j
-                mv = sampled_cam.get(fi)
-                if mv and (mv[0] * mv[0] + mv[1] * mv[1]) > pan_thresh_sq:
-                    kpt_local_set.add(j)
+            if enable_optical_flow and kpt_detector is not None:
+                pan_thresh_sq = kpt_detector._PAN_TRIGGER_PX ** 2
+                for j in range(len(chunk)):
+                    fi = start_idx + j
+                    mv = sampled_cam.get(fi)
+                    if mv and (mv[0] * mv[0] + mv[1] * mv[1]) > pan_thresh_sq:
+                        kpt_local_set.add(j)
 
             kpt_local = sorted(kpt_local_set)
             kpt_frames = [chunk[j] for j in kpt_local]
@@ -1172,15 +1168,18 @@ def run_merged_streaming_pipeline(video_path: str, total_frames: int,
     tracker._interpolate_tracks(tracks, total_frames)
     kpts_full = _linear_fill_keypoints(sampled_kpts, total_frames)
 
-    # Smooth optical-flow timeline (same as legacy)
-    df = pd.DataFrame(index=range(total_frames), columns=["x", "y"], dtype=float)
-    for idx, mv in sampled_cam.items():
-        if idx < total_frames:
-            df.loc[idx] = mv
-    df = df.interpolate(method="linear").bfill().ffill()
-    df["x"] = df["x"].rolling(5, min_periods=1, center=True).mean()
-    df["y"] = df["y"].rolling(5, min_periods=1, center=True).mean()
-    cam_movement = df.values.tolist()
+    # Smooth optical-flow timeline (if enabled; else zero vector)
+    if enable_optical_flow:
+        df = pd.DataFrame(index=range(total_frames), columns=["x", "y"], dtype=float)
+        for idx, mv in sampled_cam.items():
+            if idx < total_frames:
+                df.loc[idx] = mv
+        df = df.interpolate(method="linear").bfill().ffill()
+        df["x"] = df["x"].rolling(5, min_periods=1, center=True).mean()
+        df["y"] = df["y"].rolling(5, min_periods=1, center=True).mean()
+        cam_movement = df.values.tolist()
+    else:
+        cam_movement = [[0.0, 0.0]] * total_frames
 
     total_elapsed = _time.perf_counter() - t_start
     print(f"[MERGED] Pipeline complete in {total_elapsed:.1f}s "
