@@ -51,6 +51,7 @@ export default function Trimmer() {
 
     const [duration, setDuration] = useState(0);   // seconds
     const [videoUrl, setVideoUrl] = useState(null);
+    const [sessionData, setSessionData] = useState(null);
     const [previewTime, setPreviewTime] = useState(0);
 
     // Dynamic minimum — short test clips use 3s so handles/Add-Break still work.
@@ -80,6 +81,7 @@ export default function Trimmer() {
         (async () => {
             try {
                 const s = await getSession(sessionId);
+                setSessionData(s);
                 setVideoUrl(s?.video_url || null);
 
                 // 视频 metadata 加载加 10s 超时 — corrupt 文件 / CORS 卡住时
@@ -101,20 +103,18 @@ export default function Trimmer() {
                         }
                     }, 10_000);
                 });
-                setDuration(dur);
-                if (!dur) {
-                    toast.error('Could not read video duration. Try re-uploading.');
-                }
-
-                const saved = Array.isArray(s?.match_periods_sec) ? s.match_periods_sec : null;
-                if (saved && saved.length > 0) {
-                    // saved 数据来自后端，没有 _id；给每个补上。
-                    // 同时把 breakStack 重置 — 历史是从这次会话开始算。
-                    setPeriods(_withIds(saved));
-                    setBreakStack([]);
+                if (dur > 0) {
+                    setDuration(dur);
+                    const saved = Array.isArray(s?.match_periods_sec) ? s.match_periods_sec : null;
+                    if (saved && saved.length > 0) {
+                        setPeriods(_withIds(saved));
+                        setBreakStack([]);
+                    } else {
+                        setPeriods(_withIds([{ start: 0, end: dur }]));
+                        setBreakStack([]);
+                    }
                 } else {
-                    setPeriods(_withIds([{ start: 0, end: dur }]));
-                    setBreakStack([]);
+                    toast.error('Checking video duration... Please wait for video to load.');
                 }
             } catch (e) {
                 toast.error('Failed to load video: ' + e.message);
@@ -343,6 +343,23 @@ export default function Trimmer() {
                         className="trim-page__video"
                         controls
                         muted
+                        onLoadedMetadata={(e) => {
+                            const d = e.target.duration;
+                            if (d && d > 0 && duration === 0) {
+                                setDuration(d);
+                                const saved = Array.isArray(sessionData?.match_periods_sec) ? sessionData.match_periods_sec : null;
+                                if (saved && saved.length > 0) {
+                                    setPeriods(_withIds(saved));
+                                } else {
+                                    setPeriods((prev) => {
+                                        if (prev.length === 1 && prev[0].end === 0) {
+                                            return _withIds([{ start: 0, end: d }]);
+                                        }
+                                        return prev;
+                                    });
+                                }
+                            }
+                        }}
                     />
                 )}
 
