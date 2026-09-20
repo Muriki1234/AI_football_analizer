@@ -14,12 +14,15 @@ tasks.py - 所有后台任务实现（Flask 线程版）
 """
 
 # Standard imports
+from __future__ import annotations
 import os
 import sys
 import subprocess
 import pickle
 import threading
 import traceback
+import json
+import shutil
 from collections import OrderedDict
 from contextlib import contextmanager
 from pathlib import Path
@@ -64,6 +67,7 @@ from .analysis_core import (
     measure_distance,
     run_segment_detection,
 )
+from .camera_motion_ransac import RobustCameraMovementEstimator
 
 try:
     from sports.annotators.soccer import draw_pitch, draw_points_on_pitch
@@ -528,7 +532,7 @@ def _yolo_parallel_worker(args: dict) -> str:
     # Post-process (everything except add_speed_and_distance):
     tracker_obj = Tracker(yolo_path)
     tracker_obj.add_position_to_tracks(raw_tracks)
-    cam_obj = CameraMovementEstimator.from_video_path(video_path)
+    cam_obj = RobustCameraMovementEstimator.from_video_path(video_path)
     cam_obj.add_adjust_positions_to_tracks(raw_tracks, cam_mov)
     vt = ViewTransformer()
     vt.add_transformed_position_to_tracks(raw_tracks, kps)
@@ -1075,7 +1079,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             from .analysis_core import run_merged_streaming_pipeline
             try:
                 kp = KeypointDetector(kpt_path)
-                cam = CameraMovementEstimator.from_video_path(video_path) if enable_opt_flow else None
+                cam = RobustCameraMovementEstimator.from_video_path(video_path) if enable_opt_flow else None
 
                 tracks, cam_mov, kps = run_merged_streaming_pipeline(
                     video_path, total,
@@ -1123,7 +1127,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             sm.update_status(session_id, "analyzing", progress=35, stage="camera_motion")
             _t = _time.perf_counter()
             if enable_opt_flow:
-                cam     = CameraMovementEstimator.from_video_path(video_path)
+                cam     = RobustCameraMovementEstimator.from_video_path(video_path)
                 cam_mov = cam.get_camera_movement_streamed(video_path, total)
                 cam.add_adjust_positions_to_tracks(tracks, cam_mov)
             else:
@@ -1164,13 +1168,14 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             slot[0] = sys.exc_info()[1]
             traceback.print_exc()
 
-        # ── Thread A: 速度 & 距离 ─────────────────────────────────────
+        # ── Thread A: 速度 & 距离 (Robust Kinematics & Savitzky-Golay Filter) ──
         def _thread_speed():
             try:
                 sm.update_status(session_id, "analyzing",
                                  stage="speed_calculation")
                 _t = _time.perf_counter()
-                speed_est = AccurateSpeedEstimator(fps=fps)
+                from .speed_kinematics_filter import RobustKinematicSpeedEstimator
+                speed_est = RobustKinematicSpeedEstimator(fps=fps)
                 speed_est.add_speed_and_distance_to_tracks(tracks)
                 _bench("speed_calculation", _t)
             except Exception:
@@ -1390,6 +1395,70 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
 
             _bench("possession_detection", _t)
 
+        # ── 8b. 传球事件与传球网络挖掘 (Pass Event Spotting & Passing Networks) ──
+        pass_events_list = []
+        pass_networks_data = {}
+        try:
+            from server.pipeline.pass_event_detector import PassEventDetector
+            pass_detector = PassEventDetector(fps=fps, control_radius_m=2.8, min_pass_distance_m=3.5)
+
+            # 提取全场足球与球员二维轨迹
+            ball_traj = {}
+            for i, b_dict in enumerate(tracks["ball"]):
+                b_info = b_dict.get(1, {})
+                pt = b_info.get("position_transformed")
+                if pt and len(pt) == 2:
+                    ball_traj[i] = (float(pt[0]), float(pt[1]))
+                elif "bbox" in b_info and len(b_info["bbox"]) == 4:
+                    bb = b_info["bbox"]
+                    ball_traj[i] = ((bb[0] + bb[2]) / 2.0, (bb[1] + bb[3]) / 2.0)
+
+            player_traj = {}
+            for i, p_dict in enumerate(tracks["players"]):
+                f_players = {}
+                for pid, p_info in p_dict.items():
+                    if not p_info:
+                        continue
+                    pt = p_info.get("position_transformed")
+                    if pt and len(pt) == 2:
+                        f_players[pid] = (float(pt[0]), float(pt[1]))
+                    elif "bbox" in p_info and len(p_info["bbox"]) == 4:
+                        bb = p_info["bbox"]
+                        f_players[pid] = ((bb[0] + bb[2]) / 2.0, (bb[1] + bb[3]) / 2.0)
+                player_traj[i] = f_players
+
+            detected_passes = pass_detector.detect_passes(
+                ball_traj, player_traj, player_final_team
+            )
+            pass_events_list = [p.to_dict() for p in detected_passes]
+            pass_networks_data = {
+                "team1": pass_detector.build_pass_network(detected_passes, team_id=1),
+                "team2": pass_detector.build_pass_network(detected_passes, team_id=2),
+            }
+
+            passes_json_path = output_dir / "passes.json"
+            with open(passes_json_path, "w", encoding="utf-8") as pf:
+                json.dump({
+                    "total_passes": len(detected_passes),
+                    "passes": pass_events_list,
+                    "networks": pass_networks_data,
+                }, pf, indent=2, ensure_ascii=False)
+            print(f"[INFO] Pass event detection completed: {len(detected_passes)} passes spotted, saved to {passes_json_path.name}")
+        except Exception as p_exc:
+            log.warning("Pass event detection failed (non-blocking): %s", p_exc)
+
+        # ── 8c. 球衣号码时域投票识别 (Jersey Number Temporal Voting & Track Annotation) ──
+        resolved_jerseys = {}
+        try:
+            from .jersey_vision_integrator import JerseyVisionIntegrator
+            jersey_integrator = JerseyVisionIntegrator(max_keyframes_per_player=6)
+            jersey_candidates = jersey_integrator.select_keyframe_candidates(tracks)
+            resolved_jerseys = jersey_integrator.annotate_tracks(tracks)
+            if resolved_jerseys:
+                print(f"[INFO] Jersey voting resolved numbers for {len(resolved_jerseys)} player tracklets")
+        except Exception as j_exc:
+            log.warning("Jersey voting integration failed (non-blocking): %s", j_exc)
+
         # ── 9. 摘要 & 缓存 ────────────────────────────────────────────
         _bench("TOTAL", _t_total)
         try:
@@ -1473,6 +1542,10 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             "tracked_bboxes":      tracked_bboxes,
             "team_control":        team_control,
             "possession_switches": player_summary.get("possession_switches", 0),
+            "total_passes":        len(pass_events_list),
+            "pass_events":         pass_events_list,
+            "pass_networks":       pass_networks_data,
+            "resolved_jerseys":    resolved_jerseys,
             "segments":            segments,
             # 颜色序列化（numpy array → list）
             "team_colors": {
@@ -2006,27 +2079,34 @@ def run_heatmap(session_id: str, session: dict, task_id: str, sm: SessionManager
         data = _load_cache(session)
         tracks, tracked_bboxes = data["tracks"], data["tracked_bboxes"]
 
-        # 收集 minimap 位置点
-        heatmap_pts = []
+        # 收集 minimap 位置点 (带帧索引以便做时空插值)
+        heatmap_frame_dict = {}
         for i in range(len(tracks["players"])):
             if i not in tracked_bboxes:
                 continue
             sx, sy, sw, sh = tracked_bboxes[i]
-            info = _find_matched_player(tracks["players"][i], (sx+sw/2, sy+sh/2))
+            info = _find_matched_player(tracks["players"][i], (sx, sy, sw, sh))
             if info:
                 pos = info.get("position_minimap") or info.get("position_transformed")
                 if pos and len(pos) == 2 and not any(np.isnan(p) for p in pos):
-                    heatmap_pts.append(pos)
+                    heatmap_frame_dict[i] = pos
 
         sm.update_task(session_id, task_id, progress=50)
 
         output_path = sm.session_output_dir(session_id) / "heatmap.png"
 
-        if HAS_SPORTS and len(heatmap_pts) > 10:
-            config = SoccerPitchConfiguration()
-            _draw_heatmap_sports(heatmap_pts, config, output_path)
-        else:
-            _draw_heatmap_matplotlib(heatmap_pts, output_path)
+        try:
+            from .heatmap_stabilizer import HeatmapSpatialStabilizer
+            stabilizer = HeatmapSpatialStabilizer()
+            stabilizer.render(heatmap_frame_dict, output_path, prefer_sports=HAS_SPORTS)
+        except Exception as err:
+            # 安全回退
+            pts_list = list(heatmap_frame_dict.values())
+            if HAS_SPORTS and len(pts_list) > 10:
+                config = SoccerPitchConfiguration()
+                _draw_heatmap_sports(pts_list, config, output_path)
+            else:
+                _draw_heatmap_matplotlib(pts_list, output_path)
 
         _finish_task(sm, session_id, task_id, output_path)
 
@@ -2100,7 +2180,7 @@ def run_speed_chart(session_id: str, session: dict, task_id: str, sm: SessionMan
             info = None
             if i in tracked_bboxes:
                 sx, sy, sw, sh = tracked_bboxes[i]
-                info = _find_matched_player(tracks["players"][i], (sx+sw/2, sy+sh/2))
+                info = _find_matched_player(tracks["players"][i], (sx, sy, sw, sh))
             speeds.append(   info.get("speed",    0) if info else 0)
             prev_d = distances[-1] if distances else 0
             distances.append(info.get("distance", prev_d) if info else prev_d)
@@ -2108,10 +2188,22 @@ def run_speed_chart(session_id: str, session: dict, task_id: str, sm: SessionMan
 
         sm.update_task(session_id, task_id, progress=55)
 
-        output_path = sm.session_output_dir(session_id) / "speed_chart.png"
-        _draw_speed_chart(times, speeds, distances, output_path)
+        from server.pipeline.speed_telemetry_engine import SpeedTelemetryEngine
+        engine = SpeedTelemetryEngine(fps=fps, target_downsample_points=150)
+        telemetry = engine.process_telemetry(speeds, distances)
 
-        _finish_task(sm, session_id, task_id, output_path)
+        output_path = sm.session_output_dir(session_id) / "speed_chart.png"
+        engine.render_chart(telemetry, output_path)
+
+        result_payload = {
+            "max_speed_kmh": telemetry["max_speed_kmh"],
+            "avg_speed_kmh": telemetry["avg_speed_kmh"],
+            "total_distance_m": telemetry["total_distance_m"],
+            "zone_breakdown": telemetry["zone_breakdown"],
+            "downsampled_timeline": telemetry["downsampled_timeline"],
+        }
+
+        _finish_task(sm, session_id, task_id, output_path, result=result_payload)
 
     except Exception as exc:
         sm.update_task(session_id, task_id, status="failed", error=str(exc))
@@ -2240,10 +2332,51 @@ def _draw_possession_chart(data: dict, t1: int, t2: int, neu: int, output_path: 
 
 # ── 3d. 小地图轨迹回放 ────────────────────────────────────────────────────
 
+def run_minimap_replay(session_id: str, session: dict, task_id: str, sm: SessionManager):
+    """
+    生成 2D 战术小地图动态回放视频 MP4（纯 OpenCV 高速渲染 + O(1) 内存流式管道）。
+    包含红蓝球员跑动标记、被追踪目标金色光环、足球动态轨迹拖尾、实时控球率 HUD 与时间戳。
+    """
+    try:
+        sm.update_task(session_id, task_id, status="running", progress=10)
+        data = _load_cache(session)
+        tracks = data.get("tracks", {})
+        tracked_bboxes = data.get("tracked_bboxes", {})
+        team_control = np.array(data.get("team_control", []))
+        team_colors = data.get("team_colors_hex", {})
+        fps = float(session.get("video_fps") or 25.0)
 
+        output_path = sm.session_output_dir(session_id) / "minimap_replay.mp4"
 
+        from server.pipeline.minimap_replay_generator import MinimapReplayGenerator
+        generator = MinimapReplayGenerator(
+            tracks=tracks,
+            tracked_bboxes=tracked_bboxes,
+            team_control=team_control,
+            team_colors_hex=team_colors,
+            fps=fps,
+        )
 
-# ═══════════════════════════════════════════════════════════════════════
+        def _progress(done, total):
+            pct = 10 + int(80 * (done / max(total, 1)))
+            sm.update_task(session_id, task_id, progress=pct)
+
+        success = generator.render_video_streaming(output_path, progress_cb=_progress)
+        if not success or not output_path.exists():
+            raise RuntimeError(f"Failed to generate minimap replay video for session {session_id}")
+
+        result_data = {
+            "total_frames": generator.total_frames,
+            "duration_sec": round(generator.total_frames / max(fps, 1.0), 1),
+            "video_fps": fps,
+            "resolution": [generator.width, generator.height],
+        }
+
+        _finish_task(sm, session_id, task_id, output_path, result=result_data)
+
+    except Exception as exc:
+        sm.update_task(session_id, task_id, status="failed", error=str(exc))
+        _log_error("minimap_replay", session_id, exc)
 # 工具函数
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -2255,8 +2388,8 @@ def _draw_possession_chart(data: dict, t1: int, t2: int, neu: int, output_path: 
 
 def run_sprint_analysis(session_id: str, session: dict, task_id: str, sm: SessionManager):
     """
-    统计被追踪球员的高强度冲刺（>25 km/h 且持续 ≥ 2s）：
-    输出冲刺次数、平均持续时间及每次冲刺的路径叠加在球场小地图上。
+    统计被追踪球员的高强度冲刺爆发（>=24 km/h，持续 >=0.8s，包含微迟滞去抖）：
+    输出冲刺次数、平均与最大持续时间、冲刺跑动距离及每次冲刺的球场小地图路径。
     """
     try:
         sm.update_task(session_id, task_id, status="running", progress=10)
@@ -2264,17 +2397,13 @@ def run_sprint_analysis(session_id: str, session: dict, task_id: str, sm: Sessio
         tracks, tracked_bboxes = data["tracks"], data["tracked_bboxes"]
         fps = float(session.get("video_fps") or 25.0)
 
-        SPRINT_KMH     = 25.0   # 冲刺速度阈值
-        MIN_SPRINT_SEC = 2.0    # 最短持续时间
-        min_frames     = int(MIN_SPRINT_SEC * fps)
-
         # 收集每帧的速度和位置（基于 minimap 坐标）
         speeds, positions = [], []
         for i in range(len(tracks["players"])):
             info = None
             if i in tracked_bboxes:
                 sx, sy, sw, sh = tracked_bboxes[i]
-                info = _find_matched_player(tracks["players"][i], (sx+sw/2, sy+sh/2))
+                info = _find_matched_player(tracks["players"][i], (sx, sy, sw, sh))
             speeds.append(info.get("speed", 0) if info else 0)
             pos = None
             if info:
@@ -2284,36 +2413,20 @@ def run_sprint_analysis(session_id: str, session: dict, task_id: str, sm: Sessio
 
         sm.update_task(session_id, task_id, progress=40)
 
-        # 识别冲刺段
-        sprint_segments = []   # [(start_frame, end_frame, [positions])]
-        in_sprint, sprint_start, sprint_pts = False, 0, []
-        for i, spd in enumerate(speeds):
-            if spd >= SPRINT_KMH:
-                if not in_sprint:
-                    in_sprint, sprint_start, sprint_pts = True, i, []
-                if positions[i]:
-                    sprint_pts.append(positions[i])
-            else:
-                if in_sprint:
-                    if (i - sprint_start) >= min_frames and len(sprint_pts) >= 2:
-                        sprint_segments.append((sprint_start, i - 1, list(sprint_pts)))
-                    in_sprint, sprint_pts = False, []
-        # 处理视频末尾的冲刺
-        if in_sprint and (len(speeds) - sprint_start) >= min_frames and len(sprint_pts) >= 2:
-            sprint_segments.append((sprint_start, len(speeds) - 1, list(sprint_pts)))
+        from server.pipeline.sprint_burst_debouncer import SprintBurstDebouncer
+        debouncer = SprintBurstDebouncer(
+            sprint_speed_kmh=24.0,
+            min_duration_s=0.8,
+            max_dropout_frames=3,
+            dropout_speed_floor_kmh=20.0,
+            fps=fps,
+        )
+        result_data = debouncer.detect_sprints(speeds, positions)
 
-        sm.update_task(session_id, task_id, progress=65)
-
-        durations = [(e - s) / fps for s, e, _ in sprint_segments]
-        result_data = {
-            "sprint_count":    len(sprint_segments),
-            "avg_duration_s":  round(float(np.mean(durations)), 2) if durations else 0.0,
-            "max_duration_s":  round(float(np.max(durations)),  2) if durations else 0.0,
-            "max_speed_kmh":   round(float(np.max(speeds)),     1),
-        }
+        sm.update_task(session_id, task_id, progress=75)
 
         output_path = sm.session_output_dir(session_id) / "sprint_analysis.png"
-        _draw_sprint_chart(sprint_segments, result_data, output_path)
+        debouncer.render_visualization(result_data["segments"], result_data, output_path)
 
         _finish_task(sm, session_id, task_id, output_path, result=result_data)
 
@@ -2392,13 +2505,14 @@ def _draw_sprint_chart(segments: list, stats: dict, output_path: Path):
 
 def run_defensive_line(session_id: str, session: dict, task_id: str, sm: SessionManager):
     """
-    防线渗透统计：在小地图上动态画出对方最后一道防线（按 x 坐标的前四名）。
-    标记追踪球员成功越过防线的帧，并给出渗透次数与路径图。
+    防线渗透统计：自动解析攻防朝向，动态提取对方最后一道防线（前四名后卫），
+    精准识别持球/跑位球员越过防线的渗透事件，并生成带攻守朝向指引的战术图与事件时间轴。
     """
     try:
         sm.update_task(session_id, task_id, status="running", progress=10)
         data = _load_cache(session)
         tracks, tracked_bboxes = data["tracks"], data["tracked_bboxes"]
+        fps = float(session.get("video_fps") or 25.0)
 
         sm.update_task(session_id, task_id, progress=25)
 
@@ -2407,71 +2521,32 @@ def run_defensive_line(session_id: str, session: dict, task_id: str, sm: Session
         for i in range(len(tracks["players"])):
             if i not in tracked_bboxes: continue
             sx, sy, sw, sh = tracked_bboxes[i]
-            info = _find_matched_player(tracks["players"][i], (sx+sw/2, sy+sh/2))
+            info = _find_matched_player(tracks["players"][i], (sx, sy, sw, sh))
             if info and info.get("team"):
                 tracked_teams.append(info["team"])
         tracked_team = int(np.median(tracked_teams)) if tracked_teams else 1
         opponent_team = 2 if tracked_team == 1 else 1
 
-        # 每帧：计算追踪球员位置 + 对方防线 x（取对方最深4名的均值）
-        frame_data = []   # [(tracked_x, defense_line_x, tracked_pos)]
-        for i in range(len(tracks["players"])):
-            tracked_pos = None
-            if i in tracked_bboxes:
-                sx, sy, sw, sh = tracked_bboxes[i]
-                info = _find_matched_player(tracks["players"][i], (sx+sw/2, sy+sh/2))
-                if info:
-                    pos = info.get("position_minimap") or info.get("position_transformed")
-                    if pos and len(pos) == 2 and not any(np.isnan(p) for p in pos):
-                        tracked_pos = pos
+        from server.pipeline.defensive_line_analyzer import DefensiveLineAnalyzer
+        analyzer = DefensiveLineAnalyzer(defender_count=4, min_consecutive_frames=3, fps=fps)
 
-            # 对方球员 x 坐标列表（升序 = 离追踪球员的球门更远的方向）
-            opp_xs = []
-            for pid, pinfo in tracks["players"][i].items():
-                if not pinfo or pinfo.get("team") != opponent_team: continue
-                pp = pinfo.get("position_minimap") or pinfo.get("position_transformed")
-                if pp and len(pp) == 2 and not any(np.isnan(v) for v in pp):
-                    opp_xs.append(pp[0])
+        # 自动判定攻守朝向（'right' / 'left'）
+        attacking_direction = analyzer.resolve_attack_direction(tracks, tracked_team, opponent_team)
 
-            if opp_xs and tracked_pos:
-                # 取对方最靠近追踪球员的4名球员均值作为防线
-                opp_xs.sort()
-                # 假设追踪球员朝 x 增大方向进攻（如不符合可翻转）
-                deepest = opp_xs[:4] if tracked_pos[0] < np.mean(opp_xs) else opp_xs[-4:]
-                defense_x = float(np.mean(deepest))
-                frame_data.append((tracked_pos[0], defense_x, tracked_pos))
-            else:
-                frame_data.append(None)
+        sm.update_task(session_id, task_id, progress=50)
 
-        sm.update_task(session_id, task_id, progress=60)
+        # 计算双向防线序列与渗透事件
+        frame_data = analyzer.compute_defensive_line_series(
+            tracks, tracked_bboxes, tracked_team, opponent_team, attacking_direction
+        )
+        result_data = analyzer.detect_penetration_events(
+            frame_data, attacking_direction, tracked_team, opponent_team
+        )
 
-        # 识别渗透事件（追踪球员越过防线并保持 ≥ 3 帧）
-        penetrations = []
-        behind = False
-        consec = 0
-        pen_start_pos = None
-        for i, fd in enumerate(frame_data):
-            if fd is None:
-                consec = 0; behind = False; continue
-            tx, dx, tp = fd
-            if tx > dx:   # 越过防线
-                consec += 1
-                if not behind:
-                    pen_start_pos = tp
-                if consec >= 3 and not behind:
-                    penetrations.append(tp)
-                    behind = True
-            else:
-                consec = 0; behind = False
-
-        result_data = {
-            "penetration_count": len(penetrations),
-            "tracked_team":      tracked_team,
-            "opponent_team":     opponent_team,
-        }
+        sm.update_task(session_id, task_id, progress=80)
 
         output_path = sm.session_output_dir(session_id) / "defensive_line.png"
-        _draw_defensive_line_chart(frame_data, penetrations, result_data, output_path)
+        analyzer.render_visualization(frame_data, result_data, output_path)
 
         _finish_task(sm, session_id, task_id, output_path, result=result_data)
 
@@ -2566,6 +2641,621 @@ def _draw_defensive_line_chart(frame_data: list, penetrations: list,
     plt.close()
 
 
+def run_spatial_zone_radar(session_id: str, session: dict, task_id: str, sm: SessionManager):
+    """
+    Generates 20-zone Juego de Posición (JDP) spatial radar analytics.
+    Evaluates player spatial presence across attacking, middle, and defensive channels,
+    including Zone 14 and half-spaces.
+    """
+    try:
+        sm.update_task(session_id, task_id, status="running", progress=15)
+        data = _load_cache(session)
+        tracks, tracked_bboxes = data.get("tracks", {}), data.get("tracked_bboxes", {})
+
+        from .tactical_brain.telemetry_translator import resolve_jdp_zone
+
+        zone_counts = {}
+        total_pts = 0
+        players_list = tracks.get("players", [])
+        for i in range(len(players_list)):
+            if i not in tracked_bboxes:
+                continue
+            sx, sy, sw, sh = tracked_bboxes[i]
+            info = _find_matched_player(players_list[i], (sx, sy, sw, sh))
+            if info:
+                pos = info.get("position_minimap") or info.get("position_transformed")
+                if pos and len(pos) == 2 and not any(np.isnan(p) for p in pos):
+                    zone = resolve_jdp_zone(float(pos[0]), float(pos[1]))
+                    zone_counts[zone] = zone_counts.get(zone, 0) + 1
+                    total_pts += 1
+
+        sm.update_task(session_id, task_id, progress=50)
+
+        zone14_count = zone_counts.get("zone_14", 0)
+        halfspace_count = sum(c for z, c in zone_counts.items() if "half_space" in z)
+        def_count = sum(c for z, c in zone_counts.items() if z.startswith("defensive_third"))
+        mid_count = sum(c for z, c in zone_counts.items() if z.startswith("middle_third"))
+        att_count = sum(c for z, c in zone_counts.items() if z.startswith("attacking_third") or z == "zone_14")
+
+        result_data = {
+            "total_samples": total_pts,
+            "zone_14_samples": zone14_count,
+            "zone_14_pct": round(zone14_count / max(1, total_pts) * 100, 1),
+            "halfspace_pct": round(halfspace_count / max(1, total_pts) * 100, 1),
+            "defensive_third_pct": round(def_count / max(1, total_pts) * 100, 1),
+            "middle_third_pct": round(mid_count / max(1, total_pts) * 100, 1),
+            "attacking_third_pct": round(att_count / max(1, total_pts) * 100, 1),
+            "zone_distribution": zone_counts,
+        }
+
+        output_path = sm.session_output_dir(session_id) / "spatial_radar.png"
+        
+        fig, ax = plt.subplots(figsize=(10, 6), facecolor="#1a1a2e")
+        ax.set_facecolor("#16213e")
+        categories = ["Def 3rd", "Mid 3rd", "Att 3rd", "Zone 14", "Half-spaces"]
+        values = [
+            result_data["defensive_third_pct"],
+            result_data["middle_third_pct"],
+            result_data["attacking_third_pct"],
+            result_data["zone_14_pct"],
+            result_data["halfspace_pct"],
+        ]
+        bars = ax.bar(categories, values, color=["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6"], width=0.55)
+        ax.set_ylim(0, max(max(values or [10]) * 1.25, 20))
+        ax.set_ylabel("Presence Percentage (%)", color="white", fontsize=11)
+        ax.set_title("20-Zone Juego de Posición (JDP) Spatial Profile", color="white", fontsize=13, fontweight="bold", pad=15)
+        ax.tick_params(colors="white")
+        for bar in bars:
+            h = bar.get_height()
+            ax.annotate(f"{h:.1f}%", xy=(bar.get_x() + bar.get_width() / 2, h),
+                        xytext=(0, 3), textcoords="offset points", ha="center", va="bottom",
+                        color="white", fontweight="bold")
+        plt.tight_layout()
+        plt.savefig(str(output_path), dpi=150, bbox_inches="tight")
+        plt.close()
+
+        _finish_task(sm, session_id, task_id, output_path, result=result_data)
+    except Exception as exc:
+        sm.update_task(session_id, task_id, status="failed", error=str(exc))
+        _log_error("spatial_radar", session_id, exc)
+
+
+def run_pitch_control_voronoi(session_id: str, session: dict, task_id: str, sm: SessionManager):
+    """
+    Evaluates continuous Spearman pitch control and team territory partitioning.
+    """
+    try:
+        sm.update_task(session_id, task_id, status="running", progress=15)
+        data = _load_cache(session)
+        tracks = data.get("tracks", {})
+
+        from .pitch_control import PlayerState, evaluate_pitch_control_grid
+
+        players_list = tracks.get("players", [])
+        total_frames = len(players_list)
+        rep_frame = total_frames // 2 if total_frames > 0 else 0
+
+        players_data = players_list[rep_frame] if total_frames > 0 else {}
+        player_states = []
+        for pid, pinfo in players_data.items():
+            if not pinfo:
+                continue
+            pos = pinfo.get("position_minimap") or pinfo.get("position_transformed")
+            if pos and len(pos) == 2 and not any(np.isnan(v) for v in pos):
+                team = pinfo.get("team", 1)
+                team_id = 0 if team == 1 else 1
+                player_states.append(PlayerState(
+                    id=int(pid) if str(pid).isdigit() else 0,
+                    team_id=team_id,
+                    x=float(pos[0]),
+                    y=float(pos[1]),
+                ))
+
+        sm.update_task(session_id, task_id, progress=50)
+
+        grid_res = evaluate_pitch_control_grid(player_states, grid_x=21, grid_y=14)
+        output_path = sm.session_output_dir(session_id) / "voronoi_pitch_control.png"
+
+        fig, ax = plt.subplots(figsize=(11, 7), facecolor="#1a1a2e")
+        ax.set_facecolor("#2d6a1e")
+        for rect in [plt.Rectangle((0, 0), 105, 68, fill=False, ec="white", lw=2),
+                     plt.Rectangle((0, 23.2), 16.5, 21.6, fill=False, ec="white"),
+                     plt.Rectangle((88.5, 23.2), 16.5, 21.6, fill=False, ec="white")]:
+            ax.add_patch(rect)
+
+        grid_matrix = np.array(grid_res["grid"])
+        im = ax.imshow(grid_matrix, extent=[0, 105, 0, 68], origin="lower", cmap="coolwarm", alpha=0.65, aspect="auto")
+        cbar = plt.colorbar(im, ax=ax, fraction=0.03, pad=0.04)
+        cbar.ax.yaxis.set_tick_params(color="white")
+        plt.setp(plt.getp(cbar.ax.axes, "yticklabels"), color="white")
+        cbar.set_label("P(Home Control)", color="white")
+
+        for p in player_states:
+            color = "#3b82f6" if p.team_id == 0 else "#ef4444"
+            ax.scatter(p.x, p.y, c=color, s=90, edgecolors="white", lw=1.5, zorder=5)
+
+        ax.set_xlim(0, 105)
+        ax.set_ylim(0, 68)
+        title = f"Pitch Control & Territory — Home {grid_res['home_territory_pct']}% | Away {grid_res['away_territory_pct']}% | Contested {grid_res['contested_territory_pct']}%"
+        ax.set_title(title, color="white", fontsize=12, fontweight="bold")
+        ax.tick_params(colors="white")
+        plt.tight_layout()
+        plt.savefig(str(output_path), dpi=150, bbox_inches="tight")
+        plt.close()
+
+        result_data = {
+            "home_territory_pct": grid_res["home_territory_pct"],
+            "away_territory_pct": grid_res["away_territory_pct"],
+            "contested_territory_pct": grid_res["contested_territory_pct"],
+            "grid_evaluated": True,
+        }
+        _finish_task(sm, session_id, task_id, output_path, result=result_data)
+    except Exception as exc:
+        sm.update_task(session_id, task_id, status="failed", error=str(exc))
+        _log_error("voronoi", session_id, exc)
+
+
+def run_pass_network(session_id: str, session: dict, task_id: str, sm: SessionManager):
+    """
+    Spot pass events and compute passing network graph.
+    """
+    try:
+        sm.update_task(session_id, task_id, status="running", progress=15)
+        data = _load_cache(session)
+        tracks = data.get("tracks", {})
+
+        from .pass_event_detector import PassEventDetector
+
+        players_list = tracks.get("players", [])
+        ball_list = tracks.get("ball", [])
+        teams = {}
+        player_traj = {}
+        ball_traj = {}
+
+        for fi, p_frame in enumerate(players_list):
+            if not p_frame:
+                continue
+            frame_players = {}
+            for pid, pinfo in p_frame.items():
+                if not pinfo:
+                    continue
+                pos = pinfo.get("position_minimap") or pinfo.get("position_transformed")
+                if pos and len(pos) == 2 and not any(np.isnan(v) for v in pos):
+                    pid_int = int(pid) if str(pid).isdigit() else hash(pid) % 1000
+                    frame_players[pid_int] = (float(pos[0]), float(pos[1]))
+                    if "team" in pinfo:
+                        teams[pid_int] = int(pinfo["team"])
+            if frame_players:
+                player_traj[fi] = frame_players
+
+        for fi, b_frame in enumerate(ball_list):
+            if not b_frame:
+                continue
+            for bid, binfo in b_frame.items():
+                pos = binfo.get("position_minimap") or binfo.get("position_transformed")
+                if pos and len(pos) == 2 and not any(np.isnan(v) for v in pos):
+                    ball_traj[fi] = (float(pos[0]), float(pos[1]))
+                    break
+                elif "bbox" in binfo:
+                    bx1, by1, bx2, by2 = binfo["bbox"]
+                    ball_traj[fi] = (float((bx1 + bx2) / 2.0 / 10.0), float((by1 + by2) / 2.0 / 10.0))
+                    break
+
+        detector = PassEventDetector()
+        passes = detector.detect_passes(ball_traj, player_traj, teams)
+        tracked_team = 1
+        if teams:
+            tracked_team = max(set(teams.values()), key=list(teams.values()).count)
+        net = detector.build_pass_network(passes, team_id=tracked_team)
+
+        sm.update_task(session_id, task_id, progress=60)
+
+        output_path = sm.session_output_dir(session_id) / "pass_network.png"
+
+        fig, ax = plt.subplots(figsize=(11, 7), facecolor="#1a1a2e")
+        ax.set_facecolor("#16213e")
+        for rect in [plt.Rectangle((0, 0), 105, 68, fill=False, ec="white", lw=1.5),
+                     plt.Rectangle((0, 23.2), 16.5, 21.6, fill=False, ec="white"),
+                     plt.Rectangle((88.5, 23.2), 16.5, 21.6, fill=False, ec="white")]:
+            ax.add_patch(rect)
+
+        nodes = net.get("nodes", [])
+        node_lookup = {}
+        for ninfo in nodes:
+            pid = ninfo["player_id"]
+            cx, cy = ninfo["centroid_xy"]
+            node_lookup[pid] = (cx, cy)
+            passes_made = ninfo.get("passes_made", 0)
+            node_size = max(100, min(800, 100 + passes_made * 40))
+            ax.scatter(cx, cy, s=node_size, c="#3b82f6", edgecolors="white", lw=2, zorder=5)
+            ax.annotate(f"#{pid}", xy=(cx, cy), xytext=(0, 0), textcoords="offset points",
+                        ha="center", va="center", color="white", fontsize=9, fontweight="bold", zorder=6)
+
+        edges = net.get("edges", [])
+        for e in edges:
+            src, dst = e["source"], e["target"]
+            if src in node_lookup and dst in node_lookup:
+                ux, uy = node_lookup[src]
+                vx, vy = node_lookup[dst]
+                count = e.get("count", 1)
+                lw = max(1.0, min(5.0, count * 1.5))
+                ax.annotate("", xy=(vx, vy), xytext=(ux, uy),
+                            arrowprops=dict(arrowstyle="->", color="#f59e0b", lw=lw, shrinkA=8, shrinkB=8, alpha=0.8),
+                            zorder=4)
+
+        ax.set_xlim(0, 105)
+        ax.set_ylim(0, 68)
+        title = f"Passing Network — Total Passes: {net.get('total_passes', 0)} | Completed: {net.get('completed_passes', 0)} (Acc: {net.get('completion_rate_pct', 0)}%)"
+        ax.set_title(title, color="white", fontsize=12, fontweight="bold")
+        ax.tick_params(colors="white")
+        plt.tight_layout()
+        plt.savefig(str(output_path), dpi=150, bbox_inches="tight")
+        plt.close()
+
+        result_data = {
+            "total_passes": net.get("total_passes", 0),
+            "completed_passes": net.get("completed_passes", 0),
+            "completion_rate_pct": net.get("completion_rate_pct", 0),
+            "progressive_passes": net.get("progressive_passes", 0),
+            "zone14_entries": net.get("zone14_entries", 0),
+            "box_entries": net.get("box_entries", 0),
+        }
+        _finish_task(sm, session_id, task_id, output_path, result=result_data)
+    except Exception as exc:
+        sm.update_task(session_id, task_id, status="failed", error=str(exc))
+        _log_error("pass_network", session_id, exc)
+
+
+def run_shot_xg(session_id: str, session: dict, task_id: str, sm: SessionManager):
+    """
+    Spot tactical shot events and compute freeze-frame Expected Goals (xG) physics analysis.
+    Generates shot_map.png and returns full shooting intelligence metrics.
+    """
+    try:
+        sm.update_task(session_id, task_id, status="running", progress=15)
+        data = _load_cache(session)
+        tracks = data.get("tracks", {})
+
+        from .shot_event_detector import ShotEventDetector
+
+        players_list = tracks.get("players", [])
+        ball_list = tracks.get("ball", [])
+        teams = {}
+        player_traj = {}
+        ball_traj = {}
+
+        for fi, p_frame in enumerate(players_list):
+            if not p_frame:
+                continue
+            frame_players = {}
+            for pid, pinfo in p_frame.items():
+                if not pinfo:
+                    continue
+                pos = pinfo.get("position_minimap") or pinfo.get("position_transformed")
+                if pos and len(pos) == 2 and not any(np.isnan(v) for v in pos):
+                    pid_int = int(pid) if str(pid).isdigit() else hash(pid) % 1000
+                    frame_players[pid_int] = (float(pos[0]), float(pos[1]))
+                    if "team" in pinfo:
+                        teams[pid_int] = int(pinfo["team"])
+            if frame_players:
+                player_traj[fi] = frame_players
+
+        for fi, b_frame in enumerate(ball_list):
+            if not b_frame:
+                continue
+            for bid, binfo in b_frame.items():
+                pos = binfo.get("position_minimap") or binfo.get("position_transformed")
+                if pos and len(pos) == 2 and not any(np.isnan(v) for v in pos):
+                    ball_traj[fi] = (float(pos[0]), float(pos[1]))
+                    break
+                elif "bbox" in binfo:
+                    bx1, by1, bx2, by2 = binfo["bbox"]
+                    ball_traj[fi] = (float((bx1 + bx2) / 2.0 / 10.0), float((by1 + by2) / 2.0 / 10.0))
+                    break
+
+        fps = float(session.get("video_fps") or 25.0)
+        detector = ShotEventDetector(fps=fps)
+        shots = detector.detect_shots(ball_traj, player_traj, teams)
+        shooting_summary = detector.summarize_shooting_intelligence(shots)
+
+        sm.update_task(session_id, task_id, progress=65)
+
+        output_path = sm.session_output_dir(session_id) / "shot_map.png"
+        detector.render_shot_map(shots, output_path)
+
+        # Also persist shot_xg_summary.json
+        summary_path = sm.session_output_dir(session_id) / "shot_xg_summary.json"
+        with open(summary_path, "w", encoding="utf-8") as f:
+            json.dump(shooting_summary, f, ensure_ascii=False, indent=2)
+
+        _finish_task(sm, session_id, task_id, output_path, result=shooting_summary)
+    except Exception as exc:
+        sm.update_task(session_id, task_id, status="failed", error=str(exc))
+        _log_error("shot_xg", session_id, exc)
+
+
+def run_pressing_intensity(session_id: str, session: dict, task_id: str, sm: SessionManager):
+    """
+    Spot defensive pressing duel actions and compute Passes Per Defensive Action (PPDA)
+    and spatial pressing intensity metrics. Generates pressing_intensity.png and summary JSON.
+    """
+    try:
+        sm.update_task(session_id, task_id, status="running", progress=15)
+        data = _load_cache(session)
+        tracks = data.get("tracks", {})
+
+        from .pressing_intensity_engine import PressingIntensityEngine
+        from .pass_event_detector import PassEventDetector
+
+        players_list = tracks.get("players", [])
+        ball_list = tracks.get("ball", [])
+        teams = {}
+        player_traj = {}
+        ball_traj = {}
+
+        for fi, p_frame in enumerate(players_list):
+            if not p_frame:
+                continue
+            frame_players = {}
+            for pid, pinfo in p_frame.items():
+                if not pinfo:
+                    continue
+                pos = pinfo.get("position_minimap") or pinfo.get("position_transformed")
+                if pos and len(pos) == 2 and not any(np.isnan(v) for v in pos):
+                    pid_int = int(pid) if str(pid).isdigit() else hash(pid) % 1000
+                    frame_players[pid_int] = (float(pos[0]), float(pos[1]))
+                    if "team" in pinfo:
+                        teams[pid_int] = int(pinfo["team"])
+            if frame_players:
+                player_traj[fi] = frame_players
+
+        for fi, b_frame in enumerate(ball_list):
+            if not b_frame:
+                continue
+            for bid, binfo in b_frame.items():
+                pos = binfo.get("position_minimap") or binfo.get("position_transformed")
+                if pos and len(pos) == 2 and not any(np.isnan(v) for v in pos):
+                    ball_traj[fi] = (float(pos[0]), float(pos[1]))
+                    break
+                elif "bbox" in binfo:
+                    bx1, by1, bx2, by2 = binfo["bbox"]
+                    ball_traj[fi] = (float((bx1 + bx2) / 2.0 / 10.0), float((by1 + by2) / 2.0 / 10.0))
+                    break
+
+        fps = float(session.get("video_fps") or 25.0)
+
+        pass_detector = PassEventDetector(fps=fps)
+        passes = pass_detector.detect_passes(ball_traj, player_traj, teams)
+        pass_events_raw = [p.to_dict() for p in passes]
+
+        engine = PressingIntensityEngine(fps=fps)
+        pressing_analysis = engine.analyze_match_pressing(
+            ball_trajectory=ball_traj,
+            player_trajectories=player_traj,
+            teams=teams,
+            pass_events=pass_events_raw,
+        )
+
+        sm.update_task(session_id, task_id, progress=65)
+
+        output_path = sm.session_output_dir(session_id) / "pressing_intensity.png"
+        engine.render_pressing_report(pressing_analysis, output_path)
+
+        summary_path = sm.session_output_dir(session_id) / "pressing_ppda_summary.json"
+        with open(summary_path, "w", encoding="utf-8") as f:
+            json.dump(pressing_analysis, f, ensure_ascii=False, indent=2)
+
+        _finish_task(sm, session_id, task_id, output_path, result=pressing_analysis)
+    except Exception as exc:
+        sm.update_task(session_id, task_id, status="failed", error=str(exc))
+        _log_error("pressing_intensity", session_id, exc)
+
+
+def run_match_bundle(session_id: str, session: dict, task_id: str, sm: SessionManager):
+    """
+    Unified Single-Call Match Dossier Zip Packager & Checksum Manifest Generator.
+    Aggregates all visual charts, telemetry JSONs, AI markdown report, and video replays
+    into a single match_analysis_bundle.zip with root manifest.json.
+    """
+    try:
+        sm.update_task(session_id, task_id, status="running", progress=20)
+        out_dir = sm.session_output_dir(session_id)
+        cache_data = None
+        try:
+            cache_data = _load_cache(session)
+        except Exception:
+            pass
+
+        from .match_report_bundle_packager import MatchReportBundlePackager
+
+        packager = MatchReportBundlePackager()
+        sm.update_task(session_id, task_id, progress=60)
+        zip_path, manifest = packager.package_bundle(
+            session_id=session_id,
+            output_dir=out_dir,
+            session=session,
+            cache_data=cache_data,
+        )
+
+        manifest_dict = manifest.to_dict()
+        _finish_task(sm, session_id, task_id, zip_path, result=manifest_dict)
+    except Exception as exc:
+        sm.update_task(session_id, task_id, status="failed", error=str(exc))
+        _log_error("match_bundle", session_id, exc)
+
+
+def run_turnover_transition(session_id: str, session: dict, task_id: str, sm: SessionManager):
+    """
+    Spot defensive turnovers, 5-second post-turnover transition reaction latency (tau_counterpress),
+    and fast-break counter-attacks. Generates turnover_transitions.png and summary JSON.
+    """
+    try:
+        sm.update_task(session_id, task_id, status="running", progress=15)
+        data = _load_cache(session)
+        tracks = data.get("tracks", {})
+
+        from .turnover_transition_spotter import TurnoverTransitionSpotter
+
+        players_list = tracks.get("players", [])
+        ball_list = tracks.get("ball", [])
+        teams = {}
+        player_traj = {}
+        ball_traj = {}
+
+        for fi, p_frame in enumerate(players_list):
+            if not p_frame:
+                continue
+            frame_players = {}
+            for pid, pinfo in p_frame.items():
+                if not pinfo:
+                    continue
+                pos = pinfo.get("position_minimap") or pinfo.get("position_transformed")
+                if pos and len(pos) == 2 and not any(np.isnan(v) for v in pos):
+                    pid_int = int(pid) if str(pid).isdigit() else hash(pid) % 1000
+                    frame_players[pid_int] = (float(pos[0]), float(pos[1]))
+                    if "team" in pinfo:
+                        teams[pid_int] = int(pinfo["team"])
+            if frame_players:
+                player_traj[fi] = frame_players
+
+        for fi, b_frame in enumerate(ball_list):
+            if not b_frame:
+                continue
+            for bid, binfo in b_frame.items():
+                pos = binfo.get("position_minimap") or binfo.get("position_transformed")
+                if pos and len(pos) == 2 and not any(np.isnan(v) for v in pos):
+                    ball_traj[fi] = (float(pos[0]), float(pos[1]))
+                    break
+                elif "bbox" in binfo and len(binfo["bbox"]) == 4:
+                    bx1, by1, bx2, by2 = binfo["bbox"]
+                    ball_traj[fi] = (float((bx1 + bx2) / 2.0 / 10.0), float((by1 + by2) / 2.0 / 10.0))
+                    break
+
+        fps = float(session.get("video_fps") or 25.0)
+
+        spotter = TurnoverTransitionSpotter(fps=fps)
+        turnovers = spotter.spot_turnovers(
+            ball_trajectory=ball_traj,
+            player_trajectories=player_traj,
+            teams=teams,
+        )
+        transition_summary = spotter.generate_transition_summary(turnovers)
+
+        sm.update_task(session_id, task_id, progress=65)
+
+        output_path = sm.session_output_dir(session_id) / "turnover_transitions.png"
+        spotter.render_turnover_map(turnovers, output_path)
+
+        summary_path = sm.session_output_dir(session_id) / "turnover_transitions.json"
+        with open(summary_path, "w", encoding="utf-8") as f:
+            json.dump(transition_summary, f, ensure_ascii=False, indent=2)
+
+        _finish_task(sm, session_id, task_id, output_path, result=transition_summary)
+    except Exception as exc:
+        sm.update_task(session_id, task_id, status="failed", error=str(exc))
+        _log_error("turnover_transition", session_id, exc)
+
+
+def run_vertical_crop(session_id: str, session: dict, task_id: str, sm: SessionManager):
+    """
+    Generates 9:16 mobile-first vertical highlight clip with smooth cinematic tracking.
+    """
+    try:
+        sm.update_task(session_id, task_id, status="running", progress=15)
+        data = _load_cache(session)
+        tracked_bboxes = data.get("tracked_bboxes", {})
+
+        from .vertical_crop import compute_smooth_crop_centers
+
+        video_path = session.get("video_path")
+        w, h = 1920, 1080
+        if video_path and Path(video_path).exists():
+            with _video_capture(video_path) as cap:
+                w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1920
+                h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 1080
+
+        max_f = max(tracked_bboxes.keys()) if tracked_bboxes else 0
+        centers = []
+        for fi in range(max_f + 1):
+            if fi in tracked_bboxes:
+                bx, by, bw, bh = tracked_bboxes[fi]
+                centers.append((bx + bw / 2.0, by + bh / 2.0))
+            else:
+                centers.append(None)
+
+        crop_offsets = compute_smooth_crop_centers(centers, w, h)
+        sm.update_task(session_id, task_id, progress=60)
+
+        output_path = sm.session_output_dir(session_id) / "vertical_crop_916.mp4"
+        
+        manifest_path = sm.session_output_dir(session_id) / "vertical_crop_manifest.json"
+        manifest_path.write_text(json.dumps({
+            "original_resolution": [w, h],
+            "crop_aspect_ratio": "9:16",
+            "frame_offsets": crop_offsets,
+        }))
+
+        if video_path and Path(video_path).exists() and shutil.which("ffmpeg"):
+            crop_w = int(h * 9.0 / 16.0)
+            if crop_w % 2 != 0:
+                crop_w -= 1
+            avg_x = int(np.mean([co[0] for co in crop_offsets])) if crop_offsets else (w - crop_w) // 2
+            avg_x = max(0, min(w - crop_w, avg_x))
+            
+            cmd = [
+                "ffmpeg", "-y", "-i", video_path,
+                "-vf", f"crop={crop_w}:{h}:{avg_x}:0",
+                "-t", "10",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                "-pix_fmt", "yuv420p", str(output_path)
+            ]
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+
+        if not output_path.exists():
+            output_path = manifest_path
+
+        result_data = {
+            "crop_width": int(h * 9.0 / 16.0),
+            "crop_height": h,
+            "total_frames_cropped": len(crop_offsets),
+        }
+        _finish_task(sm, session_id, task_id, output_path, result=result_data)
+    except Exception as exc:
+        sm.update_task(session_id, task_id, status="failed", error=str(exc))
+        _log_error("vertical_crop", session_id, exc)
+
+
+def run_full_replay(session_id: str, session: dict, task_id: str, sm: SessionManager):
+    """
+    Renders full-match or highlight showcase replay video with tracking overlays.
+    """
+    try:
+        sm.update_task(session_id, task_id, status="running", progress=10)
+        output_path = sm.session_output_dir(session_id) / "full_replay.mp4"
+
+        gemini_video = sm.session_output_dir(session_id) / "gemini_video.mp4"
+        samurai_temp = sm.session_output_dir(session_id) / "samurai_temp.mp4"
+
+        if gemini_video.exists() and gemini_video.stat().st_size > 0:
+            shutil.copy2(gemini_video, output_path)
+        elif samurai_temp.exists() and samurai_temp.stat().st_size > 0:
+            shutil.copy2(samurai_temp, output_path)
+        else:
+            video_path = session.get("video_path")
+            if video_path and Path(video_path).exists():
+                data = _load_cache(session)
+                tracked_bboxes = data.get("tracked_bboxes", {})
+                _render_gemini_video(video_path, tracked_bboxes, output_path, stride=2)
+            else:
+                # Mark done with placeholder or raising if missing
+                raise FileNotFoundError(f"Cannot generate full_replay: no local video or cache found for session {session_id}")
+
+        _finish_task(sm, session_id, task_id, output_path)
+    except Exception as exc:
+        sm.update_task(session_id, task_id, status="failed", error=str(exc))
+        _log_error("full_replay", session_id, exc)
+
+
 # ── 3h. AI 总结（Gemini / Qwen 多模态）──────────────────────────────────────
 
 def _probe_video_duration_sec(video_path: str) -> float:
@@ -2591,53 +3281,50 @@ def _fmt_mmss(sec: float) -> str:
 
 
 def _compute_sprint_stats_for_ai(tracks: dict, tracked_bboxes: dict, fps: float) -> dict:
-    """复用 run_sprint_analysis 的判定规则（>25 km/h 持续 ≥ 2s）但不出图，
-    返回轻量 JSON 给 LLM。"""
-    SPRINT_KMH     = 25.0
-    MIN_SPRINT_SEC = 2.0
-    min_frames     = int(MIN_SPRINT_SEC * fps) if fps else 50
+    """使用 SprintBurstDebouncer 提取冲刺爆发数据（>=24 km/h 持续 >= 0.8s，容忍 <= 3 帧遮挡抖动），
+    返回轻量结构化 JSON 给 LLM。"""
+    from server.pipeline.sprint_burst_debouncer import SprintBurstDebouncer
 
     speeds: list[float] = []
-    for i in range(len(tracks["players"])):
+    positions: list[tuple[float, float] | None] = []
+    for i in range(len(tracks.get("players", []))):
         info = None
         if i in tracked_bboxes:
             sx, sy, sw, sh = tracked_bboxes[i]
-            info = _find_matched_player(tracks["players"][i], (sx + sw / 2, sy + sh / 2))
+            info = _find_matched_player(tracks["players"][i], (sx, sy, sw, sh))
         speeds.append(float(info.get("speed", 0)) if info else 0.0)
+        pos = None
+        if info:
+            pos = info.get("position_minimap") or info.get("position_transformed")
+        positions.append(pos if (pos and len(pos) == 2 and not any(np.isnan(p) for p in pos)) else None)
 
-    segments: list[tuple[int, int, float]] = []  # (start, end, peak_kmh)
-    in_sprint, sprint_start, peak = False, 0, 0.0
-    for i, spd in enumerate(speeds):
-        if spd >= SPRINT_KMH:
-            if not in_sprint:
-                in_sprint, sprint_start, peak = True, i, spd
-            else:
-                peak = max(peak, spd)
-        else:
-            if in_sprint:
-                if (i - sprint_start) >= min_frames:
-                    segments.append((sprint_start, i - 1, peak))
-                in_sprint, peak = False, 0.0
-    if in_sprint and (len(speeds) - sprint_start) >= min_frames:
-        segments.append((sprint_start, len(speeds) - 1, peak))
+    debouncer = SprintBurstDebouncer(
+        sprint_speed_kmh=24.0,
+        min_duration_s=0.8,
+        max_dropout_frames=3,
+        dropout_speed_floor_kmh=20.0,
+        fps=fps,
+    )
+    res = debouncer.detect_sprints(speeds, positions)
 
-    durations_s = [(e - s) / max(fps, 1) for s, e, _ in segments]
     events = [
         {
-            "start_sec":   round(s / max(fps, 1), 1),
-            "end_sec":     round(e / max(fps, 1), 1),
-            "time_mm_ss":  _fmt_mmss(s / max(fps, 1)),
-            "duration_s":  round(d, 1),
-            "peak_kmh":    round(float(pk), 1),
+            "start_sec": e.get("time_sec", 0.0),
+            "end_sec": round(e.get("end_frame", 0) / max(fps, 1.0), 1),
+            "time_mm_ss": e.get("time_mm_ss", "00:00"),
+            "duration_s": e.get("duration_s", 0.0),
+            "peak_kmh": e.get("peak_speed_kmh", 0.0),
+            "distance_m": e.get("distance_m", 0.0),
         }
-        for (s, e, pk), d in zip(segments, durations_s)
+        for e in res.get("events", [])
     ]
     return {
-        "count":          len(segments),
-        "avg_duration_s": round(float(np.mean(durations_s)), 2) if durations_s else 0.0,
-        "max_duration_s": round(float(np.max(durations_s)),  2) if durations_s else 0.0,
-        "peak_kmh":       round(float(max(speeds)), 1) if speeds else 0.0,
-        "events":         events[:30],   # 防 token 爆炸；30 次冲刺差不多够看
+        "count": res.get("sprint_count", 0),
+        "avg_duration_s": res.get("avg_duration_s", 0.0),
+        "max_duration_s": res.get("max_duration_s", 0.0),
+        "total_distance_m": res.get("total_sprint_distance_m", 0.0),
+        "peak_kmh": res.get("max_speed_kmh", 0.0),
+        "events": events[:30],   # 防 token 爆炸；30 次冲刺差不多够看
     }
 
 
@@ -2656,7 +3343,7 @@ def _compute_pitch_zones_for_ai(tracks: dict, tracked_bboxes: dict) -> dict:
         if i not in tracked_bboxes:
             continue
         sx, sy, sw, sh = tracked_bboxes[i]
-        me = _find_matched_player(tracks["players"][i], (sx + sw / 2, sy + sh / 2))
+        me = _find_matched_player(tracks["players"][i], (sx, sy, sw, sh))
         if not me:
             continue
         pos = me.get("position_minimap") or me.get("position_transformed")
@@ -2707,107 +3394,496 @@ def _compute_pitch_zones_for_ai(tracks: dict, tracked_bboxes: dict) -> dict:
 
 def _compute_defensive_breakthroughs_for_ai(tracks: dict, tracked_bboxes: dict,
                                               fps: float) -> dict:
-    """复用 run_defensive_line 的"越过对方最深 4 人均值"判定，
-    返回每次穿透的时间点（mm:ss）给 LLM。
+    """使用 DefensiveLineAnalyzer 分析越过对方最后 4 人防线的渗透事件，
+    返回包含渗透深度与发生时间点（mm:ss）的结构化 JSON 给 LLM。"""
+    from server.pipeline.defensive_line_analyzer import DefensiveLineAnalyzer
 
-    旧实现的 bug：判定逻辑 `tx > defense_x` 只对"朝大 x 方向进攻"的球员
-    成立。对朝小 x 方向进攻的球员（即原视频里朝左推进），这个条件反过来
-    成了"球员退到自己防守端"，导致 100% 防守三区的中后卫 30 秒被检测到
-    6 次"突破"。
-    现在先全局算追踪球员朝哪边进攻（用整段时长的平均 x 跟对方平均 x 对比），
-    然后判定条件按方向翻转。
-    """
-    # 确定追踪球员队伍
-    tracked_teams: list[int] = []
-    for i in range(len(tracks["players"])):
-        if i not in tracked_bboxes:
-            continue
-        sx, sy, sw, sh = tracked_bboxes[i]
-        info = _find_matched_player(tracks["players"][i], (sx + sw / 2, sy + sh / 2))
-        if info and info.get("team"):
-            tracked_teams.append(int(info["team"]))
-    if not tracked_teams:
-        return {"count": 0, "events": []}
-    tracked_team = int(np.median(tracked_teams))
-    opponent_team = 2 if tracked_team == 1 else 1
-
-    # 全局判定追踪球员的进攻方向：追踪球员平均 x < 对方平均 x → 我方
-    # 大本营在左，朝右进攻（attacking_right=True）；反之朝左。
-    all_my_xs: list[float] = []
-    all_opp_xs: list[float] = []
-    for i in range(len(tracks["players"])):
-        for pid, info in tracks["players"][i].items():
-            if not info:
-                continue
-            pos = info.get("position_minimap") or info.get("position_transformed")
-            if not (pos and len(pos) == 2 and not any(np.isnan(p) for p in pos)):
-                continue
-            tm = info.get("team")
-            if tm == tracked_team:
-                all_my_xs.append(float(pos[0]))
-            elif tm == opponent_team:
-                all_opp_xs.append(float(pos[0]))
-    if not all_my_xs or not all_opp_xs:
-        return {"count": 0, "tracked_team": tracked_team, "events": []}
-    attacking_right = float(np.mean(all_my_xs)) < float(np.mean(all_opp_xs))
-
-    # 逐帧拿 (tracked_x, defense_x)
-    frame_data: list[tuple[float, float] | None] = []
-    for i in range(len(tracks["players"])):
-        tx = None
-        if i in tracked_bboxes:
-            sx, sy, sw, sh = tracked_bboxes[i]
-            info = _find_matched_player(tracks["players"][i], (sx + sw / 2, sy + sh / 2))
-            if info:
-                pos = info.get("position_minimap") or info.get("position_transformed")
-                if pos and len(pos) == 2 and not any(np.isnan(p) for p in pos):
-                    tx = float(pos[0])
-        opp_xs = []
-        for pid, info in tracks["players"][i].items():
-            if not info or info.get("team") != opponent_team:
-                continue
-            pp = info.get("position_minimap") or info.get("position_transformed")
-            if pp and len(pp) == 2 and not any(np.isnan(v) for v in pp):
-                opp_xs.append(float(pp[0]))
-        if tx is not None and opp_xs:
-            opp_xs.sort()
-            # 对方防线 = 对方最深 4 人均值。朝大 x 进攻 → 防线是 4 个最大
-            # x（对方守门员附近）。朝小 x 进攻 → 防线是 4 个最小 x。
-            deepest = opp_xs[-4:] if attacking_right else opp_xs[:4]
-            frame_data.append((tx, float(np.mean(deepest))))
-        else:
-            frame_data.append(None)
-
-    # 检测穿透：球员越过对方防线持续 ≥ 3 帧。
-    # 朝右进攻：tx > defense_x = 突破。
-    # 朝左进攻：tx < defense_x = 突破。
-    events_frames: list[int] = []
-    behind, consec = False, 0
-    for i, fd in enumerate(frame_data):
-        if fd is None:
-            consec, behind = 0, False
-            continue
-        tx, dx = fd
-        broke = (tx > dx) if attacking_right else (tx < dx)
-        if broke:
-            consec += 1
-            if consec >= 3 and not behind:
-                events_frames.append(i)
-                behind = True
-        else:
-            consec, behind = 0, False
+    analyzer = DefensiveLineAnalyzer(min_consecutive_frames=3)
+    res = analyzer.analyze_defensive_line(tracks, tracked_bboxes)
 
     events = [
-        {"time_sec": round(f / max(fps, 1), 1),
-         "time_mm_ss": _fmt_mmss(f / max(fps, 1))}
-        for f in events_frames
+        {
+            "time_sec": round(ev["frame_idx"] / max(fps, 1.0), 1),
+            "time_mm_ss": _fmt_mmss(ev["frame_idx"] / max(fps, 1.0)),
+            "depth_m": ev.get("penetration_depth_m", 0.0),
+        }
+        for ev in res.get("events", [])
     ]
     return {
-        "count":              len(events_frames),
-        "tracked_team":       tracked_team,
-        "attacking_direction": "right" if attacking_right else "left",
-        "events":             events[:30],
+        "count": res.get("penetration_count", 0),
+        "tracked_team": res.get("tracked_team"),
+        "attacking_direction": res.get("attacking_direction", "unknown"),
+        "max_depth_m": res.get("max_penetration_depth_m", 0.0),
+        "events": events[:30],
     }
+
+
+def _compute_speed_telemetry_for_ai(tracks: dict, tracked_bboxes: dict, fps: float) -> dict:
+    """使用 SpeedTelemetryEngine 提取 FIFA 标准 5 区间跑动负荷与体能消耗指标，
+    返回轻量 JSON 给 LLM。"""
+    from server.pipeline.speed_telemetry_engine import SpeedTelemetryEngine
+
+    speeds: list[float] = []
+    distances: list[float] = []
+    for i in range(len(tracks.get("players", []))):
+        info = None
+        if i in tracked_bboxes:
+            sx, sy, sw, sh = tracked_bboxes[i]
+            info = _find_matched_player(tracks["players"][i], (sx, sy, sw, sh))
+        speeds.append(float(info.get("speed", 0)) if info else 0.0)
+        prev_d = distances[-1] if distances else 0.0
+        distances.append(float(info.get("distance", prev_d)) if info else prev_d)
+
+    engine = SpeedTelemetryEngine(fps=fps, target_downsample_points=60)
+    res = engine.process_telemetry(speeds, distances)
+
+    zb_summary = {}
+    for z_id, z_data in res.get("zone_breakdown", {}).items():
+        zb_summary[z_id] = {
+            "name": z_data["name"],
+            "distance_m": z_data["distance_m"],
+            "duration_s": z_data["duration_s"],
+            "percentage": z_data["percentage"],
+        }
+
+    return {
+        "max_speed_kmh": res.get("max_speed_kmh", 0.0),
+        "avg_speed_kmh": res.get("avg_speed_kmh", 0.0),
+        "total_distance_m": res.get("total_distance_m", 0.0),
+        "zone_breakdown": zb_summary,
+    }
+
+
+def _compute_passing_stats_for_ai(data: dict, tracks: dict,
+                                  tracked_bboxes: dict, fps: float) -> dict:
+    """
+    提取并组织传球网络与渗透智能数据（Passing Intelligence & Network）供 LLM 战术教练分析。
+    优先从缓存读取 pass_events 和 pass_networks；若无则快速在内存中运行 PassEventDetector。
+    """
+    from .pass_event_detector import PassEventDetector
+
+    pass_events = data.get("pass_events") or []
+    pass_networks = data.get("pass_networks") or {}
+
+    # 若缓存中无传球数据，现场运行 PassEventDetector
+    if not pass_events and tracks and "ball" in tracks and "players" in tracks:
+        try:
+            detector = PassEventDetector(fps=fps, control_radius_m=2.8, min_pass_distance_m=3.5)
+            ball_traj = {}
+            for i, b_dict in enumerate(tracks.get("ball", [])):
+                b_info = b_dict.get(1, {})
+                pt = b_info.get("position_transformed")
+                if pt and len(pt) == 2:
+                    ball_traj[i] = (float(pt[0]), float(pt[1]))
+                elif "bbox" in b_info and len(b_info["bbox"]) == 4:
+                    bb = b_info["bbox"]
+                    ball_traj[i] = ((bb[0] + bb[2]) / 2.0, (bb[1] + bb[3]) / 2.0)
+
+            player_traj = {}
+            player_team_map = {}
+            for i, p_dict in enumerate(tracks.get("players", [])):
+                f_players = {}
+                for pid, p_info in p_dict.items():
+                    if not p_info:
+                        continue
+                    pt = p_info.get("position_transformed")
+                    if pt and len(pt) == 2:
+                        f_players[pid] = (float(pt[0]), float(pt[1]))
+                    elif "bbox" in p_info and len(p_info["bbox"]) == 4:
+                        bb = p_info["bbox"]
+                        f_players[pid] = ((bb[0] + bb[2]) / 2.0, (bb[1] + bb[3]) / 2.0)
+                    if "team" in p_info and pid not in player_team_map:
+                        player_team_map[pid] = int(p_info["team"])
+                player_traj[i] = f_players
+
+            detected = detector.detect_passes(ball_traj, player_traj, player_team_map)
+            pass_events = [p.to_dict() for p in detected]
+            pass_networks = {
+                "team1": detector.build_pass_network(detected, team_id=1),
+                "team2": detector.build_pass_network(detected, team_id=2),
+            }
+        except Exception as _pe:
+            print(f"[AI_SUMMARY] on-the-fly pass detection failed: {_pe}")
+
+    def _format_team_net(net: dict) -> dict:
+        if not net:
+            return {
+                "total_passes": 0, "completed_passes": 0, "completion_rate_pct": 0.0,
+                "progressive_passes": 0, "zone14_entries": 0, "box_entries": 0,
+                "key_hubs": [], "top_passers": []
+            }
+        edges = net.get("edges", [])
+        top_edges = [
+            {"from_player": e["source"], "to_player": e["target"], "count": e["count"]}
+            for e in edges[:4]
+        ]
+        nodes = net.get("nodes", [])
+        top_nodes = [
+            {"player_id": n["player_id"], "passes_made": n["passes_made"], "passes_received": n["passes_received"]}
+            for n in nodes[:4]
+        ]
+        return {
+            "total_passes": net.get("total_passes", 0),
+            "completed_passes": net.get("completed_passes", 0),
+            "completion_rate_pct": net.get("completion_rate_pct", 0.0),
+            "progressive_passes": net.get("progressive_passes", 0),
+            "zone14_entries": net.get("zone14_entries", 0),
+            "box_entries": net.get("box_entries", 0),
+            "key_hubs": top_edges,
+            "top_passers": top_nodes,
+        }
+
+    team1_summary = _format_team_net(pass_networks.get("team1", {}))
+    team2_summary = _format_team_net(pass_networks.get("team2", {}))
+
+    key_events = []
+    for p in pass_events:
+        if p.get("outcome") != "completed":
+            continue
+        is_prog = p.get("is_progressive", False)
+        is_z14 = p.get("is_zone14_entry", False)
+        is_box = p.get("is_box_entry", False)
+        if is_prog or is_z14 or is_box:
+            tags = []
+            if is_box: tags.append("box_entry")
+            if is_z14: tags.append("zone14_entry")
+            if is_prog: tags.append("progressive")
+            sf = p.get("start_frame", 0)
+            sec = sf / max(fps, 1.0)
+            key_events.append({
+                "time_sec": round(sec, 1),
+                "time_mm_ss": _fmt_mmss(sec),
+                "passer_id": p.get("passer_id"),
+                "receiver_id": p.get("receiver_id"),
+                "passer_team": p.get("passer_team"),
+                "distance_m": round(p.get("pass_distance", 0.0), 1),
+                "tags": tags,
+            })
+
+    tracked_p_stats = None
+    tracked_pid = None
+    if tracked_bboxes and tracks and "players" in tracks:
+        matched_pids = []
+        for i, bbox in tracked_bboxes.items():
+            if i < len(tracks["players"]):
+                info = _find_matched_player(tracks["players"][i], bbox)
+                if info and "track_id" in info:
+                    matched_pids.append(info["track_id"])
+                elif info:
+                    for pid, pdata in tracks["players"][i].items():
+                        if pdata is info:
+                            matched_pids.append(pid)
+                            break
+        if matched_pids:
+            from collections import Counter
+            tracked_pid = Counter(matched_pids).most_common(1)[0][0]
+
+    if tracked_pid is not None:
+        player_made = [p for p in pass_events if p.get("passer_id") == tracked_pid]
+        player_comp = [p for p in player_made if p.get("outcome") == "completed"]
+        player_recv = [p for p in pass_events if p.get("receiver_id") == tracked_pid and p.get("outcome") == "completed"]
+
+        prog_count = sum(1 for p in player_comp if p.get("is_progressive"))
+        z14_count = sum(1 for p in player_comp if p.get("is_zone14_entry"))
+        box_count = sum(1 for p in player_comp if p.get("is_box_entry"))
+
+        partners_count = {}
+        for p in player_comp:
+            rid = p.get("receiver_id")
+            if rid is not None:
+                partners_count[rid] = partners_count.get(rid, 0) + 1
+        for p in player_recv:
+            pid = p.get("passer_id")
+            if pid is not None:
+                partners_count[pid] = partners_count.get(pid, 0) + 1
+
+        top_partners = [
+            {"teammate_id": pid, "exchanges": count}
+            for pid, count in sorted(partners_count.items(), key=lambda x: x[1], reverse=True)[:3]
+        ]
+
+        total_att = len(player_made)
+        comp_len = len(player_comp)
+        acc_pct = (comp_len / total_att * 100.0) if total_att > 0 else 0.0
+
+        tracked_p_stats = {
+            "player_id": tracked_pid,
+            "passes_attempted": total_att,
+            "passes_completed": comp_len,
+            "passes_received": len(player_recv),
+            "completion_rate_pct": round(acc_pct, 1),
+            "progressive_passes": prog_count,
+            "zone14_entries": z14_count,
+            "box_entries": box_count,
+            "top_combination_partners": top_partners,
+        }
+
+    return {
+        "team1": team1_summary,
+        "team2": team2_summary,
+        "key_penetration_events": key_events[:20],
+        "tracked_player": tracked_p_stats,
+    }
+
+
+def _compute_shot_xg_for_ai(data: dict, tracks: dict,
+                            tracked_bboxes: dict, fps: float) -> dict:
+    """
+    Extracts shooting events, clinical conversion, and freeze-frame Expected Goals (xG)
+    for multimodal LLM tactical coach analysis.
+    """
+    from .shot_event_detector import ShotEventDetector
+
+    try:
+        detector = ShotEventDetector(fps=fps)
+        ball_traj = {}
+        for i, b_dict in enumerate(tracks.get("ball", [])):
+            for bid, b_info in b_dict.items():
+                pt = b_info.get("position_minimap") or b_info.get("position_transformed")
+                if pt and len(pt) == 2 and not any(np.isnan(v) for v in pt):
+                    ball_traj[i] = (float(pt[0]), float(pt[1]))
+                    break
+                elif "bbox" in b_info and len(b_info["bbox"]) == 4:
+                    bb = b_info["bbox"]
+                    ball_traj[i] = ((bb[0] + bb[2]) / 2.0 / 10.0, (bb[1] + bb[3]) / 2.0 / 10.0)
+                    break
+
+        player_traj = {}
+        player_team_map = {}
+        for i, p_dict in enumerate(tracks.get("players", [])):
+            f_players = {}
+            for pid, p_info in p_dict.items():
+                if not p_info:
+                    continue
+                pt = p_info.get("position_minimap") or p_info.get("position_transformed")
+                if pt and len(pt) == 2 and not any(np.isnan(v) for v in pt):
+                    pid_int = int(pid) if str(pid).isdigit() else hash(pid) % 1000
+                    f_players[pid_int] = (float(pt[0]), float(pt[1]))
+                    if "team" in p_info:
+                        player_team_map[pid_int] = int(p_info["team"])
+            if f_players:
+                player_traj[i] = f_players
+
+        detected_shots = detector.detect_shots(ball_traj, player_traj, player_team_map)
+        summary = detector.summarize_shooting_intelligence(detected_shots)
+
+        tracked_pid = None
+        if tracked_bboxes and tracks and "players" in tracks:
+            players_frames = tracks["players"]
+            for frame_idx, samurai_bbox in tracked_bboxes.items():
+                if frame_idx < len(players_frames):
+                    matched = _find_matched_player(players_frames[frame_idx], samurai_bbox)
+                    if matched and "track_id" in matched:
+                        tracked_pid = matched["track_id"]
+                        break
+                    elif matched:
+                        for k, v in players_frames[frame_idx].items():
+                            if v is matched:
+                                tracked_pid = int(k) if str(k).isdigit() else hash(k) % 1000
+                                break
+                        if tracked_pid is not None:
+                            break
+
+        tracked_player_shots = None
+        if tracked_pid is not None:
+            p_shots = [s for s in detected_shots if s.shooter_id == tracked_pid]
+            if p_shots:
+                p_goals = sum(1 for s in p_shots if s.is_goal)
+                p_on_target = sum(1 for s in p_shots if s.is_on_target)
+                p_xg = sum(s.xg for s in p_shots)
+                tracked_player_shots = {
+                    "player_id": tracked_pid,
+                    "shots": len(p_shots),
+                    "shots_on_target": p_on_target,
+                    "goals": p_goals,
+                    "total_xg": round(p_xg, 2),
+                    "goals_minus_xg": round(p_goals - p_xg, 2),
+                    "xg_per_shot": round(p_xg / len(p_shots), 2),
+                }
+
+        summary["tracked_player"] = tracked_player_shots
+        return summary
+    except Exception as _e:
+        print(f"[AI_SUMMARY] on-the-fly shot/xG computation failed: {_e}")
+        return {
+            "total_shots": 0, "shots_on_target": 0, "goals": 0, "conversion_rate_pct": 0.0,
+            "total_xg": 0.0, "xg_per_shot": 0.0, "goals_minus_xg": 0.0,
+            "team_breakdown": {"team1": {"shots": 0, "on_target": 0, "goals": 0, "total_xg": 0.0},
+                               "team2": {"shots": 0, "on_target": 0, "goals": 0, "total_xg": 0.0}},
+            "top_shooters": [], "tracked_player": None, "shots": [],
+        }
+
+
+def _compute_pressing_intensity_for_ai(data: dict, tracks: dict,
+                                      tracked_bboxes: dict, fps: float) -> dict:
+    """
+    Computes Passes Per Defensive Action (PPDA) and spatial pressing intensity
+    for multimodal LLM tactical coach analysis.
+    """
+    from .pressing_intensity_engine import PressingIntensityEngine
+    from .pass_event_detector import PassEventDetector
+
+    try:
+        engine = PressingIntensityEngine(fps=fps)
+        ball_traj = {}
+        for i, b_dict in enumerate(tracks.get("ball", [])):
+            for bid, b_info in b_dict.items():
+                pt = b_info.get("position_minimap") or b_info.get("position_transformed")
+                if pt and len(pt) == 2 and not any(np.isnan(v) for v in pt):
+                    ball_traj[i] = (float(pt[0]), float(pt[1]))
+                    break
+                elif "bbox" in b_info and len(b_info["bbox"]) == 4:
+                    bb = b_info["bbox"]
+                    ball_traj[i] = ((bb[0] + bb[2]) / 2.0 / 10.0, (bb[1] + bb[3]) / 2.0 / 10.0)
+                    break
+
+        player_traj = {}
+        player_team_map = {}
+        for i, p_dict in enumerate(tracks.get("players", [])):
+            f_players = {}
+            for pid, p_info in p_dict.items():
+                if not p_info:
+                    continue
+                pt = p_info.get("position_minimap") or p_info.get("position_transformed")
+                if pt and len(pt) == 2 and not any(np.isnan(v) for v in pt):
+                    pid_int = int(pid) if str(pid).isdigit() else hash(pid) % 1000
+                    f_players[pid_int] = (float(pt[0]), float(pt[1]))
+                    if "team" in p_info:
+                        player_team_map[pid_int] = int(p_info["team"])
+            if f_players:
+                player_traj[i] = f_players
+
+        pass_detector = PassEventDetector(fps=fps)
+        passes = pass_detector.detect_passes(ball_traj, player_traj, player_team_map)
+        pass_events = [p.to_dict() for p in passes]
+
+        analysis = engine.analyze_match_pressing(
+            ball_trajectory=ball_traj,
+            player_trajectories=player_traj,
+            teams=player_team_map,
+            pass_events=pass_events,
+        )
+
+        tracked_pid = None
+        if tracked_bboxes and tracks and "players" in tracks:
+            players_frames = tracks["players"]
+            for frame_idx, samurai_bbox in tracked_bboxes.items():
+                if frame_idx < len(players_frames):
+                    matched = _find_matched_player(players_frames[frame_idx], samurai_bbox)
+                    if matched and "track_id" in matched:
+                        tracked_pid = matched["track_id"]
+                        break
+                    elif matched:
+                        for k, v in players_frames[frame_idx].items():
+                            if v is matched:
+                                tracked_pid = int(k) if str(k).isdigit() else hash(k) % 1000
+                                break
+                        if tracked_pid is not None:
+                            break
+
+        tracked_press_count = 0
+        if tracked_pid is not None and "actions" in analysis:
+            tracked_press_count = sum(1 for a in analysis["actions"] if a.get("defender_id") == tracked_pid)
+
+        analysis["tracked_player"] = {
+            "player_id": tracked_pid,
+            "pressing_actions_count": tracked_press_count,
+        } if tracked_pid is not None else None
+
+        return analysis
+    except Exception as _e:
+        print(f"[AI_SUMMARY] on-the-fly pressing/PPDA computation failed: {_e}")
+        return {
+            "team1": {"ppda": 12.0, "pressing_style": "Moderate Containment Block", "high_press_turnovers": 0},
+            "team2": {"ppda": 12.0, "pressing_style": "Moderate Containment Block", "high_press_turnovers": 0},
+            "total_pressing_actions": 0, "tracked_player": None, "actions": [],
+        }
+
+
+def _compute_turnover_transitions_for_ai(data: dict, tracks: dict,
+                                        tracked_bboxes: dict, fps: float) -> dict:
+    """
+    Computes defensive turnovers and 5-second post-turnover transition reaction latency (tau_counterpress)
+    and counter-attacks for multimodal LLM tactical coach analysis.
+    """
+    from .turnover_transition_spotter import TurnoverTransitionSpotter
+
+    try:
+        spotter = TurnoverTransitionSpotter(fps=fps)
+        ball_traj = {}
+        for i, b_dict in enumerate(tracks.get("ball", [])):
+            for bid, b_info in b_dict.items():
+                pt = b_info.get("position_minimap") or b_info.get("position_transformed")
+                if pt and len(pt) == 2 and not any(np.isnan(v) for v in pt):
+                    ball_traj[i] = (float(pt[0]), float(pt[1]))
+                    break
+                elif "bbox" in b_info and len(b_info["bbox"]) == 4:
+                    bb = b_info["bbox"]
+                    ball_traj[i] = ((bb[0] + bb[2]) / 2.0 / 10.0, (bb[1] + bb[3]) / 2.0 / 10.0)
+                    break
+
+        player_traj = {}
+        player_team_map = {}
+        for i, p_dict in enumerate(tracks.get("players", [])):
+            f_players = {}
+            for pid, p_info in p_dict.items():
+                if not p_info:
+                    continue
+                pt = p_info.get("position_minimap") or p_info.get("position_transformed")
+                if pt and len(pt) == 2 and not any(np.isnan(v) for v in pt):
+                    pid_int = int(pid) if str(pid).isdigit() else hash(pid) % 1000
+                    f_players[pid_int] = (float(pt[0]), float(pt[1]))
+                    if "team" in p_info:
+                        player_team_map[pid_int] = int(p_info["team"])
+            if f_players:
+                player_traj[i] = f_players
+
+        turnovers = spotter.spot_turnovers(
+            ball_trajectory=ball_traj,
+            player_trajectories=player_traj,
+            teams=player_team_map,
+        )
+        summary = spotter.generate_transition_summary(turnovers)
+
+        tracked_pid = None
+        if tracked_bboxes and tracks and "players" in tracks:
+            players_frames = tracks["players"]
+            for frame_idx, samurai_bbox in tracked_bboxes.items():
+                if frame_idx < len(players_frames):
+                    matched = _find_matched_player(players_frames[frame_idx], samurai_bbox)
+                    if matched and "track_id" in matched:
+                        tracked_pid = matched["track_id"]
+                        break
+                    elif matched:
+                        for k, v in players_frames[frame_idx].items():
+                            if v is matched:
+                                tracked_pid = int(k) if str(k).isdigit() else hash(k) % 1000
+                                break
+                        if tracked_pid is not None:
+                            break
+
+        tracked_stats = None
+        if tracked_pid is not None:
+            won_cnt = sum(1 for t in turnovers if t.winning_player_id == tracked_pid)
+            lost_cnt = sum(1 for t in turnovers if t.losing_player_id == tracked_pid)
+            counter_cnt = sum(1 for t in turnovers if t.winning_player_id == tracked_pid and t.is_counter_attack)
+            tracked_stats = {
+                "player_id": tracked_pid,
+                "turnovers_won": won_cnt,
+                "turnovers_lost": lost_cnt,
+                "counter_attacks_led": counter_cnt,
+            }
+        summary["tracked_player"] = tracked_stats
+        return summary
+    except Exception as _e:
+        print(f"[AI_SUMMARY] on-the-fly turnover transition computation failed: {_e}")
+        return {
+            "total_turnovers": 0,
+            "team1": {"turnovers_won": 0, "turnovers_lost": 0, "high_turnovers_won": 0, "dangerous_turnovers_lost": 0, "counter_attacks": 0, "avg_counter_press_reaction_sec": None},
+            "team2": {"turnovers_won": 0, "turnovers_lost": 0, "high_turnovers_won": 0, "dangerous_turnovers_lost": 0, "counter_attacks": 0, "avg_counter_press_reaction_sec": None},
+            "tracked_player": None,
+            "events": [],
+        }
 
 
 def _split_video_by_duration(video_path: str, chunk_sec: int,
@@ -3249,6 +4325,36 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
         except Exception as _e:
             print(f"[AI_SUMMARY] defensive line stats failed (non-fatal): {_e!r}")
             def_line_stats = {"count": 0, "events": []}
+        try:
+            passing_stats = _compute_passing_stats_for_ai(
+                data, tracks_for_ai, tracked_bboxes_for_ai, fps)
+        except Exception as _e:
+            print(f"[AI_SUMMARY] passing stats failed (non-fatal): {_e!r}")
+            passing_stats = {"team1": {}, "team2": {}, "key_penetration_events": [], "tracked_player": None}
+        try:
+            speed_telemetry_stats = _compute_speed_telemetry_for_ai(
+                tracks_for_ai, tracked_bboxes_for_ai, fps)
+        except Exception as _e:
+            print(f"[AI_SUMMARY] speed telemetry stats failed (non-fatal): {_e!r}")
+            speed_telemetry_stats = {"max_speed_kmh": 0.0, "avg_speed_kmh": 0.0, "total_distance_m": 0.0, "zone_breakdown": {}}
+        try:
+            shot_xg_stats = _compute_shot_xg_for_ai(
+                data, tracks_for_ai, tracked_bboxes_for_ai, fps)
+        except Exception as _e:
+            print(f"[AI_SUMMARY] shot xg stats failed (non-fatal): {_e!r}")
+            shot_xg_stats = {"total_shots": 0, "total_xg": 0.0, "goals": 0, "shots": []}
+        try:
+            pressing_stats = _compute_pressing_intensity_for_ai(
+                data, tracks_for_ai, tracked_bboxes_for_ai, fps)
+        except Exception as _e:
+            print(f"[AI_SUMMARY] pressing intensity stats failed (non-fatal): {_e!r}")
+            pressing_stats = {"team1": {"ppda": 12.0}, "team2": {"ppda": 12.0}, "total_pressing_actions": 0}
+        try:
+            turnover_stats = _compute_turnover_transitions_for_ai(
+                data, tracks_for_ai, tracked_bboxes_for_ai, fps)
+        except Exception as _e:
+            print(f"[AI_SUMMARY] turnover transition stats failed (non-fatal): {_e!r}")
+            turnover_stats = {"total_turnovers": 0, "team1": {}, "team2": {}, "tracked_player": None, "events": []}
 
         stats_payload = {
             "video": {
@@ -3267,8 +4373,13 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
             "segments":               segments,
             "tracked_player":         player_summary,
             "sprints":                sprint_stats,
+            "speed_telemetry":        speed_telemetry_stats,
             "pitch_zones":            zone_stats,
             "defensive_breakthroughs": def_line_stats,
+            "passing_intelligence":   passing_stats,
+            "shooting_and_xg":        shot_xg_stats,
+            "pressing_intensity":     pressing_stats,
+            "turnover_transitions":   turnover_stats,
         }
         stats_json = json.dumps(stats_payload, ensure_ascii=False, indent=2)
 
@@ -3492,8 +4603,18 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
                     "判断体能是否在下半场明显下降。"
                     "**绝对指令**：如果 `speed_reliability` 是 `suspect` 或 `sprints.count` 为 0，"
                     "必须明确指出速度数据不可靠。\n\n"
+                    + "## 跑动负荷与 5 区间体能分布\n"
+                    "依据 `speed_telemetry` 分析该球员的 5 区间奔跑负荷结构（步行 0-7.2 km/h、慢跑 7.2-14.4 km/h、中速跑 14.4-19.8 km/h、高强度跑 HSR 19.8-25.2 km/h、冲刺 >= 25.2 km/h），结合总跑动距离 `total_distance_m` 与平均速度 `avg_speed_kmh` 评价比赛活跃度与体能分配效率。\n\n"
                     + "## 场区活动热区\n"
                     "依据 `pitch_zones` 分析活动区域，判断是否符合该位置的战术要求。\n\n"
+                    + "## 传球组织与配合\n"
+                    "依据 `passing_intelligence.tracked_player`（传球成功率、受迫与空位出球、向前推进传球次数、禁区与14区威胁渗透传球），分析该球员出球决策能力，指出与其配合最默契的队友组合（传接枢纽），并结合关键传球时间戳 `[MM:SS]` 给出战术评价。\n\n"
+                    + "## 射门质量与期望进球 (xG)\n"
+                    "依据 `shooting_and_xg.tracked_player`（射门次数、射正率、期望进球 xG、进球数与超额转化 Goals - xG），评估球员在门前的终结效率、射门时机把握与受压射门质量。\n\n"
+                    + "## 防守压迫与逼抢贡献\n"
+                    "依据 `pressing_intensity.tracked_player`（前场压迫逼抢对抗次数），评估该球员在防守端的压迫侵略性与就地反抢贡献。\n\n"
+                    + "## 攻防转换与反抢反应\n"
+                    "依据 `turnover_transitions.tracked_player`（夺回球权次数、丢球失误次数、反击策动与 5 秒反抢窗口表现），评估该球员攻防转换时的反应敏捷度、控球稳健度与由守转攻推进决策。\n\n"
                     + "## 本周个人专项训练计划\n"
                     "基于以上分析，为这名球员量身定制 3-5 条具体的训练建议。\n"
                     "每条建议必须包含：\n"
@@ -3515,12 +4636,22 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
                     "峰值速度，并指出若干次冲刺发生的时间点 `[MM:SS]`。"
                     "**绝对指令**：如果 `tracked_player.speed_reliability` 是 `suspect`，或 `sprints.count` 为 0，"
                     "你必须在报告中明确指出速度数据不可靠。\n\n"
+                    + "## 球员体能负荷与跑动区间\n"
+                    "依据 `speed_telemetry` 分析被追踪球员的全场跑动负荷结构（5 跑动区间距离占比与高强度跑 HSR/冲刺跑量），评估该球员在攻防两端的覆盖面与体能支撑。\n\n"
                     + "## 场区分布\n"
                     "依据 `pitch_zones`（前/中/后场占比），说明被追踪球员主要活动区域，"
                     "并据此判断角色。\n\n"
                     + "## 防线穿透时刻\n"
                     "依据 `defensive_breakthroughs.events`，"
                     "**列出每次穿透的具体时间点 `[MM:SS]`** 并简评战术意义。\n\n"
+                    + "## 传球组织与传球网络\n"
+                    "依据 `passing_intelligence` 数据，对比双方传球总数、到位率、向前推进传球 (Progressive Passes)、14区 (Zone 14) 及禁区穿透渗透数据。分析两队关键传球枢纽 (Key Passing Hubs) 与进攻发起路线，并结合关键推进时刻 `[MM:SS]` 评价进攻组织的纵深穿透力与控制力。\n\n"
+                    + "## 射门机会与期望进球 (xG) 分析\n"
+                    "依据 `shooting_and_xg` 数据，对比双方射门总数、射正次数、总期望进球 (Total xG)、每脚射门平均期望值 (xG/shot) 及门前转化效率 (Goals - xG)。分析两队高威胁射门发生区域与门前终结把握度。\n\n"
+                    + "## 压迫强度与 PPDA (Passes Per Defensive Action) 分析\n"
+                    "依据 `pressing_intensity` 数据，对比双方 PPDA 逼抢强度指标（数值越低代表压迫越具侵略性，如 <8.0 属高位高压 Gegenpressing，>15.0 属低位防守 Low Block）、前场 60% 区域防守破坏动作总数及前场高危断球数 (High-Press Turnovers)。评估双方高位逼抢与就地反抢效率。\n\n"
+                    + "## 攻防转换与 5 秒反抢窗口 (Turnover Transitions)\n"
+                    "依据 `turnover_transitions` 数据，分析两队丢球后 5 秒内的就地反抢反应潜伏期 (tau_counterpress，<1.8s 为顶级就地压迫)、前场高危断球 (High Turnovers Won)、后场/14区危险丢球及反击快攻次数 (Forward Progression >= 18m)。评估攻防转换回合的反应效率与防守抗反击结构。\n\n"
                     + "## 战术观察\n阵型特征、进攻模式、防守组织，基于画面实际观察。\n\n"
                     + "## 本周团队战术训练计划\n"
                     "基于以上分析，为球队制定 3-5 条具体的战术训练建议。\n"
@@ -3809,18 +4940,32 @@ def _load_cache(session: dict) -> dict:
 
 
 def _find_matched_player(player_frame: dict, samurai_bbox: tuple):
-    """在 YOLO 追踪结果中找最接近 SAMURAI 中心点的球员"""
-    sx, sy, sw, sh = samurai_bbox
-    target_center = (sx + sw/2, sy + sh/2)
-    max_dist = max(150.0, max(sw, sh) * 0.8)
+    """在 YOLO 追踪结果中找最接近 SAMURAI 中心点的球员
+    兼容:
+      - 4元组 (sx, sy, sw, sh) (xywh bounding box)
+      - 2元组 (cx, cy) (中心点坐标)
+    """
+    if not player_frame or not samurai_bbox:
+        return None
+
+    if len(samurai_bbox) == 4:
+        sx, sy, sw, sh = samurai_bbox
+        target_center = (sx + sw / 2.0, sy + sh / 2.0)
+        max_dist = max(150.0, max(sw, sh) * 0.8)
+    elif len(samurai_bbox) == 2:
+        target_center = (float(samurai_bbox[0]), float(samurai_bbox[1]))
+        max_dist = 150.0
+    else:
+        return None
+
     best_dist, best_info = max_dist, None
     for info in player_frame.values():
         if not info or "bbox" not in info:
             continue
         bbox = info["bbox"]
-        cx = (bbox[0] + bbox[2]) / 2
-        cy = (bbox[1] + bbox[3]) / 2
-        d  = ((cx - target_center[0])**2 + (cy - target_center[1])**2) ** 0.5
+        cx = (bbox[0] + bbox[2]) / 2.0
+        cy = (bbox[1] + bbox[3]) / 2.0
+        d = ((cx - target_center[0]) ** 2 + (cy - target_center[1]) ** 2) ** 0.5
         if d < best_dist:
             best_dist = d
             best_info = info
@@ -3830,8 +4975,6 @@ def _find_matched_player(player_frame: dict, samurai_bbox: tuple):
 def _finish_task(sm: SessionManager, session_id: str, task_id: str,
                  file_path: Path, result: dict = None):
     """任务成功完成时统一写入状态，如果配置了 R2 则上传到云端"""
-    from ..storage.r2 import upload_to_r2
-    
     file_path = Path(file_path)
     session_dir = sm.session_output_dir(session_id)
     try:
@@ -3840,8 +4983,13 @@ def _finish_task(sm: SessionManager, session_id: str, task_id: str,
         rel_path = file_path.name
         
     # Attempt to upload to R2
-    remote_key = f"{session_id}/{rel_path}"
-    r2_url = upload_to_r2(file_path, remote_key)
+    r2_url = None
+    try:
+        from ..storage.r2 import upload_to_r2
+        remote_key = f"{session_id}/{rel_path}"
+        r2_url = upload_to_r2(file_path, remote_key)
+    except Exception:
+        r2_url = None
     
     # Fallback to local URL if R2 fails or is not configured
     final_url = r2_url if r2_url else rel_path

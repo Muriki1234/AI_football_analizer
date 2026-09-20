@@ -29,6 +29,12 @@ from ..auth import require_api_key, require_api_key_or_query
 from ..config import settings
 from ..deps import get_session_manager, get_worker_pool
 from ..pipeline import tasks as pipeline_tasks
+from ..pipeline.feature_registry import (
+    build_feature_dispatch_table,
+    get_all_artifact_files,
+    resolve_canonical_feature,
+    get_feature_spec,
+)
 from ..storage.db import SessionManager
 from ..workers.pool import WorkerPool
 
@@ -44,27 +50,10 @@ files_router = APIRouter(prefix="/api/sessions", tags=["analysis-files"])
 
 # ── Feature table ────────────────────────────────────────────────────────────
 
-FEATURE_TASKS: dict[str, Callable[..., Any]] = {
-    "heatmap":         pipeline_tasks.run_heatmap,
-    "speed_chart":     pipeline_tasks.run_speed_chart,
-    "possession":      pipeline_tasks.run_possession_stats,
-    "sprint_analysis": pipeline_tasks.run_sprint_analysis,
-    "defensive_line":  pipeline_tasks.run_defensive_line,
-    "ai_summary":      pipeline_tasks.run_ai_summary,
-}
+FEATURE_TASKS: dict[str, Callable[..., Any]] = build_feature_dispatch_table()
 
 _BUSY_STATUSES = {"queued", "tracking", "tracking_done", "analyzing"}
-_ARTIFACT_FILES = {
-    "samurai_tracking.pkl",
-    "tracks.pkl",
-    "heatmap.png",
-    "speed_chart.png",
-    "possession_chart.png",
-    "sprint_analysis.png",
-    "defensive_line.png",
-    "ai_summary.md",
-    "gemini_video.mp4",
-}
+_ARTIFACT_FILES = get_all_artifact_files()
 
 
 def _reject_if_busy(session: dict, sm: SessionManager) -> None:
@@ -298,7 +287,8 @@ async def queue_feature(
     sm: SessionManager = Depends(get_session_manager),
     pool: WorkerPool = Depends(get_worker_pool),
 ) -> QueuedResponse:
-    if feature not in FEATURE_TASKS:
+    canon_feature = resolve_canonical_feature(feature)
+    if not canon_feature or canon_feature not in FEATURE_TASKS:
         raise HTTPException(
             status_code=400,
             detail=f"Unknown feature '{feature}'. Available: {sorted(FEATURE_TASKS)}",
@@ -310,8 +300,8 @@ async def queue_feature(
     if s.get("status") != "analysis_done":
         raise HTTPException(status_code=409, detail="Analysis is not complete yet.")
 
-    real_task_type = feature
-    if feature == "ai_summary":
+    real_task_type = canon_feature
+    if canon_feature == "ai_summary":
         real_task_type = f"ai_summary_{mode}"
         s["ai_summary_mode"] = mode
 
@@ -327,14 +317,20 @@ async def queue_feature(
             status=existing.get("status", "queued"),
         )
 
-    fn = FEATURE_TASKS[feature]
+    fn = FEATURE_TASKS[canon_feature]
     task_id = sm.create_task(session_id, real_task_type)
 
     def _on_error(exc: BaseException) -> None:
         sm.update_task(session_id, task_id, status="failed", error=str(exc))
 
-    # AI summary hits an external API, not the GPU — send it to the IO pool.
-    target_pool = pool.submit_io if feature == "ai_summary" else pool.submit_gpu
+    spec = get_feature_spec(canon_feature)
+    if canon_feature == "ai_summary":
+        target_pool = pool.submit_io
+    elif spec and spec.is_cpu_supported:
+        target_pool = pool.submit_io
+    else:
+        target_pool = pool.submit_gpu
+
     target_pool(fn, session_id, s, task_id, sm, on_error=_on_error)
     return QueuedResponse(task_id=task_id, status="queued")
 

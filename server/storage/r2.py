@@ -1,29 +1,35 @@
 import os
-import boto3
-from botocore.config import Config as _BotoConfig
-from botocore.exceptions import ClientError
 from pathlib import Path
 from ..config import settings
 import logging
+
+try:
+    import boto3
+    from botocore.config import Config as _BotoConfig
+    from botocore.exceptions import ClientError
+    _BOTO_AVAILABLE = True
+    _BOTO_CFG = _BotoConfig(
+        retries={"max_attempts": 5, "mode": "adaptive"},
+        read_timeout=300,
+        connect_timeout=30,
+        s3={"addressing_style": "virtual"},
+    )
+except ImportError:
+    boto3 = None
+    _BotoConfig = None
+    ClientError = Exception
+    _BOTO_AVAILABLE = False
+    _BOTO_CFG = None
 
 log = logging.getLogger(__name__)
 
 _r2_client = None
 
-# 显式 retry / timeout 配置：默认 boto3 不会在 5xx / 网络抖动上重试，
-# 大 tracks.pkl (~3MB) 偶发失败就静默 return None，下游 feature task
-# 拿不到文件直接挂。adaptive 会在 throttle 时退避，read_timeout 拉长到
-# 5min 容忍慢上传。
-_BOTO_CFG = _BotoConfig(
-    retries={"max_attempts": 5, "mode": "adaptive"},
-    read_timeout=300,
-    connect_timeout=30,
-    s3={"addressing_style": "virtual"},
-)
-
 
 def get_r2_client():
     global _r2_client
+    if not _BOTO_AVAILABLE:
+        return None
     if _r2_client is None and settings.R2_ACCOUNT_ID and settings.R2_ACCESS_KEY_ID:
         try:
             _r2_client = boto3.client(

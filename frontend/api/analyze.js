@@ -51,6 +51,14 @@ export default async function handler(req, res) {
     'possession',
     'sprint_analysis',
     'defensive_line',
+    'spatial_radar',
+    '18_zone_radar',
+    'voronoi',
+    'pitch_control',
+    'pitch_control_voronoi',
+    'pass_network',
+    'passes',
+    'ball_action',
   ]);
 
   const isCpuTask =

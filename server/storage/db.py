@@ -1,13 +1,15 @@
+from __future__ import annotations
 import os
 import json
 import uuid
 import threading
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any
-from supabase import create_client, Client
-
-# Keys that have their own dedicated columns in the 'sessions' table.
+try:
+    from supabase import create_client, Client
+except ImportError:
+    create_client = None
+    Client = None
 # Everything else goes into the 'extra' JSONB column.
 _SESSION_COLUMNS = {
     "status", "progress", "stage", "error", "updated_at",
@@ -41,6 +43,14 @@ class SessionManager:
 
         self.client: Client = create_client(url, key)
         self._lock = threading.Lock()
+
+        try:
+            from .db_debouncer import DebouncedStatusUpdater
+            self._debouncer = DebouncedStatusUpdater(
+                self._raw_update_status, min_interval_sec=1.2, min_progress_delta=5
+            )
+        except Exception:
+            self._debouncer = None
 
     # ── Session CRUD ─────────────────────────────────────────────────────────
 
@@ -78,6 +88,45 @@ class SessionManager:
         return session
 
     def update_status(
+        self,
+        session_id: str,
+        status: str,
+        progress: int | None = None,
+        stage: str | None = None,
+        error: str | None = None,
+        debounced: bool = True,
+        **extra: Any,
+    ) -> None:
+        """
+        Status and progress update. When debounced=True, high-frequency progress
+        ticks within the same stage/status are throttled to prevent network storms.
+        Stage changes, status transitions, errors, and completions bypass the throttle.
+        """
+        if debounced and getattr(self, "_debouncer", None):
+            self._debouncer.update(
+                session_id,
+                status,
+                progress=progress,
+                stage=stage,
+                error=error,
+                **extra,
+            )
+        else:
+            self._raw_update_status(
+                session_id,
+                status,
+                progress=progress,
+                stage=stage,
+                error=error,
+                **extra,
+            )
+
+    def flush(self) -> None:
+        """Flushes any buffered debounced status updates."""
+        if getattr(self, "_debouncer", None):
+            self._debouncer.flush()
+
+    def _raw_update_status(
         self,
         session_id: str,
         status: str,

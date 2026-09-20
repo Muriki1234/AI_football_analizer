@@ -44,7 +44,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from supabase import create_client
+try:
+    from supabase import create_client
+except ImportError:
+    create_client = None
 
 from .config import settings
 from .models.weights import ensure_weights
@@ -67,7 +70,7 @@ def _get_supabase():
     """
     global _supabase_client
     if _supabase_client is None:
-        if not (settings.SUPABASE_URL and settings.SUPABASE_SERVICE_KEY):
+        if create_client is None or not (settings.SUPABASE_URL and settings.SUPABASE_SERVICE_KEY):
             return None
         _supabase_client = create_client(
             settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY
@@ -746,30 +749,24 @@ def _action_track(session_id: str, s: dict, payload: dict, sm: SessionManager) -
 
     s_merged = sm.get_session(session_id) or s_merged
 
-    print(f"[TRACK] launching SAMURAI ({len(segments)} segment(s) across "
-          f"{len(match_periods)} period(s)) SEQUENTIALLY before analysis")
-
-    # 1. Run SAMURAI
+    # ── Execute SAMURAI and Global Analysis via Concurrency Scheduler ──
+    # Safely overlaps SAMURAI with streaming YOLO detection if VRAM >= 6.0 GB,
+    # falling back to sequential execution on memory-constrained GPUs.
     try:
-        pipeline_tasks.run_samurai_tracking_multi(
-            session_id, s_merged, segments, sm
+        from .pipeline.pipeline_concurrency_scheduler import PipelineConcurrencyScheduler
+        scheduler = PipelineConcurrencyScheduler(min_free_vram_gb=6.0)
+        sched_res = scheduler.execute_pipeline(
+            session_id=session_id,
+            session=s_merged,
+            segments=segments,
+            sm=sm,
+            samurai_runner=lambda sid, sess, segs, sm_: pipeline_tasks.run_samurai_tracking_multi(sid, sess, segs, sm_),
+            yolo_runner=lambda sid, sess, sm_: pipeline_tasks.run_global_analysis(sid, sess, sm_),
         )
+        print(f"[TRACK] Pipeline execution finished in {sched_res['wall_clock_sec']}s (mode: {sched_res['mode']}, saved: {sched_res['overlap_saved_sec']}s)", flush=True)
     except Exception as e:
-        log.exception("SAMURAI multi-segment failed")
-        err = f"SAMURAI failed: {e}"
-        try:
-            sm.update_status(session_id, "tracking_failed", error=err)
-        except Exception:
-            pass
-        return {"error": err}
-
-    # 2. Run Global Analysis (YOLO)
-    print(f"[TRACK] SAMURAI finished successfully. Launching Global Analysis (YOLO)...")
-    try:
-        pipeline_tasks.run_global_analysis(session_id, s_merged, sm)
-    except Exception as e:
-        log.exception("Global analysis failed")
-        err = f"Analysis failed: {e}"
+        log.exception("Pipeline execution failed")
+        err = f"Pipeline execution failed: {e}"
         try:
             sm.update_status(session_id, "tracking_failed", error=err)
         except Exception:
@@ -789,15 +786,20 @@ def _action_analyze(session_id: str, s: dict, payload: dict, sm: SessionManager)
 def _action_feature(session_id: str, s: dict, payload: dict, sm: SessionManager) -> dict:
     """Generate a single feature output (heatmap, speed chart, etc.)."""
     feature = payload.get("feature")
-    from .routes.analysis import FEATURE_TASKS
-    fn = FEATURE_TASKS.get(feature or "")
+    from .pipeline.feature_registry import (
+        build_feature_dispatch_table,
+        resolve_canonical_feature,
+    )
+    canon_feature = resolve_canonical_feature(feature or "")
+    dispatch_table = build_feature_dispatch_table()
+    fn = dispatch_table.get(canon_feature or "")
     if not fn:
         return {"error": f"unknown feature {feature!r}"}
     # Pass AI summary mode (team/player) into session for run_ai_summary to read
-    if feature == "ai_summary":
+    if canon_feature == "ai_summary":
         ai_mode = payload.get("mode", "team")
         s["ai_summary_mode"] = ai_mode
-    task_id = sm.create_task(session_id, feature)
+    task_id = sm.create_task(session_id, canon_feature)
     fn(session_id, s, task_id, sm)
     return {"ok": True, "task": sm.get_task(session_id, task_id)}
 
@@ -821,14 +823,13 @@ WORKER_MODE = os.environ.get("WORKER_MODE", "gpu").strip().lower()
 
 # Features that don't need GPU compute. They can run on the CPU endpoint.
 # Keep this in sync with the routing table in frontend/api/analyze.js.
-_CPU_FEATURES = frozenset({
-    "ai_summary",
-    "heatmap",
-    "speed_chart",
-    "possession",
-    "sprint_analysis",
-    "defensive_line",
-})
+from .pipeline.feature_registry import (
+    get_cpu_features,
+    get_stats_only_features,
+    resolve_canonical_feature,
+)
+_CPU_FEATURES = get_cpu_features()
+_STATS_ONLY_FEATURES = get_stats_only_features()
 
 # Actions a CPU worker is allowed to run at all (everything else short-circuits).
 _CPU_ACTIONS = frozenset({"feature"})
@@ -858,7 +859,8 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
             }
         if action == "feature":
             feat = payload.get("feature", "")
-            if feat not in _CPU_FEATURES:
+            canon = resolve_canonical_feature(feat)
+            if not canon or canon not in _CPU_FEATURES:
                 return {
                     "error": f"feature {feat!r} not supported on CPU worker; "
                              f"use the GPU endpoint",
@@ -882,10 +884,9 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
         #   - CPU: ai_summary 用 ffmpeg 切片再上传 Gemini
         # 只有少数 CPU feature 任务（heatmap/charts 等）只读 tracks.pkl
         # 不碰视频。简单起见：除了那些纯 stats 的 feature 之外，全部走下载。
-        _STATS_ONLY_FEATURES = {"heatmap", "speed_chart", "possession",
-                                "sprint_analysis", "defensive_line"}
         _feat = (payload.get("feature") or "").strip()
-        _needs_video = not (action == "feature" and _feat in _STATS_ONLY_FEATURES)
+        canon_feat = resolve_canonical_feature(_feat)
+        _needs_video = not (action == "feature" and canon_feat in _STATS_ONLY_FEATURES)
         if _needs_video:
             _ensure_local_video(session_id, video_url or s.get("video_url", ""), sm)
             s = sm.get_session(session_id)
