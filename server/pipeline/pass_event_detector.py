@@ -37,11 +37,20 @@ class PassEvent:
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
-        d["start_xy"] = [round(v, 2) for v in self.start_xy]
-        d["end_xy"] = [round(v, 2) for v in self.end_xy]
-        d["pass_distance"] = round(self.pass_distance, 2)
-        d["flight_time_sec"] = round(self.flight_time_sec, 2)
-        d["avg_speed_mps"] = round(self.avg_speed_mps, 2)
+        d["pass_id"] = int(self.pass_id)
+        d["passer_id"] = int(self.passer_id) if self.passer_id is not None else None
+        d["receiver_id"] = int(self.receiver_id) if self.receiver_id is not None else None
+        d["team"] = int(self.team)
+        d["start_frame"] = int(self.start_frame)
+        d["end_frame"] = int(self.end_frame)
+        d["start_xy"] = [float(round(v, 2)) for v in self.start_xy]
+        d["end_xy"] = [float(round(v, 2)) for v in self.end_xy]
+        d["pass_distance"] = float(round(self.pass_distance, 2))
+        d["flight_time_sec"] = float(round(self.flight_time_sec, 2))
+        d["avg_speed_mps"] = float(round(self.avg_speed_mps, 2))
+        d["is_progressive"] = bool(self.is_progressive)
+        d["is_zone14_entry"] = bool(self.is_zone14_entry)
+        d["is_box_entry"] = bool(self.is_box_entry)
         return d
 
 
@@ -322,40 +331,40 @@ class PassEventDetector:
             avg_x = sum(c[0] for c in coords) / len(coords)
             avg_y = sum(c[1] for c in coords) / len(coords)
             nodes.append({
-                "player_id": pid,
-                "centroid_xy": [round(avg_x, 2), round(avg_y, 2)],
-                "passes_made": pass_counts.get(pid, 0),
-                "passes_received": receive_counts.get(pid, 0),
+                "player_id": int(pid) if str(pid).isdigit() else str(pid),
+                "centroid_xy": [float(round(avg_x, 2)), float(round(avg_y, 2))],
+                "passes_made": int(pass_counts.get(pid, 0)),
+                "passes_received": int(receive_counts.get(pid, 0)),
             })
         nodes.sort(key=lambda n: n["passes_made"], reverse=True)
 
         edge_counts: Dict[Tuple[int, int], int] = {}
         for p in completed:
             if p.receiver_id is not None and p.receiver_id != p.passer_id:
-                key = (p.passer_id, p.receiver_id)
+                key = (int(p.passer_id), int(p.receiver_id))
                 edge_counts[key] = edge_counts.get(key, 0) + 1
 
         edges: List[Dict[str, Any]] = []
         for (src, dst), count in edge_counts.items():
             edges.append({
-                "source": src,
-                "target": dst,
-                "count": count,
+                "source": int(src) if str(src).isdigit() else str(src),
+                "target": int(dst) if str(dst).isdigit() else str(dst),
+                "count": int(count),
             })
         edges.sort(key=lambda e: e["count"], reverse=True)
 
-        total_p = len(team_passes)
-        comp_p = len(completed)
-        comp_rate = (comp_p / total_p * 100.0) if total_p > 0 else 0.0
-        prog_p = sum(1 for p in completed if p.is_progressive)
-        z14_p = sum(1 for p in completed if p.is_zone14_entry)
-        box_p = sum(1 for p in completed if p.is_box_entry)
+        total_p = int(len(team_passes))
+        comp_p = int(len(completed))
+        comp_rate = float(round((comp_p / total_p * 100.0) if total_p > 0 else 0.0, 1))
+        prog_p = int(sum(1 for p in completed if p.is_progressive))
+        z14_p = int(sum(1 for p in completed if p.is_zone14_entry))
+        box_p = int(sum(1 for p in completed if p.is_box_entry))
 
         return {
-            "team_id": team_id,
+            "team_id": int(team_id),
             "total_passes": total_p,
             "completed_passes": comp_p,
-            "completion_rate_pct": round(comp_rate, 1),
+            "completion_rate_pct": comp_rate,
             "progressive_passes": prog_p,
             "zone14_entries": z14_p,
             "box_entries": box_p,

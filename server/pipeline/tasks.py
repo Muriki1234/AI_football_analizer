@@ -23,9 +23,22 @@ import threading
 import traceback
 import json
 import shutil
+import logging
 from collections import OrderedDict
 from contextlib import contextmanager
 from pathlib import Path
+
+log = logging.getLogger(__name__)
+
+def _safe_json_default(obj: Any) -> Any:
+    """Safe fallback serializer for numpy and non-standard JSON types."""
+    if hasattr(obj, "item"):
+        return obj.item()
+    if hasattr(obj, "tolist"):
+        return obj.tolist()
+    if isinstance(obj, (int, float, str, bool)) or obj is None:
+        return obj
+    return str(obj)
 
 # Try-wrapped heavy imports
 try:
@@ -1442,9 +1455,10 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                     "total_passes": len(detected_passes),
                     "passes": pass_events_list,
                     "networks": pass_networks_data,
-                }, pf, indent=2, ensure_ascii=False)
+                }, pf, indent=2, ensure_ascii=False, default=_safe_json_default)
             print(f"[INFO] Pass event detection completed: {len(detected_passes)} passes spotted, saved to {passes_json_path.name}")
         except Exception as p_exc:
+            print(f"[WARN] Pass event detection failed (non-blocking): {p_exc}", flush=True)
             log.warning("Pass event detection failed (non-blocking): %s", p_exc)
 
         # ── 8c. 球衣号码时域投票识别 (Jersey Number Temporal Voting & Track Annotation) ──
@@ -1457,6 +1471,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             if resolved_jerseys:
                 print(f"[INFO] Jersey voting resolved numbers for {len(resolved_jerseys)} player tracklets")
         except Exception as j_exc:
+            print(f"[WARN] Jersey voting integration failed (non-blocking): {j_exc}", flush=True)
             log.warning("Jersey voting integration failed (non-blocking): %s", j_exc)
 
         # ── 9. 摘要 & 缓存 ────────────────────────────────────────────
@@ -2966,7 +2981,7 @@ def run_shot_xg(session_id: str, session: dict, task_id: str, sm: SessionManager
         # Also persist shot_xg_summary.json
         summary_path = sm.session_output_dir(session_id) / "shot_xg_summary.json"
         with open(summary_path, "w", encoding="utf-8") as f:
-            json.dump(shooting_summary, f, ensure_ascii=False, indent=2)
+            json.dump(shooting_summary, f, ensure_ascii=False, indent=2, default=_safe_json_default)
 
         _finish_task(sm, session_id, task_id, output_path, result=shooting_summary)
     except Exception as exc:
@@ -3043,7 +3058,7 @@ def run_pressing_intensity(session_id: str, session: dict, task_id: str, sm: Ses
 
         summary_path = sm.session_output_dir(session_id) / "pressing_ppda_summary.json"
         with open(summary_path, "w", encoding="utf-8") as f:
-            json.dump(pressing_analysis, f, ensure_ascii=False, indent=2)
+            json.dump(pressing_analysis, f, ensure_ascii=False, indent=2, default=_safe_json_default)
 
         _finish_task(sm, session_id, task_id, output_path, result=pressing_analysis)
     except Exception as exc:
@@ -3148,7 +3163,7 @@ def run_turnover_transition(session_id: str, session: dict, task_id: str, sm: Se
 
         summary_path = sm.session_output_dir(session_id) / "turnover_transitions.json"
         with open(summary_path, "w", encoding="utf-8") as f:
-            json.dump(transition_summary, f, ensure_ascii=False, indent=2)
+            json.dump(transition_summary, f, ensure_ascii=False, indent=2, default=_safe_json_default)
 
         _finish_task(sm, session_id, task_id, output_path, result=transition_summary)
     except Exception as exc:
@@ -4381,7 +4396,7 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
             "pressing_intensity":     pressing_stats,
             "turnover_transitions":   turnover_stats,
         }
-        stats_json = json.dumps(stats_payload, ensure_ascii=False, indent=2)
+        stats_json = json.dumps(stats_payload, ensure_ascii=False, indent=2, default=_safe_json_default)
 
         # ── 4. 渲染全分辨率带框视频（CUDA 加速，不重跑检测）──────────────────
         output_dir       = sm.session_output_dir(session_id)

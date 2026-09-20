@@ -225,6 +225,31 @@ class TestPassEventDetector(unittest.TestCase):
         self.assertGreater(len(passes), 100)
         self.assertGreater(fps, 30000.0, "Throughput must exceed 30,000 FPS for in-memory kinematic analysis")
 
+    def test_08_numpy_int64_json_serializable(self):
+        """Verifies that passes and pass networks with numpy types can be JSON serialized."""
+        import json
+        import numpy as np
+        from server.pipeline.tasks import _safe_json_default
+
+        ball_traj = {np.int64(0): (0.0, 0.0), np.int64(1): (5.0, 0.0), np.int64(2): (10.0, 0.0)}
+        player_traj = {
+            np.int64(0): {np.int64(7): (0.0, 0.0), np.int64(9): (10.0, 0.0)},
+            np.int64(1): {np.int64(7): (0.0, 0.0), np.int64(9): (10.0, 0.0)},
+            np.int64(2): {np.int64(7): (0.0, 0.0), np.int64(9): (10.0, 0.0)},
+        }
+        teams = {np.int64(7): np.int64(1), np.int64(9): np.int64(1)}
+
+        passes = self.detector.detect_passes(ball_traj, player_traj, teams)
+        pass_events_list = [p.to_dict() for p in passes]
+        net = self.detector.build_pass_network(passes, team_id=np.int64(1))
+
+        # Standard json.dumps should succeed with _safe_json_default
+        serialized = json.dumps({
+            "passes": pass_events_list,
+            "net": net,
+        }, default=_safe_json_default)
+        self.assertIsInstance(serialized, str)
+
 
 if __name__ == "__main__":
     unittest.main()
