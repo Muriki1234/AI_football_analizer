@@ -8,6 +8,7 @@ analysis_core.py - 核心 CV/ML 类库（Flask 版）
 """
 
 import os
+import math
 import cv2
 
 try:
@@ -92,56 +93,58 @@ def clamp_pitch_position(x: float, y: float,
             max(0.0, min(float(y), y_max)))
 
 
-def _linear_fill_keypoints(sampled: dict, total_frames: int) -> list:
+def _linear_fill_keypoints(sampled: dict, total_frames: int, max_gap: int = 50) -> list:
     """
     Fill un-sampled frames by linearly interpolating each keypoint ID
-    between known frames. Nearest-neighbor fallback for edge gaps.
-
-    Uses numpy for interpolation (pandas optional for richer fill).
+    ONLY between consecutive detections when the frame gap <= max_gap.
+    Never extrapolate before the first detection or after the last detection,
+    and never interpolate across large gaps (e.g. camera panning/cutting).
 
     Args:
         sampled: {frame_idx: {keypoint_id: [x, y]}} — only sampled frames
         total_frames: total number of frames in the video
+        max_gap: maximum frame distance between two detections to interpolate
 
     Returns:
         list of length total_frames, each element is {keypoint_id: [x, y]}
     """
-    if not sampled:
+    if not sampled or total_frames <= 0:
         return [{} for _ in range(total_frames)]
-
-    all_kids = set()
-    for kps in sampled.values():
-        all_kids.update(kps.keys())
 
     result = [{} for _ in range(total_frames)]
 
+    # 1. Insert directly detected keypoints at sampled frames
     for fi, kps in sampled.items():
-        if fi < total_frames:
+        if 0 <= fi < total_frames and kps:
             result[fi] = dict(kps)
 
-    all_frames = np.arange(total_frames, dtype=float)
+    # 2. Collect detection timelines per keypoint ID
+    kid_detections = {}
+    for fi in sorted(sampled.keys()):
+        if 0 <= fi < total_frames:
+            for kid, pt in sampled[fi].items():
+                if kid not in kid_detections:
+                    kid_detections[kid] = []
+                kid_detections[kid].append((fi, pt))
 
-    for kid in all_kids:
-        known_idx = sorted(fi for fi, kps in sampled.items() if kid in kps and fi < total_frames)
-        if len(known_idx) < 2:
-            if known_idx:
-                fi0 = known_idx[0]
-                val = sampled[fi0][kid]
-                for fi in range(total_frames):
-                    if kid not in result[fi]:
-                        result[fi][kid] = list(val)
+    # 3. Interpolate ONLY between consecutive detections if gap <= max_gap
+    # (Strictly no extrapolation before first detection or after last detection)
+    for kid, dets in kid_detections.items():
+        if len(dets) < 2:
             continue
-
-        kx = np.array([sampled[fi][kid][0] for fi in known_idx], dtype=float)
-        ky = np.array([sampled[fi][kid][1] for fi in known_idx], dtype=float)
-        ki = np.array(known_idx, dtype=float)
-
-        interp_x = np.interp(all_frames, ki, kx)
-        interp_y = np.interp(all_frames, ki, ky)
-
-        for fi in range(total_frames):
-            if kid not in result[fi]:
-                result[fi][kid] = [float(interp_x[fi]), float(interp_y[fi])]
+        for idx in range(len(dets) - 1):
+            f_start, p_start = dets[idx]
+            f_end, p_end = dets[idx + 1]
+            gap = f_end - f_start
+            if 1 < gap <= max_gap:
+                dx = (p_end[0] - p_start[0]) / float(gap)
+                dy = (p_end[1] - p_start[1]) / float(gap)
+                for f_cur in range(f_start + 1, f_end):
+                    step = f_cur - f_start
+                    result[f_cur][kid] = [
+                        float(p_start[0] + dx * step),
+                        float(p_start[1] + dy * step),
+                    ]
 
     return result
 
@@ -841,27 +844,36 @@ class KeypointDetector:
     # 光流位移超过此像素值时强制触发关键点检测，防止快速平移期间单应性偏差
     _PAN_TRIGGER_PX = 15.0
 
-    def predict(self, frames: list, cam_movement: list = None) -> list:
+    def predict(self, frames: list, cam_movement: list = None, enable_gating: bool = True) -> list:
         """
         cam_movement: 可选，每帧 [dx, dy] 列表（来自 CameraMovementEstimator）。
         若某帧的镜头位移幅度超过 _PAN_TRIGGER_PX，强制插入该帧做关键点检测，
         打断 KEYPOINT_STRIDE 的冷却期，避免快速平移时单应性矩阵严重偏差。
+        若启用 enable_gating，在镜头静止时自适应略过多余检测以节约算力。
         """
         sampled  = {}
-        base_set = set(range(0, len(frames), KEYPOINT_STRIDE))
+        if cam_movement is not None and enable_gating:
+            from server.pipeline.keypoint_gating import KeypointCacheGater
+            gater = KeypointCacheGater(
+                pan_trigger_px=self._PAN_TRIGGER_PX,
+                drift_threshold_px=2.5,
+                max_static_interval=60,
+                keypoint_stride=KEYPOINT_STRIDE,
+            )
+            indices, _ = gater.plan_chunk_sampling(0, len(frames), cam_movement)
+        else:
+            base_set = set(range(0, len(frames), KEYPOINT_STRIDE))
+            if cam_movement is not None:
+                for fi, mv in enumerate(cam_movement):
+                    if mv and len(mv) >= 2:
+                        if (mv[0]**2 + mv[1]**2) ** 0.5 > self._PAN_TRIGGER_PX:
+                            base_set.add(fi)
+            indices = sorted(base_set)
 
-        # 检测高速平移帧并强制加入采样
-        if cam_movement is not None:
-            for fi, mv in enumerate(cam_movement):
-                if mv and len(mv) >= 2:
-                    if (mv[0]**2 + mv[1]**2) ** 0.5 > self._PAN_TRIGGER_PX:
-                        base_set.add(fi)
-
-        indices = sorted(base_set)
         for i in range(0, len(indices), YOLO_BATCH_SIZE):
             batch_idx = indices[i:i+YOLO_BATCH_SIZE]
             results   = self.model.predict([frames[j] for j in batch_idx],
-                                           conf=0.1, verbose=False, half=True, imgsz=416)
+                                           conf=0.1, verbose=False, half=True, imgsz=640)
             for res, fidx in zip(results, batch_idx):
                 kps = {}
                 if res.keypoints is not None and res.keypoints.xy.shape[1] > 0:
@@ -884,32 +896,45 @@ class KeypointDetector:
 
     def predict_streamed(self, video_path: str, total_frames: int,
                           chunk_size: int = 500,
-                          cam_movement: list = None) -> list:
+                          cam_movement: list = None,
+                          enable_gating: bool = True) -> list:
         """
         流式关键点检测：KEYPOINT_STRIDE 采样，不加载全部帧。
         cam_movement: 可选，每帧 [dx, dy]，高速平移帧强制触发检测（同 predict）。
         """
         sampled = {}
-
-        # 预计算需要强制检测的帧集合
+        gater = None
         forced = set()
-        if cam_movement is not None:
+
+        if cam_movement is not None and enable_gating:
+            from server.pipeline.keypoint_gating import KeypointCacheGater
+            gater = KeypointCacheGater(
+                pan_trigger_px=self._PAN_TRIGGER_PX,
+                drift_threshold_px=2.5,
+                max_static_interval=60,
+                keypoint_stride=KEYPOINT_STRIDE,
+            )
+        elif cam_movement is not None:
             for fi, mv in enumerate(cam_movement):
                 if mv and len(mv) >= 2:
                     if (mv[0]**2 + mv[1]**2) ** 0.5 > self._PAN_TRIGGER_PX:
                         forced.add(fi)
 
         for start_idx, chunk in stream_video_chunks(video_path, chunk_size):
-            # 落在步长边界 或 强制触发 的帧
-            kp_local = [j for j in range(len(chunk))
-                         if (start_idx + j) % KEYPOINT_STRIDE == 0
-                         or (start_idx + j) in forced]
+            if gater is not None and cam_movement is not None:
+                sub_mv = [cam_movement[start_idx + j] if (start_idx + j) < len(cam_movement) else None
+                          for j in range(len(chunk))]
+                kp_local, _ = gater.plan_chunk_sampling(start_idx, len(chunk), sub_mv)
+            else:
+                kp_local = [j for j in range(len(chunk))
+                             if (start_idx + j) % KEYPOINT_STRIDE == 0
+                             or (start_idx + j) in forced]
             if not kp_local:
                 continue
             for i in range(0, len(kp_local), YOLO_BATCH_SIZE):
                 batch_l  = kp_local[i:i+YOLO_BATCH_SIZE]
                 results  = self.model.predict([chunk[j] for j in batch_l],
-                                               conf=0.1, verbose=False, half=True, imgsz=416)
+                                               conf=0.1, verbose=False, half=True, imgsz=640)
                 for res, local_idx in zip(results, batch_l):
                     global_idx = start_idx + local_idx
                     kps = {}
@@ -953,7 +978,7 @@ def run_merged_streaming_pipeline(video_path: str, total_frames: int,
                                    tracker: 'Tracker',
                                    kpt_detector: 'KeypointDetector',
                                    cam_estimator: 'CameraMovementEstimator' = None,
-                                   chunk_size: int = 500,
+                                   chunk_size: int = 150,
                                    progress_callback=None,
                                    sample_frame_indices=None,
                                    sampled_frames_out: dict = None) -> tuple:
@@ -966,6 +991,11 @@ def run_merged_streaming_pipeline(video_path: str, total_frames: int,
     """
     import time as _time
     from concurrent.futures import ThreadPoolExecutor
+
+    # Bounded chunk size to prevent multi-GB RAM spikes on 1080p sports footage
+    max_chunk = int(os.environ.get("STREAMING_CHUNK_SIZE", "150"))
+    if chunk_size > max_chunk:
+        chunk_size = max_chunk
 
     try:
         import torch
@@ -988,6 +1018,15 @@ def run_merged_streaming_pipeline(video_path: str, total_frames: int,
     enable_optical_flow = (os.environ.get("ENABLE_OPTICAL_FLOW", "0") == "1") and (cam_estimator is not None)
     flow_state = {"old_gray": None, "old_pts": None} if enable_optical_flow else None
     OPT_FLOW_STRIDE = 3
+
+    enable_kpt_gating = (os.environ.get("ENABLE_KEYPOINT_GATING", "1") == "1")
+    from server.pipeline.keypoint_gating import KeypointCacheGater
+    kpt_gater = KeypointCacheGater(
+        pan_trigger_px=getattr(kpt_detector, "_PAN_TRIGGER_PX", 15.0) if kpt_detector else 15.0,
+        drift_threshold_px=2.5,
+        max_static_interval=60,
+        keypoint_stride=KEYPOINT_STRIDE,
+    ) if enable_kpt_gating else None
 
     # CUDA streams for YOLO/KPT parallelism. If CUDA isn't available we still
     # run them through the thread pool, which gives some overlap because
@@ -1016,7 +1055,7 @@ def run_merged_streaming_pipeline(video_path: str, total_frames: int,
         tracker.model.predict([_warmup], conf=PLAYER_CONF, iou=0.45,
                               verbose=False, half=True, imgsz=1280)
         kpt_detector.model.predict([_warmup], conf=0.1,
-                                    verbose=False, half=True, imgsz=416)
+                                    verbose=False, half=True, imgsz=640)
     except Exception as _exc:
         # If warmup itself fails, fall through — the chunk loop will surface
         # the real error with a proper traceback via tasks.py's wrapper.
@@ -1038,39 +1077,41 @@ def run_merged_streaming_pipeline(video_path: str, total_frames: int,
         if use_cuda_streams:
             with torch.cuda.stream(kpt_stream):
                 return kpt_detector.model.predict(
-                    frames, conf=0.1, verbose=False, half=True, imgsz=416,
+                    frames, conf=0.1, verbose=False, half=True, imgsz=640,
                 )
         return kpt_detector.model.predict(
-            frames, conf=0.1, verbose=False, half=True, imgsz=416,
+            frames, conf=0.1, verbose=False, half=True, imgsz=640,
         )
 
     def _run_optical_flow_chunk(chunk, start_idx):
         old_gray = flow_state["old_gray"]
         old_pts  = flow_state["old_pts"]
+        from .camera_motion_ransac import estimate_motion_ransac
+        min_dist = cam_estimator.minimum_distance if cam_estimator else 1.2
+
         for local_idx, frame in enumerate(chunk):
             fi = start_idx + local_idx
+            # Skip non-stride frames to avoid redundant grayscale conversion
+            if fi % OPT_FLOW_STRIDE != 0 and old_gray is not None:
+                continue
+
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             if old_gray is None:
                 old_gray = gray
                 old_pts  = cv2.goodFeaturesToTrack(old_gray, **cam_estimator.features)
                 continue
-            if fi % OPT_FLOW_STRIDE != 0:
-                old_gray = gray
-                continue
+
             new_pts, _, _ = cv2.calcOpticalFlowPyrLK(
                 old_gray, gray, old_pts, None, **cam_estimator.lk_params)
-            max_d, cx, cy = 0, 0.0, 0.0
+            cx, cy = 0.0, 0.0
             if new_pts is not None and old_pts is not None:
-                for n, o in zip(new_pts, old_pts):
-                    d = measure_distance(n.ravel(), o.ravel())
-                    if d > max_d:
-                        max_d = d
-                        cx, cy = measure_xy_distance(o.ravel(), n.ravel())
-            sampled_cam[fi] = ([cx, cy] if max_d > cam_estimator.minimum_distance
-                                else [0.0, 0.0])
-            if max_d > cam_estimator.minimum_distance:
+                cx, cy, _, _ = estimate_motion_ransac(
+                    old_pts, new_pts, reproj_threshold=3.0, min_distance=min_dist
+                )
+            sampled_cam[fi] = [cx, cy]
+            if math.hypot(cx, cy) > min_dist or (old_pts is not None and len(old_pts) < 15):
                 old_pts = cv2.goodFeaturesToTrack(gray, **cam_estimator.features)
-            old_gray = gray.copy()
+            old_gray = gray
         flow_state["old_gray"] = old_gray
         flow_state["old_pts"]  = old_pts
 
@@ -1102,10 +1143,9 @@ def run_merged_streaming_pipeline(video_path: str, total_frames: int,
         print(f"[MERGED] Using standard stream_video_chunks ({_stream_imp_err})")
         video_stream_func = stream_video_chunks
 
-    # 2-worker pool: one runs YOLO (CUDA stream A), one runs KPT (stream B).
-    # Optical flow we run inline on the orchestrator thread — it's CPU-only
-    # and short enough that it overlaps naturally with the GPU work above.
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    # 3-worker pool: one runs YOLO (CUDA stream A), one runs KPT (stream B),
+    # one runs optical flow asynchronously on CPU.
+    with ThreadPoolExecutor(max_workers=3) as pool:
         for start_idx, chunk in video_stream_func(video_path, chunk_size):
             # Snapshot any sample frames the team-color stage asked for
             if sampled_frames_out is not None and sample_set:
@@ -1139,22 +1179,32 @@ def run_merged_streaming_pipeline(video_path: str, total_frames: int,
                             for i in range(0, len(det_frames), YOLO_BATCH_SIZE)]
             yolo_futures = [pool.submit(_run_yolo_batch, b) for b in yolo_batches]
 
-            # Run optical flow on this thread while GPU is busy with YOLO (if enabled)
+            # Submit Optical Flow asynchronously on CPU thread while YOLO runs on GPU
+            flow_future = None
             if enable_optical_flow:
-                _run_optical_flow_chunk(chunk, start_idx)
+                flow_future = pool.submit(_run_optical_flow_chunk, chunk, start_idx)
 
-            # Regular keypoint detection on KEYPOINT_STRIDE schedule
-            kpt_local_set = {j for j in range(len(chunk))
-                              if (start_idx + j) % KEYPOINT_STRIDE == 0}
-            if enable_optical_flow and kpt_detector is not None:
-                pan_thresh_sq = kpt_detector._PAN_TRIGGER_PX ** 2
-                for j in range(len(chunk)):
-                    fi = start_idx + j
-                    mv = sampled_cam.get(fi)
-                    if mv and (mv[0] * mv[0] + mv[1] * mv[1]) > pan_thresh_sq:
-                        kpt_local_set.add(j)
+            # Await optical flow if needed for camera movement telemetry and pan triggers
+            if flow_future is not None:
+                flow_future.result()
 
-            kpt_local = sorted(kpt_local_set)
+            if kpt_gater is not None and enable_optical_flow:
+                chunk_movements = [sampled_cam.get(start_idx + j) for j in range(len(chunk))]
+                kpt_local, gater_diag = kpt_gater.plan_chunk_sampling(start_idx, len(chunk), chunk_movements)
+                if gater_diag.get("skipped_count", 0) > 0 and len(kpt_local) > 0:
+                    print(f"[KPT_GATER] frames {start_idx}..{start_idx + len(chunk)}: sampled {len(kpt_local)}/{len(chunk)} keypoint frames "
+                          f"({gater_diag['skip_percentage']}% skips)")
+            else:
+                kpt_local_set = {j for j in range(len(chunk))
+                                  if (start_idx + j) % KEYPOINT_STRIDE == 0}
+                if enable_optical_flow and kpt_detector is not None:
+                    pan_thresh_sq = kpt_detector._PAN_TRIGGER_PX ** 2
+                    for j in range(len(chunk)):
+                        fi = start_idx + j
+                        mv = sampled_cam.get(fi)
+                        if mv and (mv[0] * mv[0] + mv[1] * mv[1]) > pan_thresh_sq:
+                            kpt_local_set.add(j)
+                kpt_local = sorted(kpt_local_set)
             kpt_frames = [chunk[j] for j in kpt_local]
             kpt_batches = [kpt_frames[i:i+YOLO_BATCH_SIZE]
                            for i in range(0, len(kpt_frames), YOLO_BATCH_SIZE)]
@@ -1231,6 +1281,25 @@ def run_merged_streaming_pipeline(video_path: str, total_frames: int,
     return tracks, cam_movement, kpts_full
 
 
+class RobustPitchTransformer:
+    """
+    Robust 2D pitch transformer between camera image pixels and pitch coordinates (cm).
+    Uses cv2.perspectiveTransform directly with pure OpenCV and NumPy.
+    """
+    def __init__(self, H: np.ndarray):
+        self.m = np.asarray(H, dtype=np.float64)
+
+    def transform_points(self, points: np.ndarray) -> np.ndarray:
+        if points is None or len(points) == 0:
+            return np.empty((0, 2), dtype=np.float32)
+        pts = np.asarray(points, dtype=np.float32).reshape(-1, 1, 2)
+        try:
+            res = cv2.perspectiveTransform(pts, self.m)
+            return res.reshape(-1, 2)
+        except Exception:
+            return np.empty((0, 2), dtype=np.float32)
+
+
 class ViewTransformer:
     # Soccana_Keypoint (29 pts) → physical pitch coordinates
     # Units match SoccerPitchConfiguration scale (12000 × 7000).
@@ -1269,35 +1338,177 @@ class ViewTransformer:
     }
 
     def __init__(self):
-        if not HAS_SPORTS:
-            self.config = None; return
-        self.config = SoccerPitchConfiguration()
-        mc = max(abs(v[0]) for v in self.config.vertices) + \
-             max(abs(v[1]) for v in self.config.vertices)
-        if   mc > 500: self.scale_factor, self.minimap_scale = 0.01, 1.0
-        elif mc > 50:  self.scale_factor, self.minimap_scale = 0.1,  10.0
-        else:          self.scale_factor, self.minimap_scale = 1.0,  100.0
-        self._last_transformer = None  # fallback when keypoints < 4
+        self.scale_factor = 0.01
+        self.minimap_scale = 1.0
+        self._last_H = None
+        self._last_transformer = None
+        try:
+            from server.pipeline.keypoint_gating import HomographyCache
+            self.homography_cache = HomographyCache(tolerance_px=1.0)
+        except Exception:
+            self.homography_cache = None
 
+    @staticmethod
+    def compute_homography_ransac(src_pts, dst_pts):
+        """
+        Estimate a robust homography using RANSAC with strict outlier rejection
+        and geometric span validation.
+        """
+        if len(src_pts) < 4 or len(dst_pts) < 4:
+            return None
+        src_arr = np.asarray(src_pts, dtype=np.float32)
+        dst_arr = np.asarray(dst_pts, dtype=np.float32)
+
+        H, mask = cv2.findHomography(
+            src_arr, dst_arr,
+            method=cv2.RANSAC,
+            ransacReprojThreshold=250.0,
+            maxIters=3000,
+            confidence=0.999
+        )
+        if H is None or mask is None:
+            return None
+
+        inliers = mask.ravel() == 1
+        n_inliers = int(inliers.sum())
+        inlier_ratio = n_inliers / float(len(src_arr))
+
+        if n_inliers < 4 or inlier_ratio < 0.50:
+            return None
+
+        src_in = src_arr[inliers]
+        dst_in = dst_arr[inliers]
+
+        x_span = dst_in[:, 0].max() - dst_in[:, 0].min()
+        y_span = dst_in[:, 1].max() - dst_in[:, 1].min()
+        if x_span < 1200.0 or y_span < 1000.0:
+            return None
+
+        if n_inliers >= 6:
+            H_clean, _ = cv2.findHomography(src_in, dst_in, 0)
+            if H_clean is not None:
+                H = H_clean
+
+        if abs(H[2, 2]) < 1e-8:
+            return None
+        H = H / H[2, 2]
+        return H
+
+    @staticmethod
+    def is_homography_valid(H: np.ndarray, ref_w: float = 1280.0, ref_h: float = 720.0) -> bool:
+        """
+        Validate that H defines a physically plausible projection of a soccer pitch:
+        1. Non-singular determinant.
+        2. Horizon does not intersect lower image (w > 0.05).
+        3. Projected field coordinates fall within sensible pitch limits.
+        4. Field quadrilateral is strictly convex and non-degenerate.
+        5. Vertical pitch span (Y span) is not collapsed to a line (>= 10m).
+        6. Field area is within plausible broadcast limits (300m² .. 18000m²).
+        """
+        if H is None:
+            return False
+        det = np.linalg.det(H)
+        if abs(det) < 1e-4 or np.isnan(det) or np.isinf(det):
+            return False
+
+        test_pts = np.array([
+            [0, ref_h], [ref_w, ref_h], [ref_w / 2, ref_h],
+            [0, ref_h * 0.4], [ref_w, ref_h * 0.4], [ref_w / 2, ref_h * 0.4]
+        ], dtype=np.float32)
+        w = H[2, 0] * test_pts[:, 0] + H[2, 1] * test_pts[:, 1] + H[2, 2]
+        if (w <= 0.05).any():
+            return False
+
+        corners = np.array([
+            [[0.0, 0.0]],
+            [[ref_w, 0.0]],
+            [[ref_w, ref_h]],
+            [[0.0, ref_h]]
+        ], dtype=np.float32)
+
+        try:
+            mapped = cv2.perspectiveTransform(corners, H).reshape(-1, 2)
+        except Exception:
+            return False
+
+        if np.isnan(mapped).any() or np.isinf(mapped).any():
+            return False
+
+        x_min, x_max = mapped[:, 0].min(), mapped[:, 0].max()
+        y_min, y_max = mapped[:, 1].min(), mapped[:, 1].max()
+
+        if x_min < -6000.0 or x_max > 18000.0 or y_min < -5000.0 or y_max > 12000.0:
+            return False
+
+        if (y_max - y_min) < 1000.0:
+            return False
+
+        quad = mapped.astype(np.float32)
+        if not cv2.isContourConvex(quad):
+            return False
+
+        area = cv2.contourArea(quad)
+        if area < 3e6 or area > 1.8e8:
+            return False
+
+        return True
+
+    def smooth_homography(self, H_new: np.ndarray, ref_w: float = 1280.0, ref_h: float = 720.0) -> np.ndarray:
+        if self._last_H is None:
+            self._last_H = H_new
+            return H_new
+
+        pts = np.array([
+            [[ref_w * 0.5, ref_h * 0.5]],
+            [[ref_w * 0.2, ref_h * 0.8]],
+            [[ref_w * 0.8, ref_h * 0.8]]
+        ], dtype=np.float32)
+
+        try:
+            m_new = cv2.perspectiveTransform(pts, H_new).reshape(-1, 2)
+            m_old = cv2.perspectiveTransform(pts, self._last_H).reshape(-1, 2)
+            drift = np.linalg.norm(m_new - m_old, axis=1).max()
+        except Exception:
+            drift = 99999.0
+
+        if drift > 1500.0:
+            self._last_H = H_new
+            return H_new
+
+        alpha = 0.35
+        H_smoothed = alpha * H_new + (1.0 - alpha) * self._last_H
+        if abs(H_smoothed[2, 2]) > 1e-8:
+            H_smoothed = H_smoothed / H_smoothed[2, 2]
+        self._last_H = H_smoothed
+        return H_smoothed
 
     def add_transformed_position_to_tracks(self, tracks: dict, kps_list: list):
-        if not HAS_SPORTS: return
+        if not kps_list:
+            return
 
-        # 提前热身：扫描所有帧，找到第一个可靠 homography（≥6 个关键点）
-        # 作为初始 fallback，避免开头几秒因 _last_transformer=None 被跳过
+        # Estimate image frame resolution from available keypoints
+        max_px_x, max_px_y = 1280.0, 720.0
+        for kps in kps_list[:200]:
+            for pt in kps.values():
+                if pt[0] > max_px_x: max_px_x = pt[0]
+                if pt[1] > max_px_y: max_px_y = pt[1]
+        ref_w = 1920.0 if max_px_x > 1400.0 else 1280.0
+        ref_h = 1080.0 if max_px_y > 800.0 else 720.0
+
+        # Warmup: find first frame with a geometrically valid homography
         if self._last_transformer is None:
             for kps in kps_list:
                 src0, dst0 = [], []
                 for kid, pos in kps.items():
                     target = self.SOCCANA_PITCH_COORDS.get(kid)
                     if target is not None:
-                        src0.append(pos); dst0.append(target)
-                if len(src0) >= 8:
-                    d0 = np.array(dst0)
-                    if (d0[:,0].max()-d0[:,0].min() > 3000 and
-                            d0[:,1].max()-d0[:,1].min() > 1500):
-                        self._last_transformer = SportsViewTransformer(
-                            source=np.array(src0), target=d0)
+                        src0.append(pos)
+                        dst0.append(target)
+                if len(src0) >= 4:
+                    H0 = self.compute_homography_ransac(src0, dst0)
+                    if H0 is not None and self.is_homography_valid(H0, ref_w, ref_h):
+                        self._last_H = H0
+                        self._last_transformer = RobustPitchTransformer(H0)
                         break
 
         for fnum, kps in enumerate(kps_list):
@@ -1305,50 +1516,65 @@ class ViewTransformer:
             for kid, pos in kps.items():
                 target = self.SOCCANA_PITCH_COORDS.get(kid)
                 if target is not None:
-                    src.append(pos); dst.append(target)
+                    src.append(pos)
+                    dst.append(target)
 
-            if len(src) >= 6:
-                dst_arr = np.array(dst, dtype=np.float32)
+            transformer = None
+            if len(src) >= 4:
                 src_arr = np.array(src, dtype=np.float32)
-                x_span  = dst_arr[:, 0].max() - dst_arr[:, 0].min()
-                y_span  = dst_arr[:, 1].max() - dst_arr[:, 1].min()
-                # 关键点必须在场地上有足够分布才更新，否则退化矩阵
-                # x_span > 3000 (~25% 场长) 且 y_span > 1500 (~21% 场宽)
-                if x_span > 3000 and y_span > 1500:
-                    # RANSAC inlier 检查：inlier < 50% 说明 keypoint ID 乱了，拒绝更新
-                    import cv2 as _cv2
-                    _, mask = _cv2.findHomography(src_arr, dst_arr, _cv2.RANSAC, 500.0)
-                    inlier_ratio = float(mask.sum()) / len(mask) if mask is not None else 0.0
-                    if inlier_ratio >= 0.5:
-                        transformer = SportsViewTransformer(source=src_arr, target=dst_arr)
-                        self._last_transformer = transformer
-                    elif self._last_transformer is not None:
-                        transformer = self._last_transformer
-                    else:
-                        continue
-                elif self._last_transformer is not None:
+                dst_arr = np.array(dst, dtype=np.float32)
+                cached = self.homography_cache.get(src_arr) if (self.homography_cache is not None and self._last_transformer is not None) else None
+                if cached is not None:
                     transformer = self._last_transformer
                 else:
-                    continue
-            elif self._last_transformer is not None:
-                # 关键点不足 → 用上一个稳定 homography 做 fallback
+                    H_cand = self.compute_homography_ransac(src_arr, dst_arr)
+                    if H_cand is not None and self.is_homography_valid(H_cand, ref_w, ref_h):
+                        H_smooth = self.smooth_homography(H_cand, ref_w, ref_h)
+                        transformer = RobustPitchTransformer(H_smooth)
+                        self._last_transformer = transformer
+                        if self.homography_cache is not None:
+                            self.homography_cache.put(src_arr, dst_arr, H_smooth, {"status": "VALID"})
+
+            if transformer is None:
                 transformer = self._last_transformer
-            else:
+
+            if transformer is None:
                 continue
 
+            # Batch points transformation across all tracked players/objects in this frame
+            pos_targets = []
+            pos_points = []
             for obj, otracks in tracks.items():
                 if fnum >= len(otracks): continue
                 for info in otracks[fnum].values():
                     pos = info.get("position_adjusted") or info.get("position")
-                    if not pos: continue
-                    t = transformer.transform_points(np.array([pos]))
-                    if t is not None and len(t) > 0:
-                        tx = t[0][0] * self.scale_factor
-                        ty = t[0][1] * self.scale_factor
-                        tx_c, ty_c = clamp_pitch_position(tx, ty)
-                        info["position_transformed"] = [tx_c, ty_c]
-                        info["position_minimap"]     = [tx_c * (self.minimap_scale / self.scale_factor),
-                                                          ty_c * (self.minimap_scale / self.scale_factor)]
+                    if pos:
+                        pos_targets.append(info)
+                        pos_points.append(pos)
+
+            if pos_points:
+                try:
+                    t_pts = transformer.transform_points(np.array(pos_points, dtype=np.float32))
+                    if t_pts is not None and len(t_pts) == len(pos_targets):
+                        for info, pt in zip(pos_targets, t_pts):
+                            tx = float(pt[0]) * self.scale_factor
+                            ty = float(pt[1]) * self.scale_factor
+                            tx_c, ty_c = clamp_pitch_position(tx, ty)
+                            info["position_transformed"] = [tx_c, ty_c]
+                            info["position_minimap"]     = [tx_c * (self.minimap_scale / self.scale_factor),
+                                                            ty_c * (self.minimap_scale / self.scale_factor)]
+                    else:
+                        raise ValueError("Shape mismatch")
+                except Exception:
+                    for info, pos in zip(pos_targets, pos_points):
+                        t = transformer.transform_points(np.array([pos]))
+                        if t is not None and len(t) > 0:
+                            tx = t[0][0] * self.scale_factor
+                            ty = t[0][1] * self.scale_factor
+                            tx_c, ty_c = clamp_pitch_position(tx, ty)
+                            info["position_transformed"] = [tx_c, ty_c]
+                            info["position_minimap"]     = [tx_c * (self.minimap_scale / self.scale_factor),
+                                                            ty_c * (self.minimap_scale / self.scale_factor)]
 
 
     def interpolate_2d_positions(self, tracks: dict):
@@ -2097,7 +2323,7 @@ def run_segment_detection(video_path: str, start_frame: int, end_frame: int,
                 batch_l = kpt_local[i:i + batch_size]
                 kpt_results = kpt_det.model.predict(
                     [chunk[j] for j in batch_l],
-                    conf=0.1, verbose=False, half=True, imgsz=416,
+                    conf=0.1, verbose=False, half=True, imgsz=640,
                 )
                 for j, kres in zip(batch_l, kpt_results):
                     fi_local = local_start + j
