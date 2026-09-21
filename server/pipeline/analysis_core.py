@@ -390,11 +390,20 @@ def put_text_pil(img, text: str, position: tuple, color: tuple, font_size: int =
 
 def interpolate_ball_positions_spline(ball_positions: list) -> list:
     """
-    Interpolate missing ball detections.
-    - Gaps <= 30 frames: cubic spline (smooth curve matching ball physics)
-    - Gaps > 30 frames: linear fallback (spline oscillates badly over long gaps)
-    - Detected frames are preserved exactly (no smoothing of real detections)
+    Interpolate missing ball detections with outlier filtering and ballistic flight dynamics.
+    - Rejects teleportation outliers (false ball detections on shoes/signs)
+    - Interpolates parabolic ballistic flight curves across dropouts
     """
+    try:
+        from .ball_trajectory_physics_interpolator import BallTrajectoryPhysicsInterpolator
+        interpolator = BallTrajectoryPhysicsInterpolator(
+            max_dropout_gap=15,
+            max_physical_speed_px_per_frame=120.0,
+        )
+        return interpolator.interpolate_ball_trajectory(ball_positions, len(ball_positions))
+    except Exception:
+        pass
+
     n = len(ball_positions)
     raw = [ball_positions[i].get(1, {}).get("bbox") for i in range(n)]
 
@@ -463,7 +472,17 @@ def interpolate_ball_positions_spline(ball_positions: list) -> list:
 
 class Tracker:
     def __init__(self, model_path: str = None):
-        self.tracker      = sv.ByteTrack()  # 只用于球员追踪
+        try:
+            from .bytetrack_adaptive_compensator import AdaptiveByteTracker
+            self.tracker = AdaptiveByteTracker(
+                base_fps=25.0,
+                base_stride=YOLO_DETECTION_STRIDE,
+                track_activation_threshold=PLAYER_CONF,
+                minimum_matching_threshold=0.80,
+                base_lost_buffer_frames=15,
+            )
+        except Exception:
+            self.tracker = sv.ByteTrack()  # fallback
         self.player_id = self.ball_id = self.referee_id = None
         
         if model_path:
@@ -576,6 +595,14 @@ class Tracker:
                         ib = [float(x) for x in interp_bboxes[offset]]
                         if ib[2] > ib[0] and ib[3] > ib[1]:
                             tracks[obj][fi_int][tid] = {"bbox": ib}
+
+        # 3. Ball Trajectory Ballistic Interpolation & Outlier Filtering
+        try:
+            from .ball_trajectory_physics_interpolator import BallTrajectoryPhysicsInterpolator
+            ball_interp = BallTrajectoryPhysicsInterpolator(max_dropout_gap=8)
+            tracks["ball"] = ball_interp.interpolate_ball_trajectory(tracks["ball"], total_frames)
+        except Exception:
+            pass
 
     def get_object_tracks_streamed(self, video_path: str, total_frames: int,
                                     chunk_size: int = 500,
@@ -1049,13 +1076,18 @@ def run_merged_streaming_pipeline(video_path: str, total_frames: int,
     # first thread already deleted the attribute). Forcing one predict()
     # on each model up front makes the model "warm" (fused, allocated),
     # so the pool can safely call .predict from multiple threads after.
-    print("[MERGED] Warming up YOLO + keypoint models (avoids fuse() race)...")
+    # Hardware-aware precision and resolution adaptation
+    yolo_half = bool(use_cuda_streams)
+    yolo_imgsz = int(os.environ.get("YOLO_IMGSZ", "1280" if use_cuda_streams else "960"))
+    kpt_imgsz = int(os.environ.get("KPT_IMGSZ", "640"))
+
+    print(f"[MERGED] Warming up YOLO + keypoint models (half={yolo_half}, imgsz={yolo_imgsz})...")
     _warmup = np.zeros((480, 640, 3), dtype=np.uint8)
     try:
         tracker.model.predict([_warmup], conf=PLAYER_CONF, iou=0.45,
-                              verbose=False, half=True, imgsz=1280)
+                              verbose=False, half=yolo_half, imgsz=yolo_imgsz)
         kpt_detector.model.predict([_warmup], conf=0.1,
-                                    verbose=False, half=True, imgsz=640)
+                                    verbose=False, half=yolo_half, imgsz=kpt_imgsz)
     except Exception as _exc:
         # If warmup itself fails, fall through — the chunk loop will surface
         # the real error with a proper traceback via tasks.py's wrapper.
@@ -1066,11 +1098,11 @@ def run_merged_streaming_pipeline(video_path: str, total_frames: int,
             with torch.cuda.stream(yolo_stream):
                 return tracker.model.predict(
                     frames, conf=PLAYER_CONF, iou=0.45,
-                    verbose=False, half=True, imgsz=1280,
+                    verbose=False, half=yolo_half, imgsz=yolo_imgsz,
                 )
         return tracker.model.predict(
             frames, conf=PLAYER_CONF, iou=0.45,
-            verbose=False, half=True, imgsz=1280,
+            verbose=False, half=yolo_half, imgsz=yolo_imgsz,
         )
 
     def _run_kpt_batch(frames):
@@ -1117,8 +1149,8 @@ def run_merged_streaming_pipeline(video_path: str, total_frames: int,
 
     t_start = _time.perf_counter()
 
-    # Detection accelerator setup (Prefetch + Adaptive Temporal Stride)
-    enable_adaptive_stride = (os.environ.get("ENABLE_ADAPTIVE_STRIDE", "1").strip().lower() not in ("0", "false", "no"))
+    # Detection accelerator setup (Prefetch enabled; Adaptive Temporal Stride default disabled for 100% frame fidelity)
+    enable_adaptive_stride = (os.environ.get("ENABLE_ADAPTIVE_STRIDE", "0").strip().lower() in ("1", "true", "yes"))
     accelerator = None
     last_thumb = None
     if enable_adaptive_stride:
@@ -1135,6 +1167,18 @@ def run_merged_streaming_pipeline(video_path: str, total_frames: int,
         except Exception as _acc_err:
             print(f"[MERGED] Could not initialize LongVideoDetectionAccelerator ({_acc_err}), using static stride")
             accelerator = None
+
+    # Pitch ROI Slicing (default disabled to eliminate any risk of cropping high airborne balls)
+    enable_pitch_roi = (os.environ.get("ENABLE_PITCH_ROI", "0").strip().lower() in ("1", "true", "yes"))
+    roi_detector = None
+    if enable_pitch_roi:
+        try:
+            from .pitch_roi_crop_detector import PitchROICropDetector
+            roi_detector = PitchROICropDetector(min_crop_height=480, pad_px=48)
+            print("[MERGED] PitchROICropDetector initialized (active pitch ROI cropping enabled)")
+        except Exception as _roi_err:
+            print(f"[MERGED] Could not initialize PitchROICropDetector ({_roi_err})")
+            roi_detector = None
 
     try:
         from .detection_accelerator import stream_video_chunks_safe
@@ -1175,6 +1219,18 @@ def run_merged_streaming_pipeline(video_path: str, total_frames: int,
                 print(f"[ACCEL] frames {start_idx}..{start_idx + len(chunk)}: planned {len(det_local)}/{len(chunk)} detections ({acc_stats['reduction_pct']}% skipped)")
 
             det_frames = [chunk[j] for j in det_local]
+
+            # Pitch ROI Slicing (cuts non-pitch stands / roof to save inference compute)
+            y_offset = 0
+            if enable_pitch_roi and roi_detector is not None and len(det_frames) > 0:
+                try:
+                    y_min, y_max = roi_detector.estimate_pitch_vertical_bounds(det_frames[0])
+                    if y_min > 0 or y_max < det_frames[0].shape[0]:
+                        det_frames = [roi_detector.crop_frame(f, y_min, y_max) for f in det_frames]
+                        y_offset = y_min
+                except Exception:
+                    y_offset = 0
+
             yolo_batches = [det_frames[i:i+YOLO_BATCH_SIZE]
                             for i in range(0, len(det_frames), YOLO_BATCH_SIZE)]
             yolo_futures = [pool.submit(_run_yolo_batch, b) for b in yolo_batches]
@@ -1228,6 +1284,9 @@ def run_merged_streaming_pipeline(video_path: str, total_frames: int,
                 if global_idx >= total_frames:
                     break
                 ds = sv.Detections.from_ultralytics(res)
+                if y_offset > 0 and len(ds) > 0:
+                    ds.xyxy[:, 1] += float(y_offset)
+                    ds.xyxy[:, 3] += float(y_offset)
                 tracker._process_detections(ds, global_idx, tracks)
 
             # ── Process keypoint results ──

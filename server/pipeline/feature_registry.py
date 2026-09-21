@@ -155,6 +155,22 @@ FEATURE_SPECS: dict[str, FeatureSpec] = {
         needs_video_file=False,
         description="Defensive turnover spotting, 5s transition counter-press reaction latency, and counter-attack spotter",
     ),
+    "offside_var": FeatureSpec(
+        canonical_name="offside_var",
+        task_fn_name="run_offside_var",
+        artifact_filename="var_offside_map.png",
+        is_cpu_supported=True,
+        needs_video_file=False,
+        description="Automated VAR offside line evaluation, second-last defender tracking, and metric margin analysis",
+    ),
+    "team_compactness": FeatureSpec(
+        canonical_name="team_compactness",
+        task_fn_name="run_team_compactness",
+        artifact_filename="team_compactness.png",
+        is_cpu_supported=True,
+        needs_video_file=False,
+        description="Dynamic 2D outfield player Convex Hull area (m^2), tactical stretch index, and team centroid distance",
+    ),
 }
 
 FEATURE_ALIASES: dict[str, str] = {
@@ -190,6 +206,15 @@ FEATURE_ALIASES: dict[str, str] = {
     "turnover_spotter": "turnover_transition",
     "counterpress_transition": "turnover_transition",
     "turnover_transitions": "turnover_transition",
+    "offside": "offside_var",
+    "var_offside": "offside_var",
+    "var": "offside_var",
+    "saot": "offside_var",
+    "compactness": "team_compactness",
+    "convex_hull": "team_compactness",
+    "stretch_index": "team_compactness",
+    "team_shape": "team_compactness",
+    "dispersion": "team_compactness",
 }
 
 

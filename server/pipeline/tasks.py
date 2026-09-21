@@ -3171,6 +3171,216 @@ def run_turnover_transition(session_id: str, session: dict, task_id: str, sm: Se
         _log_error("turnover_transition", session_id, exc)
 
 
+def run_offside_var(session_id: str, session: dict, task_id: str, sm: SessionManager):
+    """
+    Automated VAR offside line evaluation, second-last defender tracking, and margin analysis.
+    Evaluates forward passes targeted into the opponent's half at pass release frame t_release.
+    Generates var_offside_map.png and var_offside_summary.json.
+    """
+    try:
+        sm.update_task(session_id, task_id, status="running", progress=15)
+        data = _load_cache(session)
+        tracks = data.get("tracks", {})
+
+        from .offside_var_evaluator import VAROffsideEvaluator
+        from .pass_event_detector import PassEventDetector
+
+        players_list = tracks.get("players", [])
+        ball_list = tracks.get("ball", [])
+        teams = {}
+        player_traj = {}
+        ball_traj = {}
+
+        for fi, p_frame in enumerate(players_list):
+            if not p_frame:
+                continue
+            frame_players = {}
+            for pid, pinfo in p_frame.items():
+                if not pinfo:
+                    continue
+                pos = pinfo.get("position_minimap") or pinfo.get("position_transformed")
+                if pos and len(pos) == 2 and not any(np.isnan(v) for v in pos):
+                    pid_int = int(pid) if str(pid).isdigit() else hash(pid) % 1000
+                    frame_players[pid_int] = (float(pos[0]), float(pos[1]))
+                    if "team" in pinfo:
+                        teams[pid_int] = int(pinfo["team"])
+            if frame_players:
+                player_traj[fi] = frame_players
+
+        for fi, b_frame in enumerate(ball_list):
+            if not b_frame:
+                continue
+            for bid, binfo in b_frame.items():
+                pos = binfo.get("position_minimap") or binfo.get("position_transformed")
+                if pos and len(pos) == 2 and not any(np.isnan(v) for v in pos):
+                    ball_traj[fi] = (float(pos[0]), float(pos[1]))
+                    break
+                elif "bbox" in binfo and len(binfo["bbox"]) == 4:
+                    bx1, by1, bx2, by2 = binfo["bbox"]
+                    ball_traj[fi] = (float((bx1 + bx2) / 2.0 / 10.0), float((by1 + by2) / 2.0 / 10.0))
+                    break
+
+        fps = float(session.get("video_fps") or 25.0)
+
+        detector = PassEventDetector(fps=fps)
+        passes = detector.detect_passes(ball_traj, player_traj, teams)
+
+        evaluator = VAROffsideEvaluator()
+        var_evaluations = []
+        most_contentious_result = None
+        max_contentious_score = -1.0
+
+        for p in passes:
+            f_release = p.start_frame
+            if f_release not in player_traj or f_release not in ball_traj:
+                continue
+            res = evaluator.evaluate_pass_release(
+                frame_idx=f_release,
+                passer_id=p.passer_id,
+                passer_team=p.passer_team,
+                ball_xy=ball_traj[f_release],
+                player_positions=player_traj[f_release],
+                player_teams=teams,
+                receiver_id=p.receiver_id,
+            )
+            var_evaluations.append(res.to_dict())
+            score = 10.0 if res.is_offside else (1.0 / (abs(res.margin_meters) + 0.1))
+            if score > max_contentious_score:
+                max_contentious_score = score
+                most_contentious_result = res
+
+        if most_contentious_result is None:
+            mid_f = len(player_traj) // 2
+            if mid_f in player_traj and mid_f in ball_traj:
+                p_keys = list(player_traj[mid_f].keys())
+                passer_id = p_keys[0] if p_keys else 1
+                passer_team = teams.get(passer_id, 1)
+                receiver_id = p_keys[1] if len(p_keys) > 1 else None
+                most_contentious_result = evaluator.evaluate_pass_release(
+                    frame_idx=mid_f,
+                    passer_id=passer_id,
+                    passer_team=passer_team,
+                    ball_xy=ball_traj[mid_f],
+                    player_positions=player_traj[mid_f],
+                    player_teams=teams,
+                    receiver_id=receiver_id,
+                )
+                var_evaluations.append(most_contentious_result.to_dict())
+
+        total_checks = len(var_evaluations)
+        offside_incidents = sum(1 for v in var_evaluations if v.get("is_offside"))
+        onside_incidents = total_checks - offside_incidents
+
+        summary_payload = {
+            "total_passes_evaluated": total_checks,
+            "offside_count": offside_incidents,
+            "onside_count": onside_incidents,
+            "evaluations": var_evaluations,
+            "primary_check": most_contentious_result.to_dict() if most_contentious_result else None,
+        }
+
+        sm.update_task(session_id, task_id, progress=65)
+
+        output_path = sm.session_output_dir(session_id) / "var_offside_map.png"
+        if most_contentious_result:
+            evaluator.render_var_freeze_frame(most_contentious_result, output_path=str(output_path))
+        else:
+            if plt:
+                fig, ax = plt.subplots(figsize=(8, 5))
+                ax.text(0.5, 0.5, "No pass release frames available for VAR evaluation", ha="center", va="center")
+                plt.savefig(str(output_path))
+                plt.close(fig)
+
+        summary_path = sm.session_output_dir(session_id) / "var_offside_summary.json"
+        with open(summary_path, "w", encoding="utf-8") as f:
+            json.dump(summary_payload, f, ensure_ascii=False, indent=2, default=_safe_json_default)
+
+        _finish_task(sm, session_id, task_id, output_path, result=summary_payload)
+    except Exception as exc:
+        sm.update_task(session_id, task_id, status="failed", error=str(exc))
+        _log_error("offside_var", session_id, exc)
+
+
+def run_team_compactness(session_id: str, session: dict, task_id: str, sm: SessionManager):
+    """
+    Dynamic 2D outfield player Convex Hull area (m^2), tactical stretch index, and team centroid distance.
+    Generates team_compactness.png and team_compactness.json.
+    """
+    try:
+        sm.update_task(session_id, task_id, status="running", progress=15)
+        data = _load_cache(session)
+        tracks = data.get("tracks", {})
+
+        from .team_compactness_engine import TeamCompactnessEngine
+
+        players_list = tracks.get("players", [])
+        teams = {}
+        player_traj = {}
+
+        for fi, p_frame in enumerate(players_list):
+            if not p_frame:
+                continue
+            frame_players = {}
+            for pid, pinfo in p_frame.items():
+                if not pinfo:
+                    continue
+                pos = pinfo.get("position_minimap") or pinfo.get("position_transformed")
+                if pos and len(pos) == 2 and not any(np.isnan(v) for v in pos):
+                    pid_int = int(pid) if str(pid).isdigit() else hash(pid) % 1000
+                    frame_players[pid_int] = (float(pos[0]), float(pos[1]))
+                    if "team" in pinfo:
+                        teams[pid_int] = int(pinfo["team"])
+            if frame_players:
+                player_traj[fi] = frame_players
+
+        fps = float(session.get("video_fps") or 25.0)
+
+        # Build approximate possession timeline
+        possession_timeline = {}
+        ball_list = tracks.get("ball", [])
+        for fi, b_frame in enumerate(ball_list):
+            if fi in player_traj and b_frame:
+                for bid, binfo in b_frame.items():
+                    bpos = binfo.get("position_minimap") or binfo.get("position_transformed")
+                    if bpos and len(bpos) == 2:
+                        bx, by = float(bpos[0]), float(bpos[1])
+                        closest_dist = float("inf")
+                        closest_team = None
+                        for pid, (px, py) in player_traj[fi].items():
+                            d = math.hypot(px - bx, py - by)
+                            if d < closest_dist:
+                                closest_dist = d
+                                closest_team = teams.get(pid)
+                        if closest_dist <= 2.5 and closest_team:
+                            possession_timeline[fi] = closest_team
+                        break
+
+        engine = TeamCompactnessEngine(fps=fps, exclude_goalkeeper=True)
+        stride = 5 if len(player_traj) > 500 else 1
+        snapshots = engine.analyze_match_timeline(
+            player_trajectories=player_traj,
+            player_teams=teams,
+            ball_possession_timeline=possession_timeline,
+            stride=stride,
+        )
+
+        compactness_summary = engine.generate_compactness_summary(snapshots)
+
+        sm.update_task(session_id, task_id, progress=65)
+
+        output_path = sm.session_output_dir(session_id) / "team_compactness.png"
+        engine.render_compactness_dashboard(snapshots, output_path=str(output_path))
+
+        summary_path = sm.session_output_dir(session_id) / "team_compactness.json"
+        with open(summary_path, "w", encoding="utf-8") as f:
+            json.dump(compactness_summary, f, ensure_ascii=False, indent=2, default=_safe_json_default)
+
+        _finish_task(sm, session_id, task_id, output_path, result=compactness_summary)
+    except Exception as exc:
+        sm.update_task(session_id, task_id, status="failed", error=str(exc))
+        _log_error("team_compactness", session_id, exc)
+
+
 def run_vertical_crop(session_id: str, session: dict, task_id: str, sm: SessionManager):
     """
     Generates 9:16 mobile-first vertical highlight clip with smooth cinematic tracking.

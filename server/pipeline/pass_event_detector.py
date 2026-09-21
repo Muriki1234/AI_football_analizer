@@ -35,12 +35,16 @@ class PassEvent:
     is_zone14_entry: bool
     is_box_entry: bool
 
+    @property
+    def team(self) -> int:
+        return self.passer_team
+
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
         d["pass_id"] = int(self.pass_id)
         d["passer_id"] = int(self.passer_id) if self.passer_id is not None else None
         d["receiver_id"] = int(self.receiver_id) if self.receiver_id is not None else None
-        d["team"] = int(self.team)
+        d["team"] = int(self.passer_team)
         d["start_frame"] = int(self.start_frame)
         d["end_frame"] = int(self.end_frame)
         d["start_xy"] = [float(round(v, 2)) for v in self.start_xy]
