@@ -5,7 +5,10 @@ test_pipeline_concurrency_scheduler.py — Unit Tests and Overlap Benchmarks for
 import time
 import unittest
 from unittest.mock import patch
-from server.pipeline.pipeline_concurrency_scheduler import PipelineConcurrencyScheduler
+from server.pipeline.pipeline_concurrency_scheduler import (
+    PipelineConcurrencyScheduler,
+    compute_samurai_concurrency_cap,
+)
 
 
 class TestPipelineConcurrencyScheduler(unittest.TestCase):
@@ -136,6 +139,35 @@ class TestPipelineConcurrencyScheduler(unittest.TestCase):
 
         self.assertGreater(res_serial["wall_clock_sec"], res_concurrent["wall_clock_sec"])
         self.assertGreater(pct_saved, 25.0)
+
+    def test_08_compute_samurai_concurrency_cap_rounding_fix(self):
+        """
+        Verify that 1926x1080 (which previously caused int(10.9828) -> 10) properly rounds to 11
+        under cap=11, preventing the 11th segment from being isolated and queued.
+        """
+        cap = compute_samurai_concurrency_cap(1926, 1080, env_cap_override=11)
+        self.assertEqual(cap, 11)
+
+    def test_09_compute_samurai_concurrency_cap_ram_tiers(self):
+        """
+        Verify memory-aware dynamic caps across host RAM tiers:
+        - >=120GB -> 16
+        - >=60GB -> 14
+        - >=40GB -> 12
+        - <40GB -> 8
+        """
+        self.assertEqual(compute_samurai_concurrency_cap(1920, 1080, total_ram_gb=515.6), 16)
+        self.assertEqual(compute_samurai_concurrency_cap(1920, 1080, total_ram_gb=64.0), 14)
+        self.assertEqual(compute_samurai_concurrency_cap(1920, 1080, total_ram_gb=48.0), 12)
+        self.assertEqual(compute_samurai_concurrency_cap(1920, 1080, total_ram_gb=32.0), 8)
+
+    def test_10_compute_samurai_concurrency_cap_high_res_scaling(self):
+        """
+        Verify that 4K (3840x2160 = 4x pixels) scales down safely via sqrt:
+        16 / sqrt(4) = 8
+        """
+        cap_4k = compute_samurai_concurrency_cap(3840, 2160, total_ram_gb=515.6)
+        self.assertEqual(cap_4k, 8)
 
 
 if __name__ == "__main__":

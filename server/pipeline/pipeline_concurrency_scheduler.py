@@ -23,6 +23,59 @@ from typing import Any, Callable, Dict, Optional, Tuple
 log = logging.getLogger(__name__)
 
 
+def compute_samurai_concurrency_cap(
+    orig_w: int,
+    orig_h: int,
+    total_ram_gb: Optional[float] = None,
+    env_cap_override: Optional[int] = None,
+) -> int:
+    """
+    Computes an optimal, memory-safe concurrency ceiling for SAMURAI player tracking.
+
+    1. Base cap derived from available system RAM (each worker uses ~3.5GB-4GB):
+       - RAM >= 120GB (RunPod large pods): 16 workers
+       - RAM >= 60GB (standard instances): 14 workers
+       - RAM >= 40GB (baseline instances): 12 workers
+       - RAM < 40GB (budget instances): 8 workers
+    2. Overridable via SAMURAI_MAX_PARALLEL env var or env_cap_override.
+    3. Scaled down gracefully for ultra-high-resolution (>1080p) using sqrt scaling.
+    4. Uses round() rather than int() to prevent boundary truncation (e.g. 1926x1080).
+    """
+    if env_cap_override is not None:
+        base_cap = env_cap_override
+    else:
+        env_val = os.environ.get("SAMURAI_MAX_PARALLEL")
+        if env_val:
+            try:
+                base_cap = int(env_val)
+            except ValueError:
+                base_cap = 14
+        else:
+            if total_ram_gb is None:
+                try:
+                    import psutil
+                    total_ram_gb = psutil.virtual_memory().total / (1024.0 ** 3)
+                except Exception:
+                    total_ram_gb = 48.0
+
+            if total_ram_gb >= 120.0:
+                base_cap = 16
+            elif total_ram_gb >= 60.0:
+                base_cap = 14
+            elif total_ram_gb >= 40.0:
+                base_cap = 12
+            else:
+                base_cap = 8
+
+    # Baseline: 1080p (1920×1080 ≈ 2.07M pixels)
+    baseline_px = 1920 * 1080
+    res_factor = max(1.0, (orig_w * orig_h) / baseline_px)
+
+    # Use round() so 10.9828 (1926x1080) rounds to 11 instead of truncated down to 10
+    cap = max(2, int(round(base_cap / (res_factor ** 0.5))))
+    return cap
+
+
 class PipelineConcurrencyScheduler:
     """
     Manages safe overlap between SAMURAI tracking and YOLO detection pipelines.

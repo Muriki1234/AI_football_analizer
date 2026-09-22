@@ -759,22 +759,19 @@ def run_samurai_tracking_multi(session_id: str, session: dict,
 
         n_segments = len(segs_sorted)
 
-        # Adaptive parallelism: scale with resolution.
-        # Baseline: 1080p (1920×1080 ≈ 2.07M pixels)
-        _BASELINE_PX = 1920 * 1080  # 2.07M
-        _res_factor = max(1.0, (orig_w * orig_h) / _BASELINE_PX)
-        # Sequential mode default cap is 11 to safely fill 46GB RAM
-        _env_cap = int(os.environ.get("SAMURAI_MAX_PARALLEL", "11"))
-        # √ scaling: SAMURAI internally resizes by 0.5×, so linear scaling
-        # overcorrects. sqrt gives 10→6 at 2880×1800 instead of 10→4.
-        MAX_PARALLEL = max(2, int(_env_cap / (_res_factor ** 0.5)))
+        # Adaptive parallelism: memory-aware scale with resolution and host RAM.
+        # Uses compute_samurai_concurrency_cap to avoid floating point truncation
+        # and dynamically scale workers based on host RAM safely.
+        from .pipeline_concurrency_scheduler import compute_samurai_concurrency_cap
+        MAX_PARALLEL = compute_samurai_concurrency_cap(orig_w, orig_h)
         max_workers  = min(n_segments, MAX_PARALLEL)
         all_segs = list(enumerate(segs_sorted))
+        _res_factor = max(1.0, (orig_w * orig_h) / (1920 * 1080))
         if _res_factor > 1.05:
             _queued = max(0, n_segments - max_workers)
             print(f"[SAMURAI-MULTI] ⚠️  HIGH-RES SAFETY NET ACTIVE: "
                   f"res={orig_w}x{orig_h} ({_res_factor:.1f}x baseline), "
-                  f"reduced parallel {_env_cap}→{MAX_PARALLEL}. "
+                  f"cap={MAX_PARALLEL}. "
                   f"{n_segments} segments: {max_workers} parallel + {_queued} queued",
                   flush=True)
         else:
