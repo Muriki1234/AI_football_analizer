@@ -94,6 +94,10 @@ description: >
   3. **Bug 自动化入库安全包络 (Bug Safety Envelope)**：
      - Bug 修复是自主修改主项目的**唯一例外**；
      - 必须满足 5 点硬性安全包络线：真实复现 + 根因明确 + 差异 $\le 20$ 行（硬性控制爆炸半径）+ 现有单测全绿 + 可用测试表面内无倒退。
+  4. **证据层级与局部实证防越权 (Evidence Hierarchy & Component Inflation Prohibition)**：
+     - **局部实证 $\neq$ 端到端实证**：真实的局部组件测试（如数据库直连压测、单模块速度测试、本地网络基准）只能作为 `VALIDATED_SANDBOX` 的完成依据，**严禁以此晋升为 `PRODUCTION_CANDIDATE`**！
+     - 晋升 `PRODUCTION_CANDIDATE` 必须且仅能依据**目标物理硬件（RunPod GPU）上真实完整视频的全链路 Orchestrator 端到端实跑证据（Full E2E Evidence）**；
+     - **凭证零泄露不变量 (Credential Zero-Exposure Invariance)**：严禁在任何测试脚本、代码、日志、报告或 Prompt 中硬编码明文 Secret（如 `sb_secret_...`）；所有凭证必须且仅能由系统环境变量（如 `SUPABASE_SERVICE_ROLE_KEY`）注入，汇报一律脱敏为 `configured`。
 * **隔离生产路径 (Quarantined Production Paths)**：
   处于 `EXPLORING`、`VALIDATED_SANDBOX`、`PRODUCTION_CANDIDATE` 的任何算法，**严禁修改主流程生产路径**：
   `tasks.py`、`server/pipeline/analysis_core.py`、`server/handler.py`、`server/routes/*`、`frontend/src/*`。

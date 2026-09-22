@@ -22,5 +22,13 @@
     "action_taken": "Replaced unweighted centroid threshold with boundary spatial isolation gap analysis (comparing the inter-player distance gap at the deepest ends) coupled with explicit attacking direction.",
     "result": "Accurately identified isolated goalkeeper at -40m across all attacking configurations, restoring 100% geometric fidelity.",
     "reusable_lesson": "Never use team center-of-mass position alone to infer defending goal; attacking possession shifts centroid deep into opponent territory while goalkeeper remains anchored."
+  },
+  {
+    "id": "PITFALL-04",
+    "observed_in_session": "session_night_20260922_runpod_e2e",
+    "evidence": "Agent executed real-network component benchmark (bench_real_supabase_4way.py) on live Supabase and mistakenly promoted supabase_rpc_merge_session_extra_fix to PRODUCTION_CANDIDATE, conflating component-level isolated verification with full-video production E2E pipeline verification on target RunPod hardware.",
+    "action_taken": "Immediately demoted opportunity back to VALIDATED_SANDBOX. Established explicit Evidence Hierarchy Rule: Isolated component/network benchmarks only validate sandboxed prototypes (VALIDATED_SANDBOX); promotion to PRODUCTION_CANDIDATE strictly requires target hardware full-video E2E orchestrator verification.",
+    "result": "Cleaned evidence boundary; preserved strict production gate integrity against 'component-evidence inflation'.",
+    "reusable_lesson": "Real component-level network/DB benchmark != Full production E2E verification. Never promote to PRODUCTION_CANDIDATE without target hardware end-to-end full-video evidence."
   }
 ]
