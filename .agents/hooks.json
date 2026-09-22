@@ -1,0 +1,12 @@
+{
+  "autonomous-expansion-guard": {
+    "enabled": true,
+    "Stop": [
+      {
+        "type": "command",
+        "command": "python3 .agents/skills/autonomous_expansion/scripts/stop_hook.py",
+        "timeout": 15
+      }
+    ]
+  }
+}

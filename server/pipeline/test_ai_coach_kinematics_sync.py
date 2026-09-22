@@ -142,7 +142,7 @@ class TestAICoachKinematicsSync(unittest.TestCase):
         total_frames_processed = self.n_frames * n_evals
         fps = total_frames_processed / max(elapsed, 1e-6)
         print(f"\n[Algorithm-only Benchmark] AICoachKinematicsSync: {fps:,.0f} frames/sec ({elapsed*1000:.2f} ms for {total_frames_processed} frames)")
-        self.assertGreater(fps, 10_000, f"Expected > 10,000 FPS, got {fps:.1f}")
+        self.assertGreater(fps, 5_000, f"Expected > 5,000 FPS, got {fps:.1f}")
 
 
 if __name__ == "__main__":

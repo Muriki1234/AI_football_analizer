@@ -56,6 +56,13 @@ class DebouncedStatusUpdater:
         self.flushed_calls = 0
         self.throttled_calls = 0
 
+    @staticmethod
+    def _normalize_stage(stage: Optional[str]) -> str:
+        if not stage:
+            return ""
+        # Strip dynamic counts/ETA in parentheses: e.g. "streaming_analysis (150/25316 frames)" -> "streaming_analysis"
+        return stage.split("(")[0].strip()
+
     def update(
         self,
         session_id: str,
@@ -91,7 +98,7 @@ class DebouncedStatusUpdater:
                 is_critical = True
             elif status != self._last_flushed_status:
                 is_critical = True
-            elif stage is not None and stage != self._last_flushed_stage:
+            elif stage is not None and self._normalize_stage(stage) != self._normalize_stage(self._last_flushed_stage):
                 is_critical = True
             elif status in ("done", "failed", "analysis_failed", "tracking_failed"):
                 is_critical = True

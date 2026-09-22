@@ -143,7 +143,7 @@ class E2EVideoDetectionProfiler:
         try:
             from server.pipeline.bytetrack_adaptive_compensator import AdaptiveByteTracker
             tracker = AdaptiveByteTracker(
-                base_fps=fps,
+                base_fps=self.native_fps,
                 base_stride=stride,
                 track_activation_threshold=conf_thresh,
                 minimum_matching_threshold=0.80,

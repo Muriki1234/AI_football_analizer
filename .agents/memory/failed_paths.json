@@ -6,5 +6,21 @@
     "action_taken": "Required explicit 'Algorithm-only Benchmark' prefix and scope boundary in reports and tests.",
     "result": "Resolved boundary conflation without distorting pipeline expectations.",
     "reusable_lesson": "Never claim 1-3ms end-to-end pipeline latency from in-memory array operations."
+  },
+  {
+    "id": "PITFALL-02",
+    "observed_in_session": "session_night_20260919",
+    "evidence": "Static fixed stride skipping (e.g. stride >= 8) on fast counter-attacks caused severe Kalman tracking tracklet fragmentation and ID switching.",
+    "action_taken": "Designed AdaptiveTemporalStrideController with motion-bounded velocity scaling (restricts stride to 2 on high optical flow, expands to 6 only on steady possession).",
+    "result": "Maintained temporal tracking continuity while achieving 66.7% compute reduction.",
+    "reusable_lesson": "Temporal frame skipping in MOT pipelines must be coupled with scene motion/optical energy to prevent tracklet fragmentation."
+  },
+  {
+    "id": "PITFALL-03",
+    "observed_in_session": "session_night_20260921",
+    "evidence": "In high-pressing or forward possession states, team mean X becomes positive (+14.2m) even when defending the negative goal. A naive mean-X sign heuristic misclassified defending goal as +52.5m, erroneously stripping attacking strikers at +50m instead of the true isolated goalkeeper at -40m, corrupting convex hull area from 2000m^2 down to 1800m^2.",
+    "action_taken": "Replaced unweighted centroid threshold with boundary spatial isolation gap analysis (comparing the inter-player distance gap at the deepest ends) coupled with explicit attacking direction.",
+    "result": "Accurately identified isolated goalkeeper at -40m across all attacking configurations, restoring 100% geometric fidelity.",
+    "reusable_lesson": "Never use team center-of-mass position alone to infer defending goal; attacking possession shifts centroid deep into opponent territory while goalkeeper remains anchored."
   }
 ]

@@ -46,6 +46,26 @@ class TestDebouncedStatusUpdater(unittest.TestCase):
         self.assertEqual(len(self.call_log), 3)
         self.assertEqual(self.call_log[-1]["error"], "OOM")
 
+    def test_dynamic_stage_progress_text_is_debounced(self):
+        updater = DebouncedStatusUpdater(self.mock_db_update, min_interval_sec=5.0, min_progress_delta=10)
+
+        # 1. First call flushes immediately (stage change from None -> streaming_analysis)
+        updater.update("sess_1", "analyzing", progress=10, stage="streaming_analysis (150/25316 frames, ETA 45m)")
+        self.assertEqual(len(self.call_log), 1)
+        self.assertEqual(self.call_log[-1]["progress"], 10)
+
+        # 2. Rapid subsequent calls with different frame counts and ETAs within same base stage -> must be throttled!
+        updater.update("sess_1", "analyzing", progress=10, stage="streaming_analysis (300/25316 frames, ETA 40m)")
+        updater.update("sess_1", "analyzing", progress=11, stage="streaming_analysis (450/25316 frames, ETA 35m)")
+        updater.update("sess_1", "analyzing", progress=11, stage="streaming_analysis (600/25316 frames, ETA 30m)")
+        self.assertEqual(len(self.call_log), 1)  # All 3 were throttled!
+        self.assertEqual(updater.throttled_calls, 3)
+
+        # 3. Next stage transition -> must bypass and flush latest state
+        updater.update("sess_1", "analyzing", progress=55, stage="team_voting (395 players)")
+        self.assertEqual(len(self.call_log), 2)
+        self.assertEqual(self.call_log[-1]["stage"], "team_voting (395 players)")
+
     def test_throttling_and_extra_consolidation(self):
         updater = DebouncedStatusUpdater(self.mock_db_update, min_interval_sec=2.0, min_progress_delta=10)
 

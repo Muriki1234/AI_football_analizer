@@ -13,7 +13,7 @@ Core guarantees:
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -26,7 +26,9 @@ VALID_STATUSES = [
     "PARKED",
     "ACTIVATED",
     "EXPLORING",
-    "VALIDATED",
+    "VALIDATED_SANDBOX",
+    "PRODUCTION_CANDIDATE",
+    "INTEGRATED",
     "DISPROVED",
     "PROPOSED",
     "ARCHIVED",
@@ -34,11 +36,17 @@ VALID_STATUSES = [
 ACTIVE_STATUSES = {"ACTIVATED", "EXPLORING"}
 VALID_TIERS = {"main", "secondary"}
 
+LEGACY_STATUS_MIGRATION = {
+    "VALIDATED": "VALIDATED_SANDBOX",
+}
+
 ALLOWED_TRANSITIONS = {
     "PARKED": ["ACTIVATED", "PROPOSED", "ARCHIVED"],
     "ACTIVATED": ["EXPLORING", "PARKED", "ARCHIVED"],
-    "EXPLORING": ["VALIDATED", "DISPROVED", "PROPOSED", "PARKED", "ARCHIVED"],
-    "VALIDATED": ["ARCHIVED", "PARKED"],
+    "EXPLORING": ["VALIDATED_SANDBOX", "DISPROVED", "PROPOSED", "PARKED", "ARCHIVED"],
+    "VALIDATED_SANDBOX": ["PRODUCTION_CANDIDATE", "PARKED", "ARCHIVED"],
+    "PRODUCTION_CANDIDATE": ["INTEGRATED", "VALIDATED_SANDBOX", "PARKED", "ARCHIVED"],
+    "INTEGRATED": ["PARKED", "ARCHIVED"],
     "DISPROVED": ["ARCHIVED", "PARKED"],
     "PROPOSED": ["ACTIVATED", "PARKED", "ARCHIVED"],
     "ARCHIVED": ["PARKED"],
@@ -71,6 +79,24 @@ def load_graph() -> Dict[str, Any]:
         data = json.load(f)
     data.setdefault("nodes", {})
     data.setdefault("edges", [])
+
+    # Automatic Legacy Migration: Migrate legacy statuses (e.g. VALIDATED -> VALIDATED_SANDBOX)
+    migrated_any = False
+    for node in data.get("nodes", {}).values():
+        status = node.get("status")
+        if status in LEGACY_STATUS_MIGRATION:
+            target = LEGACY_STATUS_MIGRATION[status]
+            node["status"] = target
+            node.setdefault("notes", []).append({
+                "time": utc_now(),
+                "status": target,
+                "note": f"Legacy status '{status}' automatically migrated to '{target}'",
+            })
+            migrated_any = True
+
+    if migrated_any:
+        save_graph(data)
+
     return data
 
 
@@ -196,15 +222,138 @@ def activate_opportunity(op_id: str, tier: str = "main") -> None:
     transition_status(op_id, "ACTIVATED", note=f"Activated as {tier} branch", tier=tier)
 
 
+def sync_active_state_on_transition(
+    op_id: str,
+    entering_active: bool,
+    leaving_active: bool,
+    tier: str,
+) -> None:
+    """
+    Bi-directional synchronization: Ensure active_state.json reflects opportunity_graph.json
+    transitions (Defect 1 Minimal Fix).
+    - If node enters active: update mainline/secondary, set phase to 'exploring' if needed.
+    - If node leaves active: reconcile active branches. If no active nodes remain, set phase to
+      'rediscovery' (if overnight budget remains) or 'completed'.
+    """
+    if not os.path.exists(STATE_FILE):
+        return
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            state = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return
+
+    graph = load_graph()
+    active_m = [n["id"] for n in graph.get("nodes", {}).values() if n.get("status") in ACTIVE_STATUSES and n.get("tier") == "main"]
+    active_s = [n["id"] for n in graph.get("nodes", {}).values() if n.get("status") in ACTIVE_STATUSES and n.get("tier") == "secondary"]
+
+    state["mainline"] = active_m[0] if active_m else None
+    state["secondary"] = active_s[0] if active_s else None
+
+    if entering_active:
+        if state.get("phase") in ("completed", "done", "discovery", "rediscovery", "recon"):
+            state["phase"] = "exploring"
+        state["last_completed_action"] = state.get("current_action")
+        state["current_action"] = f"exploring_{op_id}"
+        state["next_action"] = f"validate_{op_id}"
+    elif leaving_active:
+        state["last_completed_action"] = state.get("current_action")
+        if not active_m and not active_s:
+            # All active nodes cleared!
+            overnight = state.get("overnight_mode", False)
+            blocked = state.get("blocked_reason")
+
+            # Wall-clock deadline check
+            now_utc = datetime.now(timezone.utc)
+            max_rt = float(state.get("max_runtime_minutes", 240.0))
+            started_at_str = state.get("started_at")
+            started_dt = None
+            if started_at_str:
+                try:
+                    clean_ts = started_at_str.replace("Z", "+00:00")
+                    started_dt = datetime.fromisoformat(clean_ts)
+                except Exception:
+                    started_dt = None
+
+            deadline_str = state.get("budget_deadline")
+            deadline_dt = None
+            if deadline_str:
+                try:
+                    clean_dl = deadline_str.replace("Z", "+00:00")
+                    deadline_dt = datetime.fromisoformat(clean_dl)
+                except Exception:
+                    deadline_dt = None
+
+            if not deadline_dt and started_dt and overnight:
+                deadline_dt = started_dt + timedelta(minutes=max_rt)
+
+            elapsed = (now_utc - started_dt).total_seconds() / 60.0 if started_dt else 0.0
+            budget_remains = (deadline_dt is None or now_utc < deadline_dt) and (elapsed < max_rt)
+
+            deadline_unexpired = (deadline_dt is not None) and (now_utc < deadline_dt) and (deadline_str is not None)
+            is_overnight = overnight or deadline_unexpired
+
+            if is_overnight and budget_remains and not blocked:
+                state["phase"] = "rediscovery"
+                state["current_action"] = "rediscover_opportunities_after_batch_completion"
+                state["next_action"] = "observe_and_discover_next_opportunity"
+            else:
+                state["phase"] = "completed"
+                state["current_action"] = "all_opportunities_validated"
+                state["next_action"] = "morning_report_delivered"
+        else:
+            if state["mainline"]:
+                state["current_action"] = f"exploring_{state['mainline']}"
+                state["next_action"] = f"validate_{state['mainline']}"
+
+    state["updated_at"] = utc_now()
+    atomic_write_json(STATE_FILE, state)
+    append_event(
+        "STATE_SYNC",
+        f"opportunity={op_id} mainline={state.get('mainline') or 'none'} secondary={state.get('secondary') or 'none'} phase={state.get('phase')}",
+        phase=state.get("phase", "graph"),
+        session_id=state.get("session_id", "session_default"),
+    )
+
+
 def transition_status(
     op_id: str,
     new_status: str,
     note: Optional[str] = None,
     tier: Optional[str] = None,
+    user_authorized: bool = False,
 ) -> None:
     new_status = new_status.upper()
+    if new_status in LEGACY_STATUS_MIGRATION:
+        raise SystemExit(
+            f"❌ Legacy Status Deprecated: '{new_status}' is legacy-only. "
+            f"Use '{LEGACY_STATUS_MIGRATION[new_status]}' instead."
+        )
+
     if new_status not in VALID_STATUSES:
         raise SystemExit(f"❌ Invalid status '{new_status}'. Must be one of: {VALID_STATUSES}")
+
+    if new_status == "INTEGRATED":
+        # Check autonomous mode from active_state.json
+        is_autonomous = False
+        if os.path.exists(STATE_FILE):
+            try:
+                with open(STATE_FILE, "r", encoding="utf-8") as f:
+                    st = json.load(f)
+                is_autonomous = bool(st.get("overnight_mode", False) or st.get("autonomous_mode", False))
+            except Exception:
+                pass
+
+        if is_autonomous:
+            raise SystemExit(
+                "❌ Autonomous Integration Block: INTEGRATED is unconditionally forbidden during autonomous operation (overnight_mode=True).\n"
+                "   Production integration may only occur through an explicitly human-initiated, non-autonomous workflow outside the overnight loop."
+            )
+
+        if not user_authorized:
+            raise SystemExit(
+                "❌ Unauthorized Integration Block: Transitioning to 'INTEGRATED' requires explicit human authorization (--user-authorized outside autonomous mode)."
+            )
 
     graph = load_graph()
     if op_id not in graph["nodes"]:
@@ -266,12 +415,33 @@ def transition_status(
             session_id=session_id,
         )
 
+    # Bi-directional sync with active_state.json
+    sync_active_state_on_transition(
+        op_id,
+        entering_active=entering_active,
+        leaving_active=(was_active and new_status not in ACTIVE_STATUSES),
+        tier=node.get("tier", "backlog"),
+    )
+
     append_event(
         "OPPORTUNITY_TRANSITION",
         f"opportunity={op_id} from={old_status} to={new_status}",
         session_id=session_id,
     )
     print(f"🔄 Transitioned '{op_id}': {old_status} ➔ {new_status} (Tier: {node.get('tier', 'backlog')})")
+
+
+def promote_candidate(op_id: str, evidence_note: str = "Evidence review passed") -> None:
+    transition_status(op_id, "PRODUCTION_CANDIDATE", note=evidence_note)
+
+
+def integrate_opportunity(op_id: str, note: Optional[str] = None, user_authorized: bool = False) -> None:
+    transition_status(
+        op_id,
+        "INTEGRATED",
+        note=note or "Production integration authorized",
+        user_authorized=user_authorized,
+    )
 
 
 def list_opportunities() -> None:
@@ -289,7 +459,17 @@ def list_opportunities() -> None:
     for node in nodes.values():
         by_status.setdefault(node.get("status", "PARKED"), []).append(node)
 
-    for status in ["ACTIVATED", "EXPLORING", "PARKED", "PROPOSED", "VALIDATED", "DISPROVED", "ARCHIVED"]:
+    for status in [
+        "ACTIVATED",
+        "EXPLORING",
+        "PRODUCTION_CANDIDATE",
+        "INTEGRATED",
+        "VALIDATED_SANDBOX",
+        "PARKED",
+        "PROPOSED",
+        "DISPROVED",
+        "ARCHIVED",
+    ]:
         if status not in by_status:
             continue
         print(f"\n▶ [{status}] ({len(by_status[status])})")
@@ -327,13 +507,50 @@ def check_dedup(query: str, mode: str = "check") -> None:
         print(f"✅ Clean: No prior exploration found for '{query}'. Fresh direction!")
 
 
+def record_research(
+    op_id: str,
+    decision: str,
+    findings: str,
+    reason: str,
+    sources: Optional[List[str]] = None,
+) -> None:
+    valid_decisions = {"adopted", "adapted", "rejected", "hybrid", "not_applicable"}
+    if decision.lower() not in valid_decisions:
+        raise SystemExit(f"❌ Invalid decision '{decision}'. Must be one of: {sorted(valid_decisions)}")
+
+    graph = load_graph()
+    nodes = graph.get("nodes", {})
+    if op_id not in nodes:
+        raise SystemExit(f"❌ Opportunity '{op_id}' does not exist.")
+
+    node = nodes[op_id]
+    sources_list = sources or []
+    node["external_research"] = {
+        "searched": True if decision.lower() != "not_applicable" else False,
+        "decision": decision.lower(),
+        "findings": findings,
+        "reason": reason,
+        "sources": sources_list,
+        "updated_at": utc_now(),
+    }
+    save_graph(graph)
+    append_event(
+        "EXTERNAL_RESEARCH",
+        f"opportunity={op_id} decision={decision.lower()} sources={len(sources_list)}",
+    )
+    print(f"🔬 External Research recorded for '{op_id}': decision='{decision.lower()}' with {len(sources_list)} source(s).")
+
+
 def usage() -> None:
     print(
         "Usage:\n"
         "  opportunity_graph.py list\n"
         "  opportunity_graph.py add <id> <title> [desc] [parent_id]\n"
         "  opportunity_graph.py activate <id> [main|secondary]\n"
-        "  opportunity_graph.py transition <id> <status> [note] [tier]\n"
+        "  opportunity_graph.py transition <id> <status> [note] [tier] [--user-authorized]\n"
+        "  opportunity_graph.py promote-candidate <id> [evidence_note]\n"
+        "  opportunity_graph.py integrate <id> [--user-authorized] [note]\n"
+        "  opportunity_graph.py record-research <id> <decision> <findings> <reason> [sources...]\n"
         "  opportunity_graph.py dedup <query> [--guard|--check]"
     )
 
@@ -363,9 +580,35 @@ def main() -> None:
         if len(sys.argv) < 4:
             usage()
             raise SystemExit(1)
-        note = sys.argv[4] if len(sys.argv) > 4 else None
-        tier = sys.argv[5] if len(sys.argv) > 5 else None
-        transition_status(sys.argv[2], sys.argv[3], note, tier)
+        user_auth = "--user-authorized" in sys.argv
+        clean_args = [arg for arg in sys.argv[4:] if arg != "--user-authorized"]
+        note = clean_args[0] if len(clean_args) > 0 else None
+        tier = clean_args[1] if len(clean_args) > 1 else None
+        transition_status(sys.argv[2], sys.argv[3], note, tier, user_authorized=user_auth)
+    elif cmd == "promote-candidate":
+        if len(sys.argv) < 3:
+            usage()
+            raise SystemExit(1)
+        evidence = sys.argv[3] if len(sys.argv) > 3 else "Evidence review passed"
+        promote_candidate(sys.argv[2], evidence)
+    elif cmd == "integrate":
+        if len(sys.argv) < 3:
+            usage()
+            raise SystemExit(1)
+        user_auth = "--user-authorized" in sys.argv
+        clean_args = [arg for arg in sys.argv[3:] if arg != "--user-authorized"]
+        note = clean_args[0] if len(clean_args) > 0 else None
+        integrate_opportunity(sys.argv[2], note, user_authorized=user_auth)
+    elif cmd == "record-research":
+        if len(sys.argv) < 6:
+            usage()
+            raise SystemExit(1)
+        op_id = sys.argv[2]
+        decision = sys.argv[3]
+        findings = sys.argv[4]
+        reason = sys.argv[5]
+        sources = sys.argv[6:] if len(sys.argv) > 6 else []
+        record_research(op_id, decision, findings, reason, sources)
     elif cmd == "dedup":
         if len(sys.argv) < 3:
             usage()

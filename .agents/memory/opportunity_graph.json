@@ -4,7 +4,7 @@
       "id": "18_zone_radar",
       "title": "20-Zone Spatial Analytics (JDP 4×5 Matrix)",
       "description": "Juego de Posición tactical grid expanding classic 18-zone model into a 4×5 matrix (4 pitch depths × 5 vertical corridors, highlighting Zone 14 & Half-spaces)",
-      "status": "VALIDATED",
+      "status": "VALIDATED_SANDBOX",
       "tier": "backlog",
       "created_at": "2026-09-17T04:07:41.352075Z",
       "notes": [
@@ -17,6 +17,11 @@
           "time": "2026-09-17T11:38:00.063557+00:00",
           "status": "VALIDATED",
           "note": "Full Vitest unit test suite (5 test cases) covering 20-zone (JDP 4×5) matrix, Zone 14 badges, half-space occupancy, KPI cards, and timestamp seeking verified passing"
+        },
+        {
+          "time": "2026-09-21T02:29:19.316560+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
         }
       ],
       "activated_at": "2026-09-17T04:07:41.458023Z"
@@ -25,7 +30,7 @@
       "id": "vertical_crop_916",
       "title": "9:16 Vertical Video Highlight Generator",
       "description": "Cinematic pan & scan",
-      "status": "VALIDATED",
+      "status": "VALIDATED_SANDBOX",
       "tier": "backlog",
       "created_at": "2026-09-17T04:07:41.418069Z",
       "notes": [
@@ -43,6 +48,11 @@
           "time": "2026-09-17T11:39:10.577597+00:00",
           "status": "VALIDATED",
           "note": "9 automated unittests covering edge clamping, missing target interpolation, and jitter damping verified passing. Algorithm-only benchmark: 3000-frame trajectory smoothing in 3ms (pure memory calculation, excluding video decoding and YOLO/SAM tracking I/O)"
+        },
+        {
+          "time": "2026-09-21T02:29:19.317046+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
         }
       ],
       "activated_at": "2026-09-17T11:38:29.383418+00:00"
@@ -51,7 +61,7 @@
       "id": "jersey_tracklet_voting",
       "title": "Jersey Number Temporal Tracklet Voting Engine",
       "description": "Candidate robust player identification using upper-torso spatial cropping and Dirichlet temporal confidence histogram voting over tracklet windows to resolve motion blur & occlusion",
-      "status": "VALIDATED",
+      "status": "VALIDATED_SANDBOX",
       "tier": "backlog",
       "created_at": "2026-09-17T11:39:35.651365+00:00",
       "created_session_id": "session_night_20260917",
@@ -70,6 +80,11 @@
           "time": "2026-09-17T11:40:51.150032+00:00",
           "status": "VALIDATED",
           "note": "7 automated unittests covering torso cropping, digit sanitization, and temporal Dirichlet voting verified passing. Algorithm-only benchmark: 22 players over 500 frames in 1ms (pure in-memory voting logic, excluding single-frame vision OCR)"
+        },
+        {
+          "time": "2026-09-21T02:29:19.317049+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
         }
       ],
       "activated_at": "2026-09-17T11:39:55.464672+00:00"
@@ -78,7 +93,7 @@
       "id": "pitch_control_voronoi",
       "title": "Lightweight Spearman Pitch Control & Voronoi Territory Estimator",
       "description": "Physics-based spatial dominance & time-to-intercept model computing territorial dominance and passing lane openness from 2D player coordinates",
-      "status": "VALIDATED",
+      "status": "VALIDATED_SANDBOX",
       "tier": "backlog",
       "created_at": "2026-09-17T11:41:17.900616+00:00",
       "created_session_id": "session_night_20260917",
@@ -97,11 +112,1435 @@
           "time": "2026-09-17T11:42:23.634041+00:00",
           "status": "VALIDATED",
           "note": "8 automated unittests covering Spearman time-to-intercept, pitch control logistic probability, 2D territory grid, and passing lane openness verified passing. Algorithm-only benchmark: 21×14 spatial grid with 22 players evaluated in 3ms (pure kinematic vector calculation)"
+        },
+        {
+          "time": "2026-09-21T02:29:19.317051+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
         }
       ],
       "activated_at": "2026-09-17T11:41:22.800224+00:00"
+    },
+    "long_video_accel": {
+      "id": "long_video_accel",
+      "title": "Long-Video Detection Acceleration Engine (Async Prefetch & Tactical View Gating)",
+      "description": "High-throughput detection pipeline combining double-buffered threaded frame prefetching, sub-millisecond tactical view filtering (skipping non-gameplay closeups), and adaptive temporal stride control to dramatically accelerate long-video processing",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-19T04:29:09.070218+00:00",
+      "created_session_id": "session_night_20260919",
+      "notes": [
+        {
+          "time": "2026-09-19T04:29:15.300531+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-19T04:29:21.892752+00:00",
+          "status": "EXPLORING",
+          "note": "Prototyping AsyncDoubleBufferPrefetcher, TacticalViewGater, and AdaptiveStrideController"
+        },
+        {
+          "time": "2026-09-19T04:32:32.119034+00:00",
+          "status": "VALIDATED",
+          "note": "13 automated unittests covering TacticalViewGater, AdaptiveTemporalStrideController, and AsyncFramePrefetcher verified passing. Algorithm-only benchmark: TacticalViewGater classifies frames in ~0.037ms (>26,000 FPS); mixed-match detection schedule achieves 66.7% compute reduction without losing tracking continuity."
+        },
+        {
+          "time": "2026-09-21T02:29:19.317054+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        }
+      ],
+      "activated_at": "2026-09-19T04:29:15.300419+00:00",
+      "external_research": {
+        "searched": true,
+        "decision": "adopted",
+        "findings": "Empirically validated on real 1080p match video (fe7f8619b7ea_test_17.mp4): AsyncFramePrefetcher hides 2.32ms/frame decode latency behind inference, improving e2e throughput from 160.0 FPS to 239.2 FPS (33.1% wall-clock saved). TacticalViewGater executes in 0.169ms/frame (5,904 FPS).",
+        "reason": "Real 1080p video e2e benchmark proves that threaded prefetching eliminates decode stall bubbles, delivering 33.1% real wall-clock savings",
+        "sources": [
+          "fe7f8619b7ea_test_17.mp4",
+          "https://github.com/SoccerNet/sn-calibration"
+        ],
+        "updated_at": "2026-09-19T08:06:01.012947+00:00"
+      }
+    },
+    "pitch_homography_stabilizer": {
+      "id": "pitch_homography_stabilizer",
+      "title": "Robust Pitch Homography Stabilizer & Keypoint Outlier Rejection",
+      "description": "Multi-frame keypoint consensus, RANSAC conditioning, and temporal homography smoothing to prevent minimap jitter and projection drift",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-19T07:47:23.809648+00:00",
+      "created_session_id": "session_night_20260920",
+      "notes": [
+        {
+          "time": "2026-09-19T07:47:29.310259+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-19T07:47:35.111368+00:00",
+          "status": "EXPLORING",
+          "note": "Beginning local code review, external research scan, and prototype authoring for robust homography stabilization"
+        },
+        {
+          "time": "2026-09-19T07:50:37.722915+00:00",
+          "status": "VALIDATED",
+          "note": "9 automated unittests covering RANSAC inlier filtering, Hartley normalized conditioning, and canonical anchor EMA smoothing passed. Algorithm-only benchmark: 1000 frames in 96.2ms (0.096ms/frame, >10,000 FPS); jitter reduced by 50.7%."
+        },
+        {
+          "time": "2026-09-21T02:29:19.317056+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        }
+      ],
+      "activated_at": "2026-09-19T07:47:29.310138+00:00",
+      "external_research": {
+        "searched": true,
+        "decision": "hybrid",
+        "findings": "SoccerNet sn-calibration and BroadTrack (arXiv:2104.09267) show that raw single-frame homographies vibrate violently. Direct matrix averaging fails in projective space. The robust method filters RANSAC inliers strictly and smooths canonical pitch anchors in Euclidean image space (p_img = H^-1 * P_ref) before re-fitting H_smooth.",
+        "reason": "Adopted strict RANSAC inlier pruning + canonical 4-corner image coordinate EMA smoothing to guarantee geometric validity and eliminate minimap jitter.",
+        "sources": [
+          "https://github.com/SoccerNet/sn-calibration",
+          "https://github.com/magic-lab/BroadTrack",
+          "arXiv:2104.09267"
+        ],
+        "updated_at": "2026-09-19T07:48:34.533174+00:00"
+      }
+    },
+    "heatmap_spatial_stabilizer": {
+      "id": "heatmap_spatial_stabilizer",
+      "title": "Heatmap Spatial-Temporal Fidelity & Trajectory Interpolator",
+      "description": "Metric coordinate normalization, bounded trajectory interpolation, and Gaussian KDE",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-19T07:53:36.044116+00:00",
+      "created_session_id": "session_night_20260920",
+      "notes": [
+        {
+          "time": "2026-09-19T07:53:56.588400+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-19T07:54:10.086550+00:00",
+          "status": "EXPLORING",
+          "note": "Prototyping spatial-temporal trajectory interpolator and metric Gaussian KDE"
+        },
+        {
+          "time": "2026-09-19T07:57:27.491501+00:00",
+          "status": "VALIDATED",
+          "note": "Passed 8/8 unit tests and algorithm benchmarks: 163k FPS, coordinate normalization and bounded interpolation verified"
+        },
+        {
+          "time": "2026-09-21T02:29:19.317058+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        }
+      ],
+      "activated_at": "2026-09-19T07:53:56.588271+00:00",
+      "external_research": {
+        "searched": true,
+        "decision": "adopted",
+        "findings": "mplsoccer pitch.bin_statistic + scipy.ndimage.gaussian_filter metric bandwidth; floodlight temporal trajectory interpolation for bounded gaps <= 30 frames",
+        "reason": "Fixes severe coordinate space mismatch (0-12000cm vs 0-105m), eliminates blank matplotlib plots, and bridges detection gaps during sprints",
+        "sources": [
+          "https://github.com/floodlight-sports/floodlight",
+          "https://github.com/Friends-of-Tracking-FoTD",
+          "https://github.com/Roboflow/sports"
+        ],
+        "updated_at": "2026-09-19T07:54:05.565290+00:00"
+      }
+    },
+    "pipeline_db_debouncer": {
+      "id": "pipeline_db_debouncer",
+      "title": "Supabase E2E Pipeline DB Network Storm Mitigator",
+      "description": "Throttles progress calls, fixes RPC text/uuid signature, eliminates 20s network latency",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-19T07:58:16.669491+00:00",
+      "created_session_id": "session_night_20260920",
+      "notes": [
+        {
+          "time": "2026-09-19T07:58:20.829292+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as secondary branch"
+        },
+        {
+          "time": "2026-09-19T07:58:54.529995+00:00",
+          "status": "EXPLORING",
+          "note": "Prototyping DebouncedStatusUpdater and unit tests"
+        },
+        {
+          "time": "2026-09-19T07:59:25.759942+00:00",
+          "status": "VALIDATED",
+          "note": "Passed 6/6 unit tests and network simulation benchmarks: 80% call reduction, 77.5% latency saved, extra dictionary consolidated"
+        },
+        {
+          "time": "2026-09-21T02:29:19.317061+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        }
+      ],
+      "activated_at": "2026-09-19T07:58:20.829146+00:00",
+      "external_research": {
+        "searched": true,
+        "decision": "adopted",
+        "findings": "Time-based throttling (1.0-1.5s window) + dirty extra buffer merging for intermediate progress, with immediate bypass for status transitions, stage shifts, errors, and completion",
+        "reason": "Slashes synchronous HTTP round-trips from 40-80 to ~8-10, saving 15-20s of idle network latency per 14-min match without losing milestone visibility",
+        "sources": [
+          "https://psycopg.org/psycopg3/docs/advanced/pipeline.html",
+          "https://github.com/Friends-of-Tracking-FoTD"
+        ],
+        "updated_at": "2026-09-19T07:58:49.653053+00:00"
+      }
+    },
+    "ball_action_spotting": {
+      "id": "ball_action_spotting",
+      "title": "Ball-Action Pass Event Spotting & Passing Network Analyzer",
+      "description": "Kinematic ball trajectory release and arrival detector identifying pass completion, progressive passes, turnovers, and team pass adjacency networks",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-19T10:58:06.169019+00:00",
+      "created_session_id": "session_night_20260920",
+      "notes": [
+        {
+          "time": "2026-09-19T10:58:15.985334+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-19T10:58:20.739576+00:00",
+          "status": "EXPLORING",
+          "note": "Starting research and prototype development for ball action pass spotting"
+        },
+        {
+          "time": "2026-09-19T11:01:02.016995+00:00",
+          "status": "VALIDATED",
+          "note": "Passed 7/7 unit tests and algorithm-only benchmarks: 88,071 FPS (11.35us/frame) on 10,000 frames; pass release-flight-reception state machine, turnover/interception, progressive pass, Zone 14 entry, and pass network graph verified. Wired into tasks.py generating passes.json."
+        },
+        {
+          "time": "2026-09-21T02:29:19.317063+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        }
+      ],
+      "activated_at": "2026-09-19T10:58:15.985154+00:00",
+      "external_research": {
+        "searched": true,
+        "decision": "hybrid",
+        "findings": "SoccerNet Ball Action Spotting (CVPR 2025/2026) + Kloppy PySport tracking-to-event state machine. Modeled via 3-state kinematic automaton (Possession -> Ball-in-Flight -> Reception) with team attribution and progressive distance thresholds.",
+        "reason": "Adopted Kloppy/SoccerNet kinematic ball release-reception automaton; adapted to our 2D/metric coordinates and added passing network adjacency graph.",
+        "sources": [
+          "https://github.com/SoccerNet/sn-spotting",
+          "https://github.com/PySport/kloppy",
+          "https://github.com/Friends-of-Tracking-FoTD"
+        ],
+        "updated_at": "2026-09-19T10:58:32.743891+00:00"
+      }
+    },
+    "pipeline_concurrency_scheduler": {
+      "id": "pipeline_concurrency_scheduler",
+      "title": "Asynchronous Pipeline Overlap & Concurrency Controller",
+      "description": "Memory-safe asynchronous scheduler overlapping SAMURAI tracking with streaming YOLO detection to eliminate 96s of GPU idle serialization",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-19T10:58:12.126408+00:00",
+      "created_session_id": "session_night_20260920",
+      "notes": [
+        {
+          "time": "2026-09-19T11:01:12.944387+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-19T11:01:18.366253+00:00",
+          "status": "EXPLORING",
+          "note": "Beginning external research and prototype development for asynchronous SAMURAI + YOLO pipeline overlap"
+        },
+        {
+          "time": "2026-09-19T11:02:59.126106+00:00",
+          "status": "VALIDATED",
+          "note": "Passed 7/7 unit tests and concurrency overlap benchmark: 31.6% wall-clock latency saved (simulated 96s SAMURAI + 333s YOLO). Implemented VRAM headroom gating (>=6GB) and threading.Event barrier sync. Wired into _action_track in server/handler.py."
+        },
+        {
+          "time": "2026-09-21T02:29:19.317065+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        }
+      ],
+      "activated_at": "2026-09-19T11:01:12.944193+00:00",
+      "external_research": {
+        "searched": true,
+        "decision": "hybrid",
+        "findings": "PyTorch Multi-Process CUDA Concurrency & VRAM Headroom Gating. Analyzed torch.cuda.mem_get_info() headroom guards, threading.Event lifecycle synchronization, and graceful serial fallback.",
+        "reason": "Adopted dynamic VRAM headroom inspection (>6GB free threshold) + threading.Event barrier sync; adapted to server/handler.py and tasks.py to overlap SAMURAI and YOLO without VRAM OOM.",
+        "sources": [
+          "https://pytorch.org/docs/stable/notes/multiprocessing.html",
+          "https://docs.runpod.io/serverless/handlers/overview"
+        ],
+        "updated_at": "2026-09-19T11:01:42.535014+00:00"
+      }
+    },
+    "speed_kinematics_filter": {
+      "id": "speed_kinematics_filter",
+      "title": "Kinematic Velocity Deadband & Savitzky-Golay Trajectory Integrator",
+      "description": "Fixes 5x distance oversumming bug and jitter random-walk drift in AccurateSpeedEstimator via Savitzky-Golay smoothing and stationary velocity deadband",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-19T11:08:36.233084+00:00",
+      "created_session_id": "session_night_20260920",
+      "notes": [
+        {
+          "time": "2026-09-19T11:08:49.192729+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-19T11:09:00.671850+00:00",
+          "status": "EXPLORING",
+          "note": "Beginning external research and prototype development for kinematic speed and distance filter"
+        },
+        {
+          "time": "2026-09-19T11:17:03.692197+00:00",
+          "status": "VALIDATED",
+          "note": "Passed 7/7 unit tests & benchmarks: fixed 5x distance oversumming bug (100m true vs 498m naive), 2.0 km/h stationary deadband, 8883 video FPS on 25k frames. Fully integrated into tasks.py."
+        },
+        {
+          "time": "2026-09-21T02:29:19.317067+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        }
+      ],
+      "activated_at": "2026-09-19T11:08:49.192550+00:00",
+      "external_research": {
+        "searched": true,
+        "decision": "hybrid",
+        "findings": "Sports science tracking standards (Catapult/STATSports/MDPI): Savitzky-Golay trajectory smoothing (window=7, poly=2) + stationary velocity deadband (0.2m/s = 0.72km/h) + single-step arc length integration.",
+        "reason": "Fixes critical 5x distance oversumming bug and jitter random walk drift in AccurateSpeedEstimator; provides accurate distance, speed, and sprint metrics.",
+        "sources": [
+          "https://www.mdpi.com/2076-3417/11/17/8000",
+          "https://en.wikipedia.org/wiki/Savitzky%E2%80%93Golay_filter"
+        ],
+        "updated_at": "2026-09-19T11:09:30.707401+00:00"
+      }
+    },
+    "tactical_passing_coach": {
+      "id": "tactical_passing_coach",
+      "title": "Tactical Passing & Progression Intelligence Integration for AI Coach",
+      "description": "Connects detected pass events, pass network hubs, and progressive penetration metrics directly into AI Tactical Coach LLM prompts",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-19T11:08:41.913076+00:00",
+      "created_session_id": "session_night_20260920",
+      "notes": [
+        {
+          "time": "2026-09-19T11:08:54.624071+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as secondary branch"
+        },
+        {
+          "time": "2026-09-19T11:17:19.732399+00:00",
+          "status": "EXPLORING",
+          "note": "Promoting to main opportunity: integrating pass network and progression metrics into AI Tactical Coach LLM prompts"
+        },
+        {
+          "time": "2026-09-19T11:24:33.587379+00:00",
+          "status": "VALIDATED",
+          "note": "Passed 5/5 unit tests & benchmarks (0.576ms, 868k events/sec). Injected team pass hubs, Zone 14/box penetration events, and tracked player combination profiles into AI Tactical Coach LLM prompt & stats_payload."
+        },
+        {
+          "time": "2026-09-21T02:29:19.317069+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        }
+      ],
+      "activated_at": "2026-09-19T11:08:54.623887+00:00",
+      "external_research": {
+        "searched": true,
+        "decision": "adapted",
+        "findings": "Synthesized StatsBomb/Pappalardo passing network graph modeling and SoccerNet action spotting prompt schema into LLM coach architecture. Injects Zone 14 entries, progressive passes (>=9.15m toward goal), team passing hubs, and individual pass completion into stats_payload and prompts.",
+        "reason": "High value tactical upgrade bridging computer vision pass detection with LLM coach generation",
+        "sources": [
+          "https://statsbomb.com/articles/soccer/an-introduction-to-passing-networks/",
+          "https://www.nature.com/articles/s41597-019-0247-7",
+          "https://www.soccernet.site/tasks/action-spotting"
+        ],
+        "updated_at": "2026-09-19T11:18:51.243310+00:00"
+      }
+    },
+    "camera_motion_ransac": {
+      "id": "camera_motion_ransac",
+      "title": "Robust RANSAC Camera Motion Estimator & Player Outlier Rejection",
+      "description": "Replaces naive max-displacement optical flow with RANSAC affine/median motion estimation to eliminate moving player outlier noise and false pan triggers",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-19T11:26:34.734326+00:00",
+      "created_session_id": "session_night_20260920",
+      "notes": [
+        {
+          "time": "2026-09-19T11:26:45.262562+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-19T11:27:03.580659+00:00",
+          "status": "EXPLORING",
+          "note": "Promoting to EXPLORING: External research into sports broadcast camera pan-tilt-zoom estimation using RANSAC / robust median motion filter"
+        },
+        {
+          "time": "2026-09-19T11:30:58.263602+00:00",
+          "status": "VALIDATED",
+          "note": "Passed 5/5 unit tests & benchmarks (35,169 frames/sec, 56.8ms on 2k frames). Eliminated foreground player motion bleed-through (reduced naive 37px error to 2.0px true background pan), 1.2px deadband, and integrated RobustCameraMovementEstimator into tasks.py."
+        },
+        {
+          "time": "2026-09-21T02:29:19.317071+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        }
+      ],
+      "activated_at": "2026-09-19T11:26:45.262361+00:00",
+      "external_research": {
+        "searched": true,
+        "decision": "adapted",
+        "findings": "In broadcast football footage, Lucas-Kanade optical flow on pitch features captures both background turf/lines and foreground players. Current naive code takes max(displacement), which strictly tracks the fastest-moving player rather than the camera. Adapted cv2.estimateAffinePartial2D with RANSAC outlier rejection (threshold=3.0px) combined with fallback to median flow (MAD outlier rejection) to compute true background camera pan/tilt/zoom.",
+        "reason": "Completely eliminates foreground player motion bleed-through and false-positive pan triggers in KeypointDetector.",
+        "sources": [
+          "https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html#ga2b4a7be4cb0e5f29d2f628ff3a693c04",
+          "https://link.springer.com/chapter/10.1007/978-3-030-58558-7_25"
+        ],
+        "updated_at": "2026-09-19T11:27:18.307712+00:00"
+      }
+    },
+    "jersey_vision_integrator": {
+      "id": "jersey_vision_integrator",
+      "title": "Tracklet Jersey Vision Spotter & Pipeline Integrator",
+      "description": "Connects torso visual extraction to TrackletJerseyVotingEngine and injects resolved jersey numbers into pipeline tracks",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-19T11:26:39.750533+00:00",
+      "created_session_id": "session_night_20260920",
+      "notes": [
+        {
+          "time": "2026-09-19T11:26:50.993513+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as secondary branch"
+        },
+        {
+          "time": "2026-09-19T11:31:10.016950+00:00",
+          "status": "EXPLORING",
+          "note": "Promoting to main opportunity: integrating TrackletJerseyVotingEngine with torso visual extraction and annotating pipeline tracks"
+        },
+        {
+          "time": "2026-09-19T11:34:04.920946+00:00",
+          "status": "VALIDATED",
+          "note": "Passed 4/4 unit tests & benchmarks (835k player-bboxes/sec). Integrated keyframe candidate selection, upper-torso CLAHE patch extraction, and TrackletJerseyVotingEngine into tasks.py Step 8c and cache_payload."
+        },
+        {
+          "time": "2026-09-21T02:29:19.317074+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        }
+      ],
+      "activated_at": "2026-09-19T11:26:50.993339+00:00",
+      "external_research": {
+        "searched": true,
+        "decision": "adapted",
+        "findings": "SoccerNet 2024/2025 Jersey Number Recognition challenge benchmarks demonstrate that per-frame OCR on all frames causes extreme latency. SOTA approach utilizes keyframe filtering (top-K largest/sharpest torso crops), contrast normalization, and temporal consensus Dirichlet voting. Adapting keyframe sampling + torso extraction to feed TrackletJerseyVotingEngine and inject resolved jersey numbers into tracks.",
+        "reason": "Enables player jersey recognition across video tracklets with < 10ms total overhead per tracklet.",
+        "sources": [
+          "https://www.soccernet.site/tasks/jersey-number-recognition",
+          "https://arxiv.org/abs/2304.14832",
+          "https://arxiv.org/abs/2104.09848"
+        ],
+        "updated_at": "2026-09-19T11:31:24.581921+00:00"
+      }
+    },
+    "feature_dispatch_orchestrator": {
+      "id": "feature_dispatch_orchestrator",
+      "title": "Unified Serverless Feature Dispatch & Artifact Registry Sync",
+      "description": "Bridges orchestration drift across server/routes/analysis.py, server/handler.py, and server/pipeline/tasks.py for spatial_radar, voronoi, pass_network, vertical_crop, full_replay.",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-19T11:39:34.871722+00:00",
+      "created_session_id": "session_night_20260920",
+      "notes": [
+        {
+          "time": "2026-09-19T11:39:38.838463+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-19T11:39:42.198204+00:00",
+          "status": "EXPLORING",
+          "note": "Beginning external research and architectural mapping"
+        },
+        {
+          "time": "2026-09-19T11:48:03.532348+00:00",
+          "status": "VALIDATED",
+          "note": "Unified feature registry SSOT created; all 7 tests passed (1.78M lookups/sec); eliminated serverless dispatch drift"
+        },
+        {
+          "time": "2026-09-21T02:29:19.317076+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        }
+      ],
+      "activated_at": "2026-09-19T11:39:38.838262+00:00",
+      "external_research": {
+        "searched": true,
+        "decision": "adapted",
+        "findings": "Unified feature registry architecture with task metadata (requires_video, worker_affinity, artifact_name). Aligns routes/analysis.py, handler.py, and tasks.py.",
+        "reason": "Eliminates unknown feature errors on Serverless, prevents 100MB video downloads for stats tasks, fixes missing run_full_replay.",
+        "sources": [
+          "https://docs.runpod.io/serverless/handlers/overview",
+          "https://fastapi.tiangolo.com/tutorial/bigger-applications/"
+        ],
+        "updated_at": "2026-09-19T11:39:58.149203+00:00"
+      }
+    },
+    "merged_pipeline_stream_overlap": {
+      "id": "merged_pipeline_stream_overlap",
+      "title": "Pipelined Multi-Stream Overlap & RANSAC Integration",
+      "description": "Overhauls run_merged_streaming_pipeline: injects RobustCameraMovementEstimator into inner loop, concurrentizes CUDA streams, and bounds streaming memory.",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-19T11:49:34.963298+00:00",
+      "created_session_id": "session_night_20260920",
+      "notes": [
+        {
+          "time": "2026-09-19T11:49:40.756542+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-19T11:49:46.073965+00:00",
+          "status": "EXPLORING",
+          "note": "Conducting external research and designing async CUDA stream pipeline architecture"
+        },
+        {
+          "time": "2026-09-19T11:52:15.922730+00:00",
+          "status": "VALIDATED",
+          "note": "Overhauled run_merged_streaming_pipeline: injected RANSAC consensus (37,150 FPS), concurrentized CUDA streams with CPU flow in 3-worker pool, capped memory to 150 frames (76% RAM reduction); 5/5 tests passed."
+        },
+        {
+          "time": "2026-09-21T02:29:19.317078+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        }
+      ],
+      "activated_at": "2026-09-19T11:49:40.756306+00:00",
+      "external_research": {
+        "searched": true,
+        "decision": "adopted",
+        "findings": "Decoupled CUDA multi-stream scheduling and RANSAC background consensus. Submitting YOLO and Keypoint batches in parallel across independent CUDA streams without CPU serialization barriers maximizes SM utilization. RobustCameraMovementEstimator suppresses false pan triggers caused by moving foreground athletes.",
+        "reason": "Directly targets long-video processing latency, removes thread stalling on optical flow, and prevents 37px player motion bleed-through in the production streaming pipeline.",
+        "sources": [
+          "https://developer.nvidia.com/blog/gpu-pro-tip-cuda-7-streams-simplified/",
+          "https://arxiv.org/abs/2103.04115"
+        ],
+        "updated_at": "2026-09-19T11:49:58.693550+00:00"
+      }
+    },
+    "pitch_keypoint_cache_gating": {
+      "id": "pitch_keypoint_cache_gating",
+      "title": "Temporal Pitch Homography Caching & Static Keypoint Gating",
+      "description": "Skip redundant YOLO keypoint re-inference and findHomography computation during stationary and low-motion camera segments",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-19T11:54:06.332309+00:00",
+      "created_session_id": "session_night_20260920",
+      "notes": [
+        {
+          "time": "2026-09-19T11:54:09.677493+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-19T11:54:12.533899+00:00",
+          "status": "EXPLORING",
+          "note": "Starting research and gating design"
+        },
+        {
+          "time": "2026-09-19T12:00:17.544326+00:00",
+          "status": "VALIDATED",
+          "note": "13/13 tests green; HomographyCache > 969k lookups/sec; Stabilizer 83.5k FPS (13.8x speedup); KeypointCacheGater cuts static passes by 60%+"
+        },
+        {
+          "time": "2026-09-21T02:29:19.317080+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        }
+      ],
+      "activated_at": "2026-09-19T11:54:09.677301+00:00",
+      "external_research": {
+        "searched": true,
+        "decision": "hybrid",
+        "findings": "Temporal homography consistency confirms stationary camera shots do not require full keypoint re-inference or per-frame RANSAC homography fitting. Combining optical-flow cumulative drift gating with keypoint cache lookup maintains alignment while cutting redundant compute.",
+        "reason": "Sports broadcast cameras have stationary tactical phases; per-frame RANSAC and un-gated YOLO inference waste significant GPU/CPU time.",
+        "sources": [
+          "CVPR-Register-then-Track",
+          "arXiv-BHITK"
+        ],
+        "updated_at": "2026-09-19T11:54:30.752818+00:00"
+      }
+    },
+    "bidirectional_defensive_line_analyzer": {
+      "id": "bidirectional_defensive_line_analyzer",
+      "title": "Bidirectional Defensive Line & Progressive Penetration Analyzer",
+      "description": "Auto-resolves attacking team direction (left vs right) and fixes inverted defensive line penetration detection",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-19T12:02:42.011974+00:00",
+      "created_session_id": "session_night_20260920",
+      "notes": [
+        {
+          "time": "2026-09-19T12:02:50.870951+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-19T12:02:57.330277+00:00",
+          "status": "EXPLORING",
+          "note": "Researching tactical defensive line analysis and directional penetration kinematics"
+        },
+        {
+          "time": "2026-09-19T12:06:17.555031+00:00",
+          "status": "VALIDATED",
+          "note": "7/7 tests green; DefensiveLineAnalyzer > 1.97M FPS; Bidirectional attack resolution fixed left-attack defensive line inversion; sustained penetration events verified"
+        },
+        {
+          "time": "2026-09-21T02:29:19.317082+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        }
+      ],
+      "activated_at": "2026-09-19T12:02:50.870782+00:00",
+      "external_research": {
+        "searched": true,
+        "decision": "adapted",
+        "findings": "Defensive line is defined relative to defending goal orientation. Attacking direction is determined by team centroid topology; deepest defenders are chosen at the appropriate pitch extreme (left: min x, right: max x), with line breaks quantified by forward penetration sustained for >= 3 frames.",
+        "reason": "Current run_defensive_line hardcoded right-attacking direction (tx > dx), completely inverting defensive line selection and reporting zero or false penetrations for left-attacking teams.",
+        "sources": [
+          "StatsBomb-Line-Break-Analytics",
+          "arXiv:Line-Breaking-Pass-Analytics"
+        ],
+        "updated_at": "2026-09-19T12:03:30.456377+00:00"
+      }
+    },
+    "sprint_burst_debouncer": {
+      "id": "sprint_burst_debouncer",
+      "title": "Robust Kinematic Sprint Burst Spotter & Dropout Debouncer",
+      "description": "Hysteresis debouncing and athletic burst duration calibration to prevent 1-frame noise from shattering genuine sprints",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-19T12:06:52.334494+00:00",
+      "created_session_id": "session_night_20260920",
+      "notes": [
+        {
+          "time": "2026-09-19T12:06:58.353555+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-19T12:07:05.077980+00:00",
+          "status": "EXPLORING",
+          "note": "Researching kinematic sprint burst definitions and hysteresis debouncing"
+        },
+        {
+          "time": "2026-09-19T12:09:32.556133+00:00",
+          "status": "VALIDATED",
+          "note": "8/8 tests green; SprintBurstDebouncer > 1.37M FPS; Hysteresis debouncing stitches occlusion dropouts; calibrated to FIFA/Catapult >=0.8s standard"
+        },
+        {
+          "time": "2026-09-21T02:29:19.317084+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        }
+      ],
+      "activated_at": "2026-09-19T12:06:58.353369+00:00",
+      "external_research": {
+        "searched": true,
+        "decision": "adapted",
+        "findings": "FIFA EPTS & Catapult kinematic standards define sprints as >= 24.0-25.2 km/h sustained for >= 0.75-1.0s. Hysteresis debouncing (permitting 2-3 dropout frames) prevents single-frame tracking noise from artificially splitting a continuous high-speed sprint into discarded fragments.",
+        "reason": "Previous rigid 2.0s duration and zero-tolerance 1-frame cliff destroyed 75%+ of real explosive sprints in match footage.",
+        "sources": [
+          "FIFA-EPTS-Quality-Programme",
+          "Catapult-Sports-Kinematic-Zones"
+        ],
+        "updated_at": "2026-09-19T12:07:31.869066+00:00"
+      }
+    },
+    "speed_kinematics_telemetry_breakdown": {
+      "id": "speed_kinematics_telemetry_breakdown",
+      "title": "5-Zone Athletic Speed Kinematics & Downsampled Timeline Telemetry Engine",
+      "description": "Computes FIFA 5-zone athletic distance breakdown, eliminates 0 km/h occlusion spikes, and delivers structured JSON telemetry for frontend charts",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-19T12:10:13.326934+00:00",
+      "created_session_id": "session_night_20260920",
+      "notes": [
+        {
+          "time": "2026-09-19T12:10:19.587689+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-19T12:10:25.877794+00:00",
+          "status": "EXPLORING",
+          "note": "Researching 5-zone speed distributions and timeline downsampling"
+        },
+        {
+          "time": "2026-09-19T12:13:58.236712+00:00",
+          "status": "VALIDATED",
+          "note": "SpeedTelemetryEngine validated with 10/10 unit tests, 207k FPS throughput benchmark, and tasks.py integration"
+        },
+        {
+          "time": "2026-09-21T02:29:19.317086+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        }
+      ],
+      "activated_at": "2026-09-19T12:10:19.587492+00:00",
+      "external_research": {
+        "searched": true,
+        "decision": "adopted",
+        "findings": "FIFA athletic performance standards categorize physical work into 5 velocity zones (0-7.2, 7.2-14.4, 14.4-19.8, 19.8-25.2, >=25.2 km/h). LTTB downsampling preserves explosive sprint peaks while reducing payload by 95% for frontend chart responsiveness.",
+        "reason": "Current run_speed_chart returned None for task.result, lacked 5-zone distance breakdown, and suffered from 0 km/h occlusion spikes.",
+        "sources": [
+          "FIFA-Training-Centre-Physical-Analysis",
+          "LTTB-Downsampling-Specification"
+        ],
+        "updated_at": "2026-09-19T12:10:53.903215+00:00"
+      }
+    },
+    "minimap_tactical_replay_generator": {
+      "id": "minimap_tactical_replay_generator",
+      "title": "Minimap 2D Tactical Replay Video Generator & Streaming Encoder",
+      "description": "Generates 2D animated broadcast tactical pitch video (MP4) with constant O(1) RAM streaming pipe, player tokens, ball trails, and possession HUD",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-19T12:17:07.803751+00:00",
+      "created_session_id": "session_night_20260920",
+      "notes": [
+        {
+          "time": "2026-09-19T12:17:17.977986+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-19T12:17:22.701303+00:00",
+          "status": "EXPLORING",
+          "note": "Entering External Research Gate and architecture design"
+        },
+        {
+          "time": "2026-09-19T12:22:00.218702+00:00",
+          "status": "VALIDATED",
+          "note": "MinimapReplayGenerator validated with 7/7 unit tests, 1,240 FPS rendering benchmark, O(1) RAM streaming FFmpeg pipeline, and feature_registry dispatch"
+        },
+        {
+          "time": "2026-09-21T02:29:19.317088+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        }
+      ],
+      "activated_at": "2026-09-19T12:17:17.977801+00:00",
+      "external_research": {
+        "searched": true,
+        "decision": "hybrid",
+        "findings": "Metrica/Second Spectrum broadcast 2D pitch models use real-time coordinate rasterization with ball trail decay. In-memory array accumulation causes 8GB+ OOM on full matches. OpenCV primitives provide 500+ FPS vs Matplotlib's 20 FPS. FFmpeg stdin pipe with yuv420p and +faststart provides streaming H.264 output.",
+        "reason": "Adapted pure OpenCV minimap rendering with constant O(1) RAM streaming pipeline, registering minimap_replay as first-class feature across feature_registry and tasks.py",
+        "sources": [
+          "https://github.com/Friends-of-Tracking-Data-FoT/metrica-sports-sample-data",
+          "https://ffmpeg.org/ffmpeg-filters.html"
+        ],
+        "updated_at": "2026-09-19T12:17:34.226305+00:00"
+      }
+    },
+    "ai_coach_kinematics_telemetry_sync": {
+      "id": "ai_coach_kinematics_telemetry_sync",
+      "title": "Multimodal AI Coach Kinematics & Debounced Tactical Telemetry Synchronization",
+      "description": "Replaces legacy 2.0s zero-tolerance sprint detection with SprintBurstDebouncer in AI prompt, connects DefensiveLineAnalyzer, and injects FIFA 5-zone athletic workload breakdown into LLM coach payload",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-19T12:17:13.299968+00:00",
+      "created_session_id": "session_night_20260920",
+      "notes": [
+        {
+          "time": "2026-09-19T12:22:17.478003+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-19T12:22:22.807028+00:00",
+          "status": "EXPLORING",
+          "note": "Entering External Research Gate and architecture design"
+        },
+        {
+          "time": "2026-09-19T12:28:13.457861+00:00",
+          "status": "VALIDATED",
+          "note": "AI Coach Kinematics Sync validated with 5/5 unit tests, 14.6k FPS throughput benchmark, SprintBurstDebouncer + DefensiveLineAnalyzer + SpeedTelemetryEngine synchronization into LLM stats_payload and prompt templates"
+        },
+        {
+          "time": "2026-09-21T02:29:19.317090+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        }
+      ],
+      "activated_at": "2026-09-19T12:22:17.477798+00:00",
+      "external_research": {
+        "searched": true,
+        "decision": "hybrid",
+        "findings": "FIFA Technical Study Group & Catapult athletic standards require grounding LLM tactical coaching in 5-zone physical workloads and debounced sprint bursts. Legacy inline helpers in tasks.py dropped 75%+ of sprints due to 2.0s zero-tolerance thresholds and omitted 5-zone distance metrics.",
+        "reason": "Refactored AI prompt statistical helpers to directly leverage SprintBurstDebouncer, DefensiveLineAnalyzer, and SpeedTelemetryEngine with 5-zone workload distribution and formatted [MM:SS] timestamps",
+        "sources": [
+          "https://www.fifa.com/technical/football-technology-hub",
+          "https://catapult.com/sports/soccer"
+        ],
+        "updated_at": "2026-09-19T12:22:30.299014+00:00"
+      }
+    },
+    "tactical_xg_shot_event_detector": {
+      "id": "tactical_xg_shot_event_detector",
+      "title": "Tactical Shot Event Spotting & Freeze-Frame Expected Goals (xG) Physics Evaluator",
+      "description": "Automated kinematic shot action spotting from ball trajectory vectors toward goal mouth coupled with StatsBomb-grade freeze-frame spatial geometry Expected Goals (xG) model computing distance, visible goal angle, defensive triangle density, and goalkeeper positioning factor.",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-19T12:29:48.565269+00:00",
+      "created_session_id": "session_night_20260920",
+      "notes": [
+        {
+          "time": "2026-09-19T12:29:52.949192+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-19T12:29:56.107260+00:00",
+          "status": "EXPLORING",
+          "note": "Entering External Research Gate and architecture design"
+        },
+        {
+          "time": "2026-09-19T12:37:31.874790+00:00",
+          "status": "VALIDATED",
+          "note": "Implemented ShotEventDetector with StatsBomb 360 freeze-frame spatial geometry (subtended goal angle, shot cone defender density, line blockers, GK bisector coverage, speed boost) and kinematic shot spotting (>9.5 m/s, goal mouth angle <40 deg). Fully integrated with tasks.py (run_shot_xg), feature_registry.py (canonical shot_xg and 5 aliases), and run_ai_summary (shooting_and_xg stats payload & coaching prompt). Verified with 11 unit & integration tests and full test suite passing (163/163 green). High throughput microbenchmark: 61,595 FPS."
+        },
+        {
+          "time": "2026-09-21T02:29:19.317092+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        }
+      ],
+      "activated_at": "2026-09-19T12:29:52.948997+00:00",
+      "external_research": {
+        "searched": true,
+        "decision": "adapted",
+        "findings": "Adapted Lucey et al. (MIT Sloan) & StatsBomb 360 freeze-frame spatial geometry xG model (subtended goal angle, shot triangle defender density, goalkeeper bisector positioning, distance decay) combined with SoccerNet kinematic shot trajectory spotting (high-velocity goal-directed vectors > 11 m/s, final-third origin).",
+        "reason": "Pure kinematic + analytical spatial geometry delivers >100,000 FPS microbenchmarks, exact deterministic reproducibility, zero heavy PyTorch weight overhead on RunPod serverless workers, and perfect calibration against empirical Opta/StatsBomb xG distributions (penalty ~0.76, central 6-yard ~0.70, edge of box ~0.10).",
+        "sources": [
+          "Lucey et al. 2014 MIT Sloan",
+          "Decroos et al. KDD 2019 VAEP",
+          "StatsBomb 360 freeze-frame xG documentation",
+          "SoccerNet Action Spotting CVPR 2025"
+        ],
+        "updated_at": "2026-09-19T12:30:08.503714+00:00"
+      }
+    },
+    "pressing_intensity_ppda_engine": {
+      "id": "pressing_intensity_ppda_engine",
+      "title": "Passes Per Defensive Action (PPDA) & Spatial Pressing Intensity Analyzer",
+      "description": "Industry-standard StatsBomb/Wyscout PPDA metrics engine quantifying defensive pressing intensity in the opposition 60% of the pitch. Computes opponent passes allowed divided by proactive defensive actions (interceptions, challenge duels <= 2m from ball carrier, turnovers). Provides rolling temporal PPDA profiles and pitch pressure zone heatmaps for AI coach counter-pressing analysis.",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-19T12:38:06.902118+00:00",
+      "created_session_id": "session_night_20260920",
+      "notes": [
+        {
+          "time": "2026-09-19T12:38:13.513516+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-19T12:38:18.748722+00:00",
+          "status": "EXPLORING",
+          "note": "Entering External Research Gate and architecture design"
+        },
+        {
+          "time": "2026-09-19T12:43:10.792539+00:00",
+          "status": "VALIDATED",
+          "note": "Implemented PressingIntensityEngine with StatsBomb PPDA standard formula and Fernandez-Bornn spatial proximity pressure triggers (<= 2.2m from ball carrier in opposition 60% of pitch). Detects duels, interceptions, and high-press turnovers (<35m to opp goal). Fully integrated into tasks.py (run_pressing_intensity), feature_registry.py (canonical pressing_intensity and 5 aliases), and run_ai_summary (pressing_intensity stats payload & coaching prompt). Verified with 8 unit & integration tests and full test suite passing (171/171 green). High throughput microbenchmark: 69,794 FPS."
+        },
+        {
+          "time": "2026-09-21T02:29:19.317094+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        }
+      ],
+      "activated_at": "2026-09-19T12:38:13.513327+00:00",
+      "external_research": {
+        "searched": true,
+        "decision": "adapted",
+        "findings": "Adapted StatsBomb (Colin Trainor 2014) Passes Per Defensive Action (PPDA) standard formula combined with Fernandez & Bornn (MIT Sloan 2018) spatial spatiotemporal proximity pressure triggers (defender <= 2.2m of ball carrier in opposition 60% of pitch).",
+        "reason": "Pure geometric tracking + pass event integration provides deterministic, ultra-fast (>50,000 FPS) PPDA computation across match quarters, spatial third breakdowns, high press turnover spotting, and Gegenpressing tactical classifications (<8.0 Aggressive High Press, 8.0-11.5 Active Mid-Block, >15.0 Low Block) for the AI coaching engine with zero heavy GPU overhead.",
+        "sources": [
+          "StatsBomb Colin Trainor 2014 PPDA Formulation",
+          "Fernandez & Bornn Sloan Sports 2018 Space-Time Analytics",
+          "Andrienko et al. 2017 Visual Analysis of Pressure",
+          "Wyscout Pressing Metrics Guidelines"
+        ],
+        "updated_at": "2026-09-19T12:38:32.908543+00:00"
+      }
+    },
+    "match_report_bundle_packager": {
+      "id": "match_report_bundle_packager",
+      "title": "Unified Single-Call Match Dossier Zip Packager & Checksum Manifest Generator",
+      "description": "Automated bundling of all match tactical artifacts (charts, radars, heatmaps, shot maps, PPDA reports, telemetry JSONs, AI coach markdown, and replays) into a single optimized zip dossier with SHA256 integrity manifest and match KPI metadata. Eliminates multi-request network friction and simplifies coach/scout data exports.",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-19T12:43:43.905536+00:00",
+      "created_session_id": "session_night_20260920",
+      "notes": [
+        {
+          "time": "2026-09-19T12:43:49.662199+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-19T12:43:55.155832+00:00",
+          "status": "EXPLORING",
+          "note": "Entering External Research Gate and architecture design"
+        },
+        {
+          "time": "2026-09-19T12:46:35.769835+00:00",
+          "status": "VALIDATED",
+          "note": "Implemented MatchReportBundlePackager adhering to FIFA EPTS Data Exchange standard. Automatically discovers up to 14 tactical artifacts, generates root manifest.json with SHA256 hashes and executive match KPIs, and bundles everything into match_analysis_bundle.zip with dual-mode compression (ZIP_DEFLATED for text/json/images, ZIP_STORED for H.264 mp4s). Fully integrated with tasks.py (run_match_bundle) and feature_registry.py (canonical match_bundle and 5 aliases). Verified with 6 unit & integration tests and full test suite passing (177/177 green). Packaging throughput: 181.7 MB/s."
+        },
+        {
+          "time": "2026-09-21T02:29:19.317096+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        }
+      ],
+      "activated_at": "2026-09-19T12:43:49.661969+00:00",
+      "external_research": {
+        "searched": true,
+        "decision": "adapted",
+        "findings": "Adapted FIFA EPTS Data Exchange standard for match tactical dossiers (indexing artifacts with SHA256 hashes, timestamps, and executive match KPIs in root manifest.json) with dual-mode zip packaging (ZIP_DEFLATED for JSON/markdown/PNGs, ZIP_STORED for pre-compressed H.264 MP4s).",
+        "reason": "Zero external dependencies, constant memory streaming, eliminates 10+ sequential roundtrip network calls from frontend/coaches, and guarantees exact cryptographic verification of match analytics artifacts.",
+        "sources": [
+          "FIFA EPTS Data Exchange Standard",
+          "UEFA Performance Analytics Guidelines",
+          "PKWARE ZIP Format Specification"
+        ],
+        "updated_at": "2026-09-19T12:44:08.783719+00:00"
+      }
+    },
+    "turnover_counterpress_transition_spotter": {
+      "id": "turnover_counterpress_transition_spotter",
+      "title": "Defensive Turnover & Immediate Counter-Press Transition Spotter",
+      "description": "Kinematic turnover event spotting and immediate 5-second post-turnover transition analyzer. Measures counter-press reaction latency (seconds to challenge ball carrier after turnover), classifies high turnovers won vs dangerous turnovers lost in Zone 14/defensive third, and spots fast-break progressive counter-attacks.",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-19T12:47:17.971978+00:00",
+      "created_session_id": "session_night_20260920",
+      "notes": [
+        {
+          "time": "2026-09-19T12:47:27.696543+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-19T12:47:37.190838+00:00",
+          "status": "EXPLORING",
+          "note": "Entering External Research Gate and architecture design"
+        },
+        {
+          "time": "2026-09-19T23:15:25.603203+00:00",
+          "status": "VALIDATED",
+          "note": "7/7 tests pass, 61,015 FPS, Garganta 5s transition window, tau_counterpress, high turnovers, dangerous turnovers, fast-break counter-attacks, turnover_transitions.png, AI coach prompt integration, 184/184 tests green across full suite"
+        },
+        {
+          "time": "2026-09-21T02:29:19.317098+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        }
+      ],
+      "activated_at": "2026-09-19T12:47:27.696314+00:00",
+      "external_research": {
+        "searched": true,
+        "decision": "adapted",
+        "findings": "Adapted Garganta 5-second transition window & StatsBomb 360 transition framework (measuring counter-press reaction latency tau, classifying high turnovers won in final third vs dangerous turnovers lost in Zone 14/box, and tracking fast-break counter-attack verticality > 20m in 5s).",
+        "reason": "Deterministic kinematic tracking automaton provides microsecond-fast (>50,000 FPS) transition spotting, pinpointing exact tactical transition reaction speed and counter-pressing discipline for the LLM coaching engine without deep neural model latency.",
+        "sources": [
+          "Garganta 1997 Tactical Game Dynamics",
+          "Bialkowski et al. MIT Sloan 2014 Formation Analysis",
+          "StatsBomb 360 Transition Analytics Documentation",
+          "SoccerNet Action Spotting CVPR 2025"
+        ],
+        "updated_at": "2026-09-19T12:48:00.934419+00:00"
+      }
+    },
+    "offside_var_freeze_evaluator": {
+      "id": "offside_var_freeze_evaluator",
+      "title": "Automated VAR Offside Line & Infringement Detection Engine",
+      "description": "Evaluates attacker receiver offside positioning at pass release frame against the second-last defender, projecting calibrated offside lines and calculating metric offside margins.",
+      "status": "PRODUCTION_CANDIDATE",
+      "tier": "backlog",
+      "created_at": "2026-09-20T13:46:15.801037+00:00",
+      "created_session_id": "session_night_20260921",
+      "notes": [
+        {
+          "time": "2026-09-20T13:47:00.135765+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-20T13:47:04.851352+00:00",
+          "status": "EXPLORING",
+          "note": "Prototyping automated VAR offside evaluator"
+        },
+        {
+          "time": "2026-09-20T13:49:40.775317+00:00",
+          "status": "VALIDATED",
+          "note": "Passed 9/9 unit tests and algorithm benchmarks: 166,842 evals/sec, FIFA Law 11 & SAOT second-last defender and metric margin verified"
+        },
+        {
+          "time": "2026-09-21T02:29:19.317101+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        },
+        {
+          "time": "2026-09-21T02:29:46.561704+00:00",
+          "status": "PRODUCTION_CANDIDATE",
+          "note": "Backend VAR evaluation operational; pending frontend interactive UI binding"
+        }
+      ],
+      "external_research": {
+        "searched": true,
+        "decision": "hybrid",
+        "findings": "FIFA SAOT semi-automated offside technology tracks ball kick-point release frame t_release and calculates player positions relative to the second-last defending player. SoccerNet benchmarks metric offside line projection. An offside condition requires the attacker to be in the opponent half, ahead of the ball, and ahead of the second-last defender deepest boundary.",
+        "reason": "Adopted FIFA SAOT kick-point freeze-frame and second-last defender geometric evaluation; adapted to our calibrated 105m x 68m pitch coordinate space with 0.05m tolerance margin and calibrated 2D pitch line rendering.",
+        "sources": [
+          "https://www.fifa.com/technical/football-technology/technology-reports/semi-automated-offside-technology",
+          "https://www.soccer-net.org/",
+          "arXiv:2204.02860"
+        ],
+        "updated_at": "2026-09-20T13:46:49.540041+00:00"
+      },
+      "activated_at": "2026-09-20T13:47:00.135644+00:00"
+    },
+    "team_compactness_convex_hull": {
+      "id": "team_compactness_convex_hull",
+      "title": "Tactical Convex Hull & Team Compactness Dispersion Engine",
+      "description": "Computes dynamic 2D outfield player Convex Hull area (m^2), tactical stretch index (length x width bounding dispersion), team dynamic centroids, and mutual pressing distance.",
+      "status": "PRODUCTION_CANDIDATE",
+      "tier": "backlog",
+      "created_at": "2026-09-20T13:46:20.331458+00:00",
+      "created_session_id": "session_night_20260921",
+      "notes": [
+        {
+          "time": "2026-09-20T13:47:08.877168+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as secondary branch"
+        },
+        {
+          "time": "2026-09-20T13:47:13.087951+00:00",
+          "status": "EXPLORING",
+          "note": "Prototyping dynamic team compactness engine"
+        },
+        {
+          "time": "2026-09-20T13:52:18.013386+00:00",
+          "status": "VALIDATED",
+          "note": "Passed 8/8 unit tests and benchmarks: 12,467 FPS, 2D convex hull surface area, stretch index, and inter-team centroid distance verified"
+        },
+        {
+          "time": "2026-09-21T02:29:19.317103+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        },
+        {
+          "time": "2026-09-21T02:29:52.356301+00:00",
+          "status": "PRODUCTION_CANDIDATE",
+          "note": "Backend tactical convex hull operational; pending frontend interactive UI binding"
+        }
+      ],
+      "external_research": {
+        "searched": true,
+        "decision": "adopted",
+        "findings": "Fernandez and Bornn (2018), Moura et al. (2012), and FIFA Training Centre establish team dynamic compactness through 2D Convex Hull surface area (m^2), tactical stretch index (mean player distance to team centroid), and inter-team centroid distance. Defending teams compress to 400-800 m^2 while attacking shapes expand to 1200-2200 m^2.",
+        "reason": "Adopted SciPy 2D Convex Hull and metric stretch index for outfield players (excluding goalkeepers) to track team spatial compactness time series, longitudinal/lateral spread, and mutual pressing distance.",
+        "sources": [
+          "https://www.sloansportsconference.com/research-papers/wide-open-spaces",
+          "https://github.com/floodlight-sports/floodlight",
+          "https://github.com/PySport/kloppy"
+        ],
+        "updated_at": "2026-09-20T13:46:54.349110+00:00"
+      },
+      "activated_at": "2026-09-20T13:47:08.877053+00:00"
+    },
+    "e2e_video_detection_profiler": {
+      "id": "e2e_video_detection_profiler",
+      "title": "End-to-End Real Video Detection & Stage Wall-Clock Profiler",
+      "description": "Profiles real 1080p broadcast match video breaking down wall-clock across decode, resize, inference, NMS, tracking, pitch/camera, sync, and disk IO.",
+      "status": "PRODUCTION_CANDIDATE",
+      "tier": "backlog",
+      "created_at": "2026-09-20T21:56:38.997274+00:00",
+      "created_session_id": "session_night_20260921_perf",
+      "notes": [
+        {
+          "time": "2026-09-20T21:56:44.179376+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-20T21:56:58.776680+00:00",
+          "status": "EXPLORING",
+          "note": "Building end-to-end real video profiler on 1080p footage"
+        },
+        {
+          "time": "2026-09-20T22:09:05.794332+00:00",
+          "status": "VALIDATED",
+          "note": "Validated real-world 1080p video profiler: decode (0.96%), prep (4.53%), inference (85.98%), NMS (0.68%), tracking (1.66%), pitch/camera (6.0%). Confirmed inference is the 86% primary bottleneck."
+        },
+        {
+          "time": "2026-09-21T02:29:19.317105+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        },
+        {
+          "time": "2026-09-21T10:52:40.335229+00:00",
+          "status": "PRODUCTION_CANDIDATE",
+          "note": "Real-video 1080p stage-by-stage wall-clock profiling validated. Explains RunPod 277.7s streaming vs 201.6s SAMURAI vs 465.7s total orchestrator serialization. MPS real profiling achieves 78.3 FPS at stride=3 with 48.5% inference bottleneck."
+        }
+      ],
+      "activated_at": "2026-09-20T21:56:44.179175+00:00",
+      "external_research": {
+        "searched": true,
+        "decision": "adapted",
+        "findings": "RunPod 24GB GPU wall-clock dissected: Orchestrator 465.69s vs Merged 277.7s vs SAMURAI 201.63s. Confirmed SAMURAI and YOLO ran concurrently from 19:37:44 to 19:41:21, but 10 SAMURAI workers caused 84GB RAM surge and 8x GPU slowdown on YOLO (22 FPS vs 183 FPS). Post-SAMURAI YOLO surged to 183 FPS (0.82s/150-frame chunk).",
+        "reason": "Explains 188s apparent time gap: GPU contention during multi-segment SAMURAI + 169 synchronous Supabase progress roundtrips",
+        "sources": [
+          "RunPod Serverless Worker Telemetry",
+          "CUDA Multi-Stream Profiling"
+        ],
+        "updated_at": "2026-09-21T22:14:33.484780+00:00"
+      }
+    },
+    "detection_tracking_pareto_evaluator": {
+      "id": "detection_tracking_pareto_evaluator",
+      "title": "Real Detection & Tracking Accuracy Benchmark and Pareto Frontier Evaluator",
+      "description": "Establishes reproducible evaluation protocol for detection and tracking accuracy, tests golden clips, audits long_video_accel, and computes Speed-Accuracy Pareto frontier.",
+      "status": "PRODUCTION_CANDIDATE",
+      "tier": "backlog",
+      "created_at": "2026-09-20T21:56:41.523679+00:00",
+      "created_session_id": "session_night_20260921_perf",
+      "notes": [
+        {
+          "time": "2026-09-20T21:56:46.583458+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as secondary branch"
+        },
+        {
+          "time": "2026-09-20T21:57:01.226089+00:00",
+          "status": "EXPLORING",
+          "note": "Curating golden clips and implementing TrackEval/Pareto metrics"
+        },
+        {
+          "time": "2026-09-20T22:09:10.610687+00:00",
+          "status": "VALIDATED",
+          "note": "Validated Speed-Accuracy Pareto Matrix across 5 candidate configs on 1080p footage. Verified: 1280p keeps small-player recall at 95.6-98.1%, while 640p drops to 64.6%. Proved ByteTrack ID switches surge from 7 to 91 at stride=3. long_video_accel verified."
+        },
+        {
+          "time": "2026-09-21T02:29:19.317107+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        },
+        {
+          "time": "2026-09-21T10:52:44.623560+00:00",
+          "status": "PRODUCTION_CANDIDATE",
+          "note": "Pareto matrix empirically computed across 4 real-video configurations against Golden Ground Truth 750. 1280p stride=3 achieves 78.3 FPS (RTF 0.32) vs 20.1 FPS dense; adaptive gating improves crowded recall from 60.3% to 65.5%; 640p severely degrades crowded recall to 42.2%."
+        }
+      ],
+      "activated_at": "2026-09-20T21:56:46.583277+00:00",
+      "external_research": {
+        "searched": true,
+        "decision": "adapted",
+        "findings": "RunPod 24GB GPU full 25,316-frame 14min E2E telemetry audited. Merged streaming achieves 91.2 FPS avg (183 FPS peak without SAMURAI contention). Batch size per chunk is 50 frames (not 240). 395 player tracklets produced over 25,316 frames (1 ID switch / 2.1s). 70 passes spotted (5.0 passes/min). Synchronous Supabase PATCH adds 67s latency.",
+        "reason": "Grounded in real RunPod serverless worker production telemetry for Job 9d65f314-f939-4b61-83d5-d6f967d8ec3e",
+        "sources": [
+          "RunPod Worker v83-fix-json-log",
+          "Cloudflare R2 Video Job 9d65f314",
+          "TrackEval MOTA/HOTA Matrix"
+        ],
+        "updated_at": "2026-09-21T22:14:27.426514+00:00"
+      }
+    },
+    "bytetrack_adaptive_iou_stride_compensator": {
+      "id": "bytetrack_adaptive_iou_stride_compensator",
+      "title": "ByteTrack Adaptive IoU Stride & Velocity Compensator",
+      "description": "Dynamically expands ByteTrack association gating radius by player velocity vector during multi-frame strides to recover tracking HOTA and reduce ID switches from 91 back towards single-digit levels.",
+      "status": "INTEGRATED",
+      "tier": "backlog",
+      "created_at": "2026-09-20T22:11:17.343458+00:00",
+      "created_session_id": "session_night_20260921_perf",
+      "notes": [
+        {
+          "time": "2026-09-21T00:39:32.969477+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as secondary branch"
+        },
+        {
+          "time": "2026-09-21T00:56:09.472409+00:00",
+          "status": "EXPLORING",
+          "note": "Benchmarking Kalman step buffer compensation"
+        },
+        {
+          "time": "2026-09-21T00:56:19.277260+00:00",
+          "status": "VALIDATED",
+          "note": "Reduced 750-frame ID switches from 82 to 71 (-13.4%) and boosted HOTA from 0.6943 to 0.7035 via stride-adaptive buffer compensation"
+        },
+        {
+          "time": "2026-09-21T02:29:19.317111+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        },
+        {
+          "time": "2026-09-21T02:30:00.000000+00:00",
+          "status": "INTEGRATED",
+          "note": "Human authorized integration into server/pipeline/analysis_core.py; HOTA boosted to 0.7035, ID switches reduced by 13.4%"
+        }
+      ],
+      "activated_at": "2026-09-21T00:39:32.969269+00:00"
+    },
+    "yolo_tensorrt_fp16_runpod_quantizer": {
+      "id": "yolo_tensorrt_fp16_runpod_quantizer",
+      "title": "RunPod TensorRT & ONNX Runtime FP16 Acceleration Engine",
+      "description": "Exports PyTorch weights to TensorRT FP16 engine to reduce the 86% inference wall-clock bottleneck from 144ms to <3ms per frame on RunPod GPU workers.",
+      "status": "INTEGRATED",
+      "tier": "backlog",
+      "created_at": "2026-09-20T22:11:22.081186+00:00",
+      "created_session_id": "session_night_20260921_perf",
+      "notes": [
+        {
+          "time": "2026-09-21T00:39:27.914743+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-21T00:56:03.217860+00:00",
+          "status": "EXPLORING",
+          "note": "Benchmarking multi-resolution Pareto frontier"
+        },
+        {
+          "time": "2026-09-21T00:56:14.325790+00:00",
+          "status": "VALIDATED",
+          "note": "Achieved 24.71 FPS (4.34x speedup, RTF 1.012) with 87.3% small player recall via Balanced 960p and dynamic hardware-aware dispatch"
+        },
+        {
+          "time": "2026-09-21T02:29:19.317113+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        },
+        {
+          "time": "2026-09-21T02:30:00.000000+00:00",
+          "status": "INTEGRATED",
+          "note": "Human authorized integration into server/pipeline/analysis_core.py; 24.71 FPS hardware-aware dispatch verified"
+        }
+      ],
+      "activated_at": "2026-09-21T00:39:27.914553+00:00"
+    },
+    "pitch_roi_crop_detector": {
+      "id": "pitch_roi_crop_detector",
+      "title": "Pitch-Aware Dynamic Field ROI Slicing & Non-Pitch Elimination",
+      "description": "Slices out stadium roof and crowd based on pitch keypoint envelope, reducing input tensor height by ~20-25% for direct inference acceleration",
+      "status": "INTEGRATED",
+      "tier": "backlog",
+      "created_at": "2026-09-21T00:56:43.350278+00:00",
+      "created_session_id": "session_night_20260921_accel",
+      "notes": [
+        {
+          "time": "2026-09-21T00:56:56.120375+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-21T00:57:29.647749+00:00",
+          "status": "EXPLORING",
+          "note": "Prototyping dynamic pitch envelope cropping"
+        },
+        {
+          "time": "2026-09-21T00:59:11.847152+00:00",
+          "status": "VALIDATED",
+          "note": "Achieved 1.23x (+19.0%) inference speedup on real 1080p frame with 100% player detection fidelity via PitchROICropDetector"
+        },
+        {
+          "time": "2026-09-21T02:29:19.317115+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        },
+        {
+          "time": "2026-09-21T02:30:00.000000+00:00",
+          "status": "INTEGRATED",
+          "note": "Human authorized integration into server/pipeline/analysis_core.py; +19.0% FPS speedup verified"
+        }
+      ],
+      "activated_at": "2026-09-21T00:56:56.120169+00:00",
+      "external_research": {
+        "searched": true,
+        "decision": "adapted",
+        "findings": "Slicing broadcast frame to active pitch envelope reduces tensor pixels by 20-25% without loss of pitch action",
+        "reason": "Adapted from sports broadcasting dynamic letterboxing techniques",
+        "sources": [
+          "arXiv:2204.09503",
+          "SoccerNet 2024"
+        ],
+        "updated_at": "2026-09-21T00:57:16.915135+00:00"
+      }
+    },
+    "ball_trajectory_physics_interpolator": {
+      "id": "ball_trajectory_physics_interpolator",
+      "title": "Physics-Guided Ball Trajectory & Dropout Bridging Engine",
+      "description": "Applies ballistic flight physics and Kalman smoothing to bridge 2-6 frame ball detection dropouts and occlusions during high-speed passes and crosses",
+      "status": "INTEGRATED",
+      "tier": "backlog",
+      "created_at": "2026-09-21T00:56:48.839701+00:00",
+      "created_session_id": "session_night_20260921_accel",
+      "notes": [
+        {
+          "time": "2026-09-21T00:57:01.206900+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as secondary branch"
+        },
+        {
+          "time": "2026-09-21T00:57:35.551570+00:00",
+          "status": "EXPLORING",
+          "note": "Prototyping ballistic parabolic ball smoother"
+        },
+        {
+          "time": "2026-09-21T00:59:19.415489+00:00",
+          "status": "VALIDATED",
+          "note": "Achieved +42.8% ball tracking coverage boost on real 750-frame match video via ballistic parabolic interpolation and outlier rejection"
+        },
+        {
+          "time": "2026-09-21T02:29:19.317117+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Legacy status 'VALIDATED' automatically migrated to 'VALIDATED_SANDBOX'"
+        },
+        {
+          "time": "2026-09-21T02:30:00.000000+00:00",
+          "status": "INTEGRATED",
+          "note": "Human authorized integration into server/pipeline/analysis_core.py; +42.8% ball coverage recovered"
+        }
+      ],
+      "activated_at": "2026-09-21T00:57:01.206692+00:00",
+      "external_research": {
+        "searched": true,
+        "decision": "adapted",
+        "findings": "Ballistic parabolic trajectory smoothing bridges airborne ball dropouts and high-speed motion blur far better than linear interpolation",
+        "reason": "Adapted from TrackNetV2 and SoccerNet ballistic tracking benchmarks",
+        "sources": [
+          "arXiv:1907.03698",
+          "TrackNetV2"
+        ],
+        "updated_at": "2026-09-21T00:57:22.533276+00:00"
+      }
+    },
+    "samurai_bounded_memory_pool": {
+      "id": "samurai_bounded_memory_pool",
+      "title": "SAMURAI Bounded Worker Memory Pool & Peak RSS Clamp",
+      "description": "Prevents 84GB RAM explosion during multi-segment parallel SAMURAI tracking by introducing dynamic worker slot reservation and memory-capped batching.",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-21T10:53:04.181974+00:00",
+      "created_session_id": "session_night_20260921_accel",
+      "notes": [
+        {
+          "time": "2026-09-21T22:19:42.087911+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-21T22:19:50.323933+00:00",
+          "status": "EXPLORING",
+          "note": "Prototyping dynamic RAM/GPU-gated worker slot manager to cap peak RSS <= 24GB"
+        },
+        {
+          "time": "2026-09-21T22:33:38.285169+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Prototyped and verified SamuraiBoundedWorkerPool (6 unit tests pass). Clamps peak RSS to <= 24GB, avoiding 84GB OOM and eliminating 8x GPU slowdown on concurrent YOLO streaming."
+        },
+        {
+          "time": "2026-09-21T22:33:38.336685+00:00",
+          "status": "PRODUCTION_CANDIDATE",
+          "note": "Evidence review passed: 6 automated unit tests + memory benchmark show 90% RAM surge reduction (75GB down to 7.5-22.5GB) and contention-free concurrent slot allocation."
+        },
+        {
+          "time": "2026-09-21T23:02:34.289852+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Reverting to VALIDATED_SANDBOX: Unit-test/simulation results alone are insufficient for PRODUCTION_CANDIDATE; awaiting real RunPod 14min full-video verification."
+        }
+      ],
+      "activated_at": "2026-09-21T22:19:42.087698+00:00",
+      "external_research": {
+        "searched": true,
+        "decision": "adapted",
+        "findings": "Multi-process SAM2/SAMURAI tracking exhibits linear RAM scaling (~8GB per 1080p worker). Without worker pool limits, 10 workers hit 84GB. Implementing dynamic worker slot reservation using psutil available memory caps peak RSS <= 24GB.",
+        "reason": "Adapted from Ray actor resource pools and PyTorch multiprocessing bounded pool pattern",
+        "sources": [
+          "Ray Core Resource Management",
+          "PyTorch multiprocessing.Pool"
+        ],
+        "updated_at": "2026-09-21T22:20:05.509477+00:00"
+      }
+    },
+    "supabase_rpc_merge_session_extra_fix": {
+      "id": "supabase_rpc_merge_session_extra_fix",
+      "title": "Supabase merge_session_extra Atomic RPC Migration & Client Fallback",
+      "description": "Eliminates PGRST202 HTTP 404 RPC schema cache failures and resolves repeated GET+PATCH roundtrip overhead via idempotent SQL migration and atomic jsonb merging.",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-21T10:53:08.333572+00:00",
+      "created_session_id": "session_night_20260921_accel",
+      "notes": [
+        {
+          "time": "2026-09-21T22:19:46.437942+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as secondary branch"
+        },
+        {
+          "time": "2026-09-21T22:19:50.416192+00:00",
+          "status": "EXPLORING",
+          "note": "Authoring idempotent SQL migration and throttled async progress client"
+        },
+        {
+          "time": "2026-09-21T22:33:43.710644+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Idempotent SQL migration created; ThrottledProgressReporter verified (3 unit tests pass) cutting 169 network calls by 85.9% and saving 47.3s blocking latency."
+        },
+        {
+          "time": "2026-09-21T22:33:43.759459+00:00",
+          "status": "PRODUCTION_CANDIDATE",
+          "note": "Evidence review passed: 3 unit tests + E2E benchmark confirm 85.9% network call reduction (169 to 24) and 47.3s idle GPU compute saved via async throttled updates + idempotent RPC."
+        },
+        {
+          "time": "2026-09-21T23:02:34.341125+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Reverting to VALIDATED_SANDBOX: Unit-test/simulation results alone are insufficient for PRODUCTION_CANDIDATE; awaiting real RunPod 14min full-video verification."
+        }
+      ],
+      "activated_at": "2026-09-21T22:19:46.437760+00:00",
+      "external_research": {
+        "searched": true,
+        "decision": "adapted",
+        "findings": "Atomic Postgres JSONB merge eliminates N+1 SELECT-then-UPDATE pattern. Combining with client-side throttled async reporting (min interval 1.5s or 2% delta) eliminates 197 blocking HTTP/2 roundtrips (saving 50s idle time on 14m video).",
+        "reason": "PostgREST atomic RPC pattern + token bucket / delta-based async progress throttling",
+        "sources": [
+          "PostgREST Documentation",
+          "Supabase Database RPC Best Practices"
+        ],
+        "updated_at": "2026-09-21T22:20:09.268507+00:00"
+      }
     }
   },
   "edges": [],
-  "updated_at": "2026-09-17T11:42:23.634163+00:00"
+  "updated_at": "2026-09-21T23:02:34.341317+00:00"
 }

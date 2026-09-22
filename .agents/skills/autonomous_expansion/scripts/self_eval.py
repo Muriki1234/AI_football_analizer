@@ -194,8 +194,10 @@ def audit() -> Dict[str, Any]:
 
     graph = load_json(GRAPH_FILE, {"nodes": {}})
     nodes = graph.get("nodes", {}) if isinstance(graph, dict) else {}
-    total_ops = len(nodes)
-    validated_ops = sum(1 for node in nodes.values() if node.get("status") == "VALIDATED")
+    validated_ops = sum(
+        1 for node in nodes.values()
+        if node.get("status") in {"VALIDATED_SANDBOX", "VALIDATED", "PRODUCTION_CANDIDATE", "INTEGRATED"}
+    )
     by_status: Dict[str, int] = {}
     for node in nodes.values():
         status = node.get("status", "PARKED")
@@ -254,12 +256,12 @@ def audit() -> Dict[str, Any]:
     
     session_validated_ops = 0
     for node in nodes.values():
-        if node.get("status") == "VALIDATED":
+        if node.get("status") in {"VALIDATED_SANDBOX", "VALIDATED", "PRODUCTION_CANDIDATE", "INTEGRATED"}:
             if node.get("created_session_id") == curr_session_id:
                 session_validated_ops += 1
             else:
                 for note in node.get("notes", []):
-                    if note.get("status") == "VALIDATED" and curr_session_id in str(note.get("note", "")):
+                    if note.get("status") in {"VALIDATED_SANDBOX", "VALIDATED", "PRODUCTION_CANDIDATE", "INTEGRATED"} and curr_session_id in str(note.get("note", "")):
                         session_validated_ops += 1
                         break
 

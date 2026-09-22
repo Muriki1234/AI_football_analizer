@@ -1,0 +1,92 @@
+[
+  {
+    "tracker_id": "tracker_a_standard_bytetrack",
+    "name": "Tracker A: Standard ByteTrack (Default 0.8 match)",
+    "parameters": {
+      "id": "tracker_a_standard_bytetrack",
+      "name": "Tracker A: Standard ByteTrack (Default 0.8 match)",
+      "track_thresh": 0.45,
+      "match_thresh": 0.8,
+      "buffer": 30
+    },
+    "runtime_ms": 180.06,
+    "tracking_metrics": {
+      "HOTA": 0.6466,
+      "DetA": 0.8411,
+      "AssA": 0.497,
+      "IDF1": 0.6123,
+      "IDP": 0.6095,
+      "IDR": 0.6151,
+      "MOTA": 0.8163,
+      "IDSW": 63,
+      "Frag": 87,
+      "mean_track_survival_frames": 99.6,
+      "mean_track_survival_seconds": 3.98,
+      "IDTP": 3764,
+      "IDFP": 2412,
+      "IDFN": 2355,
+      "total_gt_trajectories": 51,
+      "total_pred_trajectories": 62
+    }
+  },
+  {
+    "tracker_id": "tracker_b_stride_adapted_bytetrack",
+    "name": "Tracker B: Stride-Adapted ByteTrack (0.45 match)",
+    "parameters": {
+      "id": "tracker_b_stride_adapted_bytetrack",
+      "name": "Tracker B: Stride-Adapted ByteTrack (0.45 match)",
+      "track_thresh": 0.35,
+      "match_thresh": 0.45,
+      "buffer": 30
+    },
+    "runtime_ms": 320.99,
+    "tracking_metrics": {
+      "HOTA": 0.2451,
+      "DetA": 0.4087,
+      "AssA": 0.147,
+      "IDF1": 0.2091,
+      "IDP": 0.1976,
+      "IDR": 0.2221,
+      "MOTA": 0.015,
+      "IDSW": 572,
+      "Frag": 483,
+      "mean_track_survival_frames": 15.2,
+      "mean_track_survival_seconds": 0.61,
+      "IDTP": 1359,
+      "IDFP": 5519,
+      "IDFN": 4760,
+      "total_gt_trajectories": 51,
+      "total_pred_trajectories": 452
+    }
+  },
+  {
+    "tracker_id": "tracker_c_low_conf_recovery_bytetrack",
+    "name": "Tracker C: Low-Conf Recovery ByteTrack (0.20 init, 0.45 match)",
+    "parameters": {
+      "id": "tracker_c_low_conf_recovery_bytetrack",
+      "name": "Tracker C: Low-Conf Recovery ByteTrack (0.20 init, 0.45 match)",
+      "track_thresh": 0.2,
+      "match_thresh": 0.45,
+      "buffer": 60
+    },
+    "runtime_ms": 426.74,
+    "tracking_metrics": {
+      "HOTA": 0.2286,
+      "DetA": 0.3823,
+      "AssA": 0.1367,
+      "IDF1": 0.1972,
+      "IDP": 0.1774,
+      "IDR": 0.2219,
+      "MOTA": -0.1013,
+      "IDSW": 584,
+      "Frag": 481,
+      "mean_track_survival_frames": 17.0,
+      "mean_track_survival_seconds": 0.68,
+      "IDTP": 1358,
+      "IDFP": 6298,
+      "IDFN": 4761,
+      "total_gt_trajectories": 51,
+      "total_pred_trajectories": 450
+    }
+  }
+]

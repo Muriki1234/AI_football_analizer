@@ -1,11 +1,17 @@
 {
-  "session_id": "session_night_20260917",
-  "phase": "idle",
+  "session_id": "session_night_20260922_runpod_e2e",
+  "phase": "rediscovery",
   "mainline": null,
   "secondary": null,
-  "current_action": "overnight_rd_completed_all_prototypes_validated",
-  "last_completed_action": "authoring_pitch_control_algorithm",
+  "current_action": "awaiting_real_runpod_full_video_verification",
+  "last_completed_action": "prototypes_held_at_validated_sandbox",
   "blocked_reason": null,
-  "next_action": "morning_intelligence_report_generated",
-  "updated_at": "2026-09-17T11:42:40.790111+00:00"
+  "next_action": "execute_runpod_real_verification_protocol",
+  "updated_at": "2026-09-21T23:04:00.000000+00:00",
+  "overnight_mode": true,
+  "started_at": "2026-09-21T22:11:01.091358+00:00",
+  "max_runtime_minutes": 240,
+  "consecutive_no_progress_count": 0,
+  "no_progress_limit": 3,
+  "budget_deadline": "2026-09-22T02:11:01.091358+00:00"
 }

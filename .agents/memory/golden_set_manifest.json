@@ -1,0 +1,111 @@
+{
+  "dataset_name": "AI_Football_Broadcast_Golden_Evaluation_Set",
+  "version": "1.0.0",
+  "video_source": {
+    "path": "backend/uploads/fe7f8619b7ea_test_17.mp4",
+    "sha256": "ea9b14c0ec21b7163a05b0490c54efa043d62791e8c2af3e34cb3b14ac732e9e",
+    "resolution": "1920x1080",
+    "fps": 25.0,
+    "total_frames": 750,
+    "total_duration_seconds": 30.0
+  },
+  "evaluation_protocol": {
+    "iou_threshold": 0.5,
+    "mAP_iou_range": "0.50:0.05:0.95",
+    "small_player_height_threshold_px": 45,
+    "crowded_player_iou_threshold": 0.25,
+    "tracking_standard": "TrackEval (HOTA, IDF1, AssA, DetA, IDSW, Frag)"
+  },
+  "clips": [
+    {
+      "clip_id": "clip_1_tactical_wide",
+      "name": "Clip 1: Tactical Wide Broadcast",
+      "start_frame": 0,
+      "end_frame": 150,
+      "duration_sec": 6.0,
+      "camera_type": "tactical_broadcast_main",
+      "primary_challenges": [
+        "tactical_formation",
+        "wide_midfield",
+        "moderate_speed"
+      ],
+      "target_distribution": {
+        "players": 18,
+        "referees": 1,
+        "ball": 1
+      }
+    },
+    {
+      "clip_id": "clip_2_camera_pan",
+      "name": "Clip 2: Fast Camera Transition / Pan",
+      "start_frame": 150,
+      "end_frame": 300,
+      "duration_sec": 6.0,
+      "camera_type": "rapid_pan_transition",
+      "primary_challenges": [
+        "camera_pan_blur",
+        "boundary_entry_exit",
+        "high_acceleration"
+      ],
+      "target_distribution": {
+        "players": 19,
+        "referees": 1,
+        "ball": 1
+      }
+    },
+    {
+      "clip_id": "clip_3_box_buildup",
+      "name": "Clip 3: Attacking Box Buildup",
+      "start_frame": 300,
+      "end_frame": 450,
+      "duration_sec": 6.0,
+      "camera_type": "offensive_half_zoom",
+      "primary_challenges": [
+        "defensive_line_penetration",
+        "player_overlap",
+        "small_distant_wingers"
+      ],
+      "target_distribution": {
+        "players": 21,
+        "referees": 2,
+        "ball": 1
+      }
+    },
+    {
+      "clip_id": "clip_4_crowded_box",
+      "name": "Clip 4: Crowded Goalmouth Scramble",
+      "start_frame": 450,
+      "end_frame": 600,
+      "duration_sec": 6.0,
+      "camera_type": "penalty_box_congested",
+      "primary_challenges": [
+        "extreme_player_occlusion",
+        "overlapping_bboxes",
+        "goalkeeper_crowd"
+      ],
+      "target_distribution": {
+        "players": 20,
+        "referees": 1,
+        "ball": 1
+      }
+    },
+    {
+      "clip_id": "clip_5_counter_transition",
+      "name": "Clip 5: Loose Ball & Counter Transition",
+      "start_frame": 600,
+      "end_frame": 750,
+      "duration_sec": 6.0,
+      "camera_type": "counter_press_fastbreak",
+      "primary_challenges": [
+        "turnover_reaction",
+        "sprint_bursts",
+        "rapid_directional_change"
+      ],
+      "target_distribution": {
+        "players": 20,
+        "referees": 2,
+        "ball": 1
+      }
+    }
+  ]
+}

@@ -47,7 +47,7 @@ class SessionManager:
         try:
             from .db_debouncer import DebouncedStatusUpdater
             self._debouncer = DebouncedStatusUpdater(
-                self._raw_update_status, min_interval_sec=1.2, min_progress_delta=5
+                self._raw_update_status, min_interval_sec=2.0, min_progress_delta=2
             )
         except Exception:
             self._debouncer = None

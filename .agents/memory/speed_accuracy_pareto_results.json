@@ -1,0 +1,640 @@
+{
+  "metadata": {
+    "session_id": "session_night_20260921_perf",
+    "video_path": "backend/uploads/fe7f8619b7ea_test_17.mp4",
+    "sample_frames": 300,
+    "timestamp": "2026-09-21T00:55:45Z"
+  },
+  "configs": [
+    {
+      "config_id": "config_1_dense_baseline",
+      "name": "Config 1: Dense Baseline (1280x1280, Stride=1)",
+      "description": "Exhaustive detection on every frame at native 1280px resolution",
+      "imgsz": 1280,
+      "speed": {
+        "effective_e2e_fps": 5.69,
+        "speedup_vs_baseline": "1.0x",
+        "realtime_factor_rtf": 4.395,
+        "total_wall_clock_s": 52.736,
+        "detected_frames": 300,
+        "detection_ratio_pct": 100.0,
+        "primary_bottleneck": {
+          "stage": "model_inference",
+          "percentage": 86.04,
+          "avg_ms_per_frame": 151.25
+        },
+        "stage_breakdown": {
+          "video_decode": {
+            "total_ms": 496.17,
+            "avg_ms_per_frame": 1.65,
+            "percentage": 0.94
+          },
+          "resize_preprocessing": {
+            "total_ms": 2339.37,
+            "avg_ms_per_frame": 7.8,
+            "percentage": 4.44
+          },
+          "model_inference": {
+            "total_ms": 45375.66,
+            "avg_ms_per_frame": 151.25,
+            "percentage": 86.04
+          },
+          "postprocessing_nms": {
+            "total_ms": 351.65,
+            "avg_ms_per_frame": 1.17,
+            "percentage": 0.67
+          },
+          "tracking_association": {
+            "total_ms": 827.68,
+            "avg_ms_per_frame": 2.76,
+            "percentage": 1.57
+          },
+          "pitch_camera_processing": {
+            "total_ms": 3247.36,
+            "avg_ms_per_frame": 10.82,
+            "percentage": 6.16
+          },
+          "track_interpolation": {
+            "total_ms": 8.85,
+            "avg_ms_per_frame": 0.03,
+            "percentage": 0.02
+          },
+          "sync_and_overhead": {
+            "total_ms": 89.59,
+            "avg_ms_per_frame": 0.3,
+            "percentage": 0.17
+          }
+        }
+      },
+      "detection_accuracy": {
+        "precision": 0.9997,
+        "recall": 0.9737,
+        "f1_score": 0.9865,
+        "small_player_recall": 0.981,
+        "crowded_player_recall": 0.8725,
+        "recall_loss_vs_baseline_pct": 2.63
+      },
+      "tracking_accuracy": {
+        "HOTA": 0.9341,
+        "DetA": 0.9734,
+        "AssA": 0.8965,
+        "IDF1": 0.937,
+        "MOTA": 0.9722,
+        "IDSW": 7,
+        "Frag": 19,
+        "HOTA_loss_vs_baseline_pct": 6.59
+      },
+      "golden_clips": [
+        {
+          "clip_id": "clip_1_tactical_wide",
+          "name": "Clip 1: Tactical Wide Broadcast",
+          "frames": "0..150",
+          "precision": 0.9993,
+          "recall": 0.9594,
+          "small_recall": 0.0,
+          "crowded_recall": 0.8362,
+          "HOTA": 0.9093,
+          "IDF1": 0.9063,
+          "IDSW": 5
+        },
+        {
+          "clip_id": "clip_2_camera_pan",
+          "name": "Clip 2: Fast Camera Transition / Pan",
+          "frames": "150..300",
+          "precision": 1.0,
+          "recall": 0.9875,
+          "small_recall": 0.981,
+          "crowded_recall": 0.9116,
+          "HOTA": 0.9776,
+          "IDF1": 0.9733,
+          "IDSW": 1
+        }
+      ]
+    },
+    {
+      "config_id": "config_2_prod_default",
+      "name": "Config 2: Production Default (1280x1280, Stride=3)",
+      "description": "Standard production configuration with fixed 3-frame detection stride",
+      "imgsz": 1280,
+      "speed": {
+        "effective_e2e_fps": 17.1,
+        "speedup_vs_baseline": "3.01x",
+        "realtime_factor_rtf": 1.462,
+        "total_wall_clock_s": 17.548,
+        "detected_frames": 100,
+        "detection_ratio_pct": 33.3,
+        "primary_bottleneck": {
+          "stage": "model_inference",
+          "percentage": 75.19,
+          "avg_ms_per_frame": 43.98
+        },
+        "stage_breakdown": {
+          "video_decode": {
+            "total_ms": 445.6,
+            "avg_ms_per_frame": 1.49,
+            "percentage": 2.54
+          },
+          "resize_preprocessing": {
+            "total_ms": 684.81,
+            "avg_ms_per_frame": 2.28,
+            "percentage": 3.9
+          },
+          "model_inference": {
+            "total_ms": 13195.1,
+            "avg_ms_per_frame": 43.98,
+            "percentage": 75.19
+          },
+          "postprocessing_nms": {
+            "total_ms": 104.0,
+            "avg_ms_per_frame": 0.35,
+            "percentage": 0.59
+          },
+          "tracking_association": {
+            "total_ms": 275.57,
+            "avg_ms_per_frame": 0.92,
+            "percentage": 1.57
+          },
+          "pitch_camera_processing": {
+            "total_ms": 2780.07,
+            "avg_ms_per_frame": 9.27,
+            "percentage": 15.84
+          },
+          "track_interpolation": {
+            "total_ms": 9.82,
+            "avg_ms_per_frame": 0.03,
+            "percentage": 0.06
+          },
+          "sync_and_overhead": {
+            "total_ms": 53.51,
+            "avg_ms_per_frame": 0.18,
+            "percentage": 0.3
+          }
+        }
+      },
+      "detection_accuracy": {
+        "precision": 0.8847,
+        "recall": 0.8776,
+        "f1_score": 0.8811,
+        "small_player_recall": 0.9241,
+        "crowded_player_recall": 0.7383,
+        "recall_loss_vs_baseline_pct": 12.24
+      },
+      "tracking_accuracy": {
+        "HOTA": 0.6075,
+        "DetA": 0.7875,
+        "AssA": 0.4686,
+        "IDF1": 0.5646,
+        "MOTA": 0.7483,
+        "IDSW": 91,
+        "Frag": 107,
+        "HOTA_loss_vs_baseline_pct": 39.25
+      },
+      "golden_clips": [
+        {
+          "clip_id": "clip_1_tactical_wide",
+          "name": "Clip 1: Tactical Wide Broadcast",
+          "frames": "0..150",
+          "precision": 0.8791,
+          "recall": 0.8487,
+          "small_recall": 0.0,
+          "crowded_recall": 0.7672,
+          "HOTA": 0.7229,
+          "IDF1": 0.7753,
+          "IDSW": 41
+        },
+        {
+          "clip_id": "clip_2_camera_pan",
+          "name": "Clip 2: Fast Camera Transition / Pan",
+          "frames": "150..300",
+          "precision": 0.8898,
+          "recall": 0.9055,
+          "small_recall": 0.9241,
+          "crowded_recall": 0.707,
+          "HOTA": 0.6888,
+          "IDF1": 0.639,
+          "IDSW": 41
+        }
+      ]
+    },
+    {
+      "config_id": "config_3_fast_res",
+      "name": "Config 3: Fast Resolution (640x640, Stride=3)",
+      "description": "Downscaled 640px model resolution with fixed 3-frame stride",
+      "imgsz": 640,
+      "speed": {
+        "effective_e2e_fps": 43.93,
+        "speedup_vs_baseline": "7.72x",
+        "realtime_factor_rtf": 0.569,
+        "total_wall_clock_s": 6.829,
+        "detected_frames": 100,
+        "detection_ratio_pct": 33.3,
+        "primary_bottleneck": {
+          "stage": "model_inference",
+          "percentage": 51.42,
+          "avg_ms_per_frame": 11.7
+        },
+        "stage_breakdown": {
+          "video_decode": {
+            "total_ms": 378.34,
+            "avg_ms_per_frame": 1.26,
+            "percentage": 5.54
+          },
+          "resize_preprocessing": {
+            "total_ms": 179.74,
+            "avg_ms_per_frame": 0.6,
+            "percentage": 2.63
+          },
+          "model_inference": {
+            "total_ms": 3511.36,
+            "avg_ms_per_frame": 11.7,
+            "percentage": 51.42
+          },
+          "postprocessing_nms": {
+            "total_ms": 45.63,
+            "avg_ms_per_frame": 0.15,
+            "percentage": 0.67
+          },
+          "tracking_association": {
+            "total_ms": 201.31,
+            "avg_ms_per_frame": 0.67,
+            "percentage": 2.95
+          },
+          "pitch_camera_processing": {
+            "total_ms": 2459.58,
+            "avg_ms_per_frame": 8.2,
+            "percentage": 36.02
+          },
+          "track_interpolation": {
+            "total_ms": 8.07,
+            "avg_ms_per_frame": 0.03,
+            "percentage": 0.12
+          },
+          "sync_and_overhead": {
+            "total_ms": 45.04,
+            "avg_ms_per_frame": 0.15,
+            "percentage": 0.66
+          }
+        }
+      },
+      "detection_accuracy": {
+        "precision": 0.8095,
+        "recall": 0.7877,
+        "f1_score": 0.7985,
+        "small_player_recall": 0.6456,
+        "crowded_player_recall": 0.5347,
+        "recall_loss_vs_baseline_pct": 21.23
+      },
+      "tracking_accuracy": {
+        "HOTA": 0.4885,
+        "DetA": 0.6646,
+        "AssA": 0.3591,
+        "IDF1": 0.4728,
+        "MOTA": 0.5851,
+        "IDSW": 106,
+        "Frag": 127,
+        "HOTA_loss_vs_baseline_pct": 51.15
+      },
+      "golden_clips": [
+        {
+          "clip_id": "clip_1_tactical_wide",
+          "name": "Clip 1: Tactical Wide Broadcast",
+          "frames": "0..150",
+          "precision": 0.8426,
+          "recall": 0.7762,
+          "small_recall": 0.0,
+          "crowded_recall": 0.6207,
+          "HOTA": 0.61,
+          "IDF1": 0.6841,
+          "IDSW": 38
+        },
+        {
+          "clip_id": "clip_2_camera_pan",
+          "name": "Clip 2: Fast Camera Transition / Pan",
+          "frames": "150..300",
+          "precision": 0.7808,
+          "recall": 0.7988,
+          "small_recall": 0.6456,
+          "crowded_recall": 0.4419,
+          "HOTA": 0.5656,
+          "IDF1": 0.5537,
+          "IDSW": 59
+        }
+      ]
+    },
+    {
+      "config_id": "config_4_long_video_accel",
+      "name": "Config 4: Long-Video Accel (1280x1280, Adaptive + Gater + Prefetch)",
+      "description": "long_video_accel engine with dynamic motion stride (2-5), tactical gating, and prefetching",
+      "imgsz": 1280,
+      "speed": {
+        "effective_e2e_fps": 13.48,
+        "speedup_vs_baseline": "2.37x",
+        "realtime_factor_rtf": 1.855,
+        "total_wall_clock_s": 22.259,
+        "detected_frames": 118,
+        "detection_ratio_pct": 39.3,
+        "primary_bottleneck": {
+          "stage": "model_inference",
+          "percentage": 75.66,
+          "avg_ms_per_frame": 56.14
+        },
+        "stage_breakdown": {
+          "video_decode": {
+            "total_ms": 27.28,
+            "avg_ms_per_frame": 0.09,
+            "percentage": 0.12
+          },
+          "resize_preprocessing": {
+            "total_ms": 892.48,
+            "avg_ms_per_frame": 2.97,
+            "percentage": 4.01
+          },
+          "model_inference": {
+            "total_ms": 16840.76,
+            "avg_ms_per_frame": 56.14,
+            "percentage": 75.66
+          },
+          "postprocessing_nms": {
+            "total_ms": 129.08,
+            "avg_ms_per_frame": 0.43,
+            "percentage": 0.58
+          },
+          "tracking_association": {
+            "total_ms": 339.84,
+            "avg_ms_per_frame": 1.13,
+            "percentage": 1.53
+          },
+          "pitch_camera_processing": {
+            "total_ms": 2875.07,
+            "avg_ms_per_frame": 9.58,
+            "percentage": 12.92
+          },
+          "track_interpolation": {
+            "total_ms": 15.95,
+            "avg_ms_per_frame": 0.05,
+            "percentage": 0.07
+          },
+          "sync_and_overhead": {
+            "total_ms": 1138.7,
+            "avg_ms_per_frame": 3.8,
+            "percentage": 5.12
+          }
+        }
+      },
+      "detection_accuracy": {
+        "precision": 0.8674,
+        "recall": 0.8982,
+        "f1_score": 0.8825,
+        "small_player_recall": 0.9557,
+        "crowded_player_recall": 0.7852,
+        "recall_loss_vs_baseline_pct": 10.18
+      },
+      "tracking_accuracy": {
+        "HOTA": 0.5901,
+        "DetA": 0.7898,
+        "AssA": 0.4409,
+        "IDF1": 0.5553,
+        "MOTA": 0.7465,
+        "IDSW": 88,
+        "Frag": 77,
+        "HOTA_loss_vs_baseline_pct": 40.99
+      },
+      "golden_clips": [
+        {
+          "clip_id": "clip_1_tactical_wide",
+          "name": "Clip 1: Tactical Wide Broadcast",
+          "frames": "0..150",
+          "precision": 0.8191,
+          "recall": 0.8297,
+          "small_recall": 0.0,
+          "crowded_recall": 0.75,
+          "HOTA": 0.6225,
+          "IDF1": 0.6387,
+          "IDSW": 59
+        },
+        {
+          "clip_id": "clip_2_camera_pan",
+          "name": "Clip 2: Fast Camera Transition / Pan",
+          "frames": "150..300",
+          "precision": 0.9122,
+          "recall": 0.9643,
+          "small_recall": 0.9557,
+          "crowded_recall": 0.8233,
+          "HOTA": 0.7897,
+          "IDF1": 0.7644,
+          "IDSW": 25
+        }
+      ]
+    },
+    {
+      "config_id": "config_5_long_video_accel_fast",
+      "name": "Config 5: Long-Video Accel Fast (640x640, Adaptive + Gater + Prefetch)",
+      "description": "Combined long_video_accel engine with fast 640px resolution",
+      "imgsz": 640,
+      "speed": {
+        "effective_e2e_fps": 35.28,
+        "speedup_vs_baseline": "6.2x",
+        "realtime_factor_rtf": 0.709,
+        "total_wall_clock_s": 8.503,
+        "detected_frames": 118,
+        "detection_ratio_pct": 39.3,
+        "primary_bottleneck": {
+          "stage": "model_inference",
+          "percentage": 50.77,
+          "avg_ms_per_frame": 14.39
+        },
+        "stage_breakdown": {
+          "video_decode": {
+            "total_ms": 27.05,
+            "avg_ms_per_frame": 0.09,
+            "percentage": 0.32
+          },
+          "resize_preprocessing": {
+            "total_ms": 229.98,
+            "avg_ms_per_frame": 0.77,
+            "percentage": 2.7
+          },
+          "model_inference": {
+            "total_ms": 4316.96,
+            "avg_ms_per_frame": 14.39,
+            "percentage": 50.77
+          },
+          "postprocessing_nms": {
+            "total_ms": 55.08,
+            "avg_ms_per_frame": 0.18,
+            "percentage": 0.65
+          },
+          "tracking_association": {
+            "total_ms": 236.18,
+            "avg_ms_per_frame": 0.79,
+            "percentage": 2.78
+          },
+          "pitch_camera_processing": {
+            "total_ms": 2520.77,
+            "avg_ms_per_frame": 8.4,
+            "percentage": 29.65
+          },
+          "track_interpolation": {
+            "total_ms": 11.13,
+            "avg_ms_per_frame": 0.04,
+            "percentage": 0.13
+          },
+          "sync_and_overhead": {
+            "total_ms": 1105.79,
+            "avg_ms_per_frame": 3.69,
+            "percentage": 13.0
+          }
+        }
+      },
+      "detection_accuracy": {
+        "precision": 0.781,
+        "recall": 0.7875,
+        "f1_score": 0.7843,
+        "small_player_recall": 0.7025,
+        "crowded_player_recall": 0.566,
+        "recall_loss_vs_baseline_pct": 21.25
+      },
+      "tracking_accuracy": {
+        "HOTA": 0.4822,
+        "DetA": 0.6451,
+        "AssA": 0.3604,
+        "IDF1": 0.4533,
+        "MOTA": 0.5475,
+        "IDSW": 118,
+        "Frag": 100,
+        "HOTA_loss_vs_baseline_pct": 51.78
+      },
+      "golden_clips": [
+        {
+          "clip_id": "clip_1_tactical_wide",
+          "name": "Clip 1: Tactical Wide Broadcast",
+          "frames": "0..150",
+          "precision": 0.7615,
+          "recall": 0.722,
+          "small_recall": 0.0,
+          "crowded_recall": 0.5733,
+          "HOTA": 0.5214,
+          "IDF1": 0.5394,
+          "IDSW": 55
+        },
+        {
+          "clip_id": "clip_2_camera_pan",
+          "name": "Clip 2: Fast Camera Transition / Pan",
+          "frames": "150..300",
+          "precision": 0.7978,
+          "recall": 0.8509,
+          "small_recall": 0.7025,
+          "crowded_recall": 0.5581,
+          "HOTA": 0.63,
+          "IDF1": 0.5987,
+          "IDSW": 58
+        }
+      ]
+    },
+    {
+      "config_id": "config_6_balanced_tier",
+      "name": "Config 6: Balanced Tier (960x960, Adaptive + Gater + Prefetch)",
+      "description": "Optimized 960px balanced resolution with adaptive stride and prefetching",
+      "imgsz": 960,
+      "speed": {
+        "effective_e2e_fps": 24.71,
+        "speedup_vs_baseline": "4.34x",
+        "realtime_factor_rtf": 1.012,
+        "total_wall_clock_s": 12.141,
+        "detected_frames": 118,
+        "detection_ratio_pct": 39.3,
+        "primary_bottleneck": {
+          "stage": "model_inference",
+          "percentage": 64.37,
+          "avg_ms_per_frame": 26.05
+        },
+        "stage_breakdown": {
+          "video_decode": {
+            "total_ms": 26.6,
+            "avg_ms_per_frame": 0.09,
+            "percentage": 0.22
+          },
+          "resize_preprocessing": {
+            "total_ms": 358.72,
+            "avg_ms_per_frame": 1.2,
+            "percentage": 2.95
+          },
+          "model_inference": {
+            "total_ms": 7815.49,
+            "avg_ms_per_frame": 26.05,
+            "percentage": 64.37
+          },
+          "postprocessing_nms": {
+            "total_ms": 66.84,
+            "avg_ms_per_frame": 0.22,
+            "percentage": 0.55
+          },
+          "tracking_association": {
+            "total_ms": 243.62,
+            "avg_ms_per_frame": 0.81,
+            "percentage": 2.01
+          },
+          "pitch_camera_processing": {
+            "total_ms": 2507.88,
+            "avg_ms_per_frame": 8.36,
+            "percentage": 20.66
+          },
+          "track_interpolation": {
+            "total_ms": 11.61,
+            "avg_ms_per_frame": 0.04,
+            "percentage": 0.1
+          },
+          "sync_and_overhead": {
+            "total_ms": 1110.58,
+            "avg_ms_per_frame": 3.7,
+            "percentage": 9.15
+          }
+        }
+      },
+      "detection_accuracy": {
+        "precision": 0.8377,
+        "recall": 0.8662,
+        "f1_score": 0.8517,
+        "small_player_recall": 0.8734,
+        "crowded_player_recall": 0.7002,
+        "recall_loss_vs_baseline_pct": 13.38
+      },
+      "tracking_accuracy": {
+        "HOTA": 0.573,
+        "DetA": 0.7417,
+        "AssA": 0.4427,
+        "IDF1": 0.5473,
+        "MOTA": 0.6844,
+        "IDSW": 85,
+        "Frag": 87,
+        "HOTA_loss_vs_baseline_pct": 42.7
+      },
+      "golden_clips": [
+        {
+          "clip_id": "clip_1_tactical_wide",
+          "name": "Clip 1: Tactical Wide Broadcast",
+          "frames": "0..150",
+          "precision": 0.7276,
+          "recall": 0.7842,
+          "small_recall": 0.0,
+          "crowded_recall": 0.625,
+          "HOTA": 0.554,
+          "IDF1": 0.5928,
+          "IDSW": 63
+        },
+        {
+          "clip_id": "clip_2_camera_pan",
+          "name": "Clip 2: Fast Camera Transition / Pan",
+          "frames": "150..300",
+          "precision": 0.9533,
+          "recall": 0.9454,
+          "small_recall": 0.8734,
+          "crowded_recall": 0.7814,
+          "HOTA": 0.8167,
+          "IDF1": 0.7854,
+          "IDSW": 18
+        }
+      ]
+    }
+  ]
+}

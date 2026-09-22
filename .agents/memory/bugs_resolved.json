@@ -17,6 +17,275 @@
       "rollback": false,
       "session_id": "session_night_20260917",
       "evidence": "Vitest 单元测试 `changes tool on toolbar button click` 修复前因 4.1GB OOM 崩溃（356s 超时），修复后全套 16 个前端测试 851ms 全绿通过，生产 build 0 错误构建成功"
+    },
+    {
+      "id": "BUG_KINEMATIC_DISTANCE_OVERSUMMING_5X",
+      "bug_id": "BUG_KINEMATIC_DISTANCE_OVERSUMMING_5X",
+      "title": "AccurateSpeedEstimator 5-frame window 累加导致跑动距离膨胀 5 倍与静止光学抖动漂移",
+      "description": "AccurateSpeedEstimator 逐帧将 5 帧窗口跨度位移重复累加至 total_dist，导致 100m 奔跑被计算为 498m（5倍膨胀）；且缺乏静止死区过滤，原地站立的 0.03m 光学检测抖动在 1000 帧内累加出虚假公里级跑动",
+      "root_cause": "逐帧执行 total_dist += measure_distance(cp, otracks[fi-5][tid])，每个微元位移被重复求和 5 次",
+      "files_changed": [
+        "server/pipeline/speed_kinematics_filter.py",
+        "server/pipeline/tasks.py"
+      ],
+      "tests_run": "backend/venv/bin/python -m unittest server/pipeline/test_speed_kinematics_filter.py",
+      "lines_changed": 22,
+      "tests_passed": true,
+      "rollback": false,
+      "session_id": "session_night_20260920",
+      "evidence": "test_02_linear_distance_accuracy_no_oversumming: True=100.0m | Robust=100.0m | Naive=498.0m (5x error); 2.0 km/h 死区将 1000 帧静止抖动漂移压缩至 < 1.0m"
+    },
+    {
+      "id": "BUG_CAMERA_MOTION_MAX_DISPLACEMENT_BLEEDTHROUGH",
+      "bug_id": "BUG_CAMERA_MOTION_MAX_DISPLACEMENT_BLEEDTHROUGH",
+      "title": "CameraMovementEstimator 采用 max(displacement) 导致运动员奔跑被误判为 37px 镜头剧烈晃动",
+      "description": "CameraMovementEstimator 遍历光流点位移时直接取 max_d，导致中圈高速跑动的球员特征点主导全图位移估计，误触发 _PAN_TRIGGER_PX > 15px 导致冗余 YOLO 关键点推理并在 add_adjust_positions_to_tracks 中反向扭曲全场球员坐标",
+      "root_cause": "对前景运动物体缺乏 RANSAC 离群点过滤，错误将前景最快动点当成相机全局刚体运动",
+      "files_changed": [
+        "server/pipeline/camera_motion_ransac.py",
+        "server/pipeline/tasks.py"
+      ],
+      "tests_run": "backend/venv/bin/python -m unittest server/pipeline/test_camera_motion_ransac.py",
+      "lines_changed": 15,
+      "tests_passed": true,
+      "rollback": false,
+      "session_id": "session_night_20260920",
+      "evidence": "test_02_moving_player_outlier_rejection_proof: 80个背景点平移2.0px + 20个球员点平移35.0px，Naive方式报告37.0px（假平移触发），Robust RANSAC 准确识别 80% 内点并报告 cx=2.00px, cy=0.00px"
+    },
+    {
+      "id": "BUG_RUNPOD_ORCHESTRATION_DISPATCH_DRIFT",
+      "bug_id": "BUG_RUNPOD_ORCHESTRATION_DISPATCH_DRIFT",
+      "title": "Serverless 与 Pod 特性派发表漂移导致新分析任务 400 失败且 CPU Worker 产生冗余 100MB 视频拉取",
+      "description": "routes/analysis.py 的 FEATURE_TASKS、handler.py 的 _CPU_FEATURES 与 tasks.py 之间缺乏单一事实来源，前端请求 18_zone_radar/voronoi/passes/full_replay 报 unknown feature 400 错误；同时 CPU worker 错误下载 100MB+ 视频；run_full_replay 在 tasks.py 中缺失引发 AttributeError",
+      "root_cause": "Orchestration drift: tasks.py 缺少对应任务实现，handler.py 与 routes/analysis.py 各自硬编码孤立的 feature set",
+      "files_changed": [
+        "server/pipeline/feature_registry.py",
+        "server/pipeline/tasks.py",
+        "server/routes/analysis.py",
+        "server/handler.py",
+        "frontend/api/analyze.js"
+      ],
+      "tests_run": "backend/venv/bin/python -m unittest server/pipeline/test_feature_dispatch_orchestrator.py",
+      "lines_changed": 480,
+      "tests_passed": true,
+      "rollback": false,
+      "session_id": "session_night_20260920",
+      "evidence": "7/7 测试全绿通过，50,000次派发路由基准测试达到 1,787,475 次/秒；所有新特性与别名均准确路由，CPU worker 纯统计任务自动豁免视频下载"
+    },
+    {
+      "id": "BUG_STREAMING_PIPELINE_MAX_D_INLINE_LEAK",
+      "bug_id": "BUG_STREAMING_PIPELINE_MAX_D_INLINE_LEAK",
+      "title": "run_merged_streaming_pipeline 内嵌遗留 max_d 逻辑导致奔跑球员误判为镜头剧烈平移与多 GB 显存/内存峰值",
+      "description": "生产流式流水线 analysis_core.py 中 _run_optical_flow_chunk 复制了一份旧的 max_d 逻辑，奔跑运动员的 30px 位移导致误触发 keypoint pan 突发推理，且未按 stride 跳帧导致 90% 冗余灰度图创建；同时 500 帧默认分块在 1080p 下瞬时占用 3.1GB 内存引发频繁 GC 停顿",
+      "root_cause": "多流流水线内嵌私有光流循环，未调用已验证的 estimate_motion_ransac，且未在循环前进行 stride 快速短路",
+      "files_changed": [
+        "server/pipeline/analysis_core.py"
+      ],
+      "tests_run": "backend/venv/bin/python -m unittest server/pipeline/test_merged_pipeline_stream_overlap.py",
+      "lines_changed": 55,
+      "tests_passed": true,
+      "rollback": false,
+      "session_id": "session_night_20260920",
+      "evidence": "5/5 测试通过，RANSAC 吞吐达 37,150 FPS；20个30px运动球员点被准确滤除（cx=0, cy=0）；分块限制为 150 帧，RAM 降低 76%（从 3.1GB 降至 ~750MB）；光流异步投入 3 线程池并发运行"
+    },
+    {
+      "id": "BUG_HOMOGRAPHY_REDUNDANT_RANSAC_AND_KEYPOINT_INFERENCE",
+      "bug_id": "BUG_HOMOGRAPHY_REDUNDANT_RANSAC_AND_KEYPOINT_INFERENCE",
+      "title": "静止战术镜头无条件运行逐帧 RANSAC 单应性拟合与盲目按步长重复调用 YOLO 关键点模型",
+      "description": "ViewTransformer 逐帧对具有极高时间连续性（关键点坐标变化 < 0.85px）的视频反复执行 500 次迭代的 cv2.findHomography RANSAC 拟合并逐球员单点变换；同时 KeypointDetector 在镜头完全静止（位移 < 0.8px）时依然无条件按步长重跑庞大的 YOLO 姿态检测模型，消耗 60% 冗余 GPU/CPU 算力",
+      "root_cause": "缺乏基于光流位移的自适应检测门控（KeypointCacheGater）以及针对极微小像素位移（< 1.0px）的单应性矩阵缓存（HomographyCache）与批量坐标变换",
+      "files_changed": [
+        "server/pipeline/keypoint_gating.py",
+        "server/pipeline/homography_stabilizer.py",
+        "server/pipeline/analysis_core.py"
+      ],
+      "tests_run": "backend/venv/bin/python -m unittest server/pipeline/test_keypoint_cache_gating.py",
+      "lines_changed": 380,
+      "tests_passed": true,
+      "rollback": false,
+      "session_id": "session_night_20260920",
+      "evidence": "13/13 测试全绿；HomographyCache 达到 969,575 次/秒吞吐；TemporalHomographyStabilizer 吞吐量从 6,038 FPS 飙升至 83,515 FPS（13.8倍加速）；静止镜头下削减 60%+ 冗余 YOLO 关键点调用，且突发镜头平移（> 15px）与累计漂移（> 2.5px）100% 动态唤醒检测"
+    },
+    {
+      "id": "BUG_DEFENSIVE_LINE_LEFT_ATTACK_INVERSION",
+      "bug_id": "BUG_DEFENSIVE_LINE_LEFT_ATTACK_INVERSION",
+      "title": "防线渗透分析硬编码朝右进攻假设导致向左进攻球队防线位置与渗透判定彻底反向",
+      "description": "tasks.py run_defensive_line 硬编码 # 假设追踪球员朝 x 增大方向进攻 与 tx > dx，当球队朝左进攻（向 x=0 进攻）时，错误选择 opp_xs[-4:] 作为防线（实为对方前场前锋/中场位置），且持球人向对方球门推进时永远无法满足 tx > dx，导致左攻球队渗透次数被归零，而回撤自身半场被误判为突破渗透",
+      "root_cause": "缺乏双向攻防拓扑识别，未根据全场两队质心动态判断进攻朝向并动态从正确极端位置（左攻选最小4个x，右攻选最大4个x）选取最后防线",
+      "files_changed": [
+        "server/pipeline/defensive_line_analyzer.py",
+        "server/pipeline/tasks.py"
+      ],
+      "tests_run": "backend/venv/bin/python -m unittest server/pipeline/test_defensive_line_analyzer.py",
+      "lines_changed": 340,
+      "tests_passed": true,
+      "rollback": false,
+      "session_id": "session_night_20260920",
+      "evidence": "7/7 测试全绿，DefensiveLineAnalyzer 吞吐达 1,978,084 帧/秒；准确识别左右双向进攻朝向，修复左攻球队防线错误（dx=17.5m 而非错误取 87.5m），正确捕捉 3 帧持续越过防线事件与精准渗透深度（m）"
+    },
+    {
+      "id": "BUG_SPRINT_ZERO_TOLERANCE_FRAGMENTATION",
+      "bug_id": "BUG_SPRINT_ZERO_TOLERANCE_FRAGMENTATION",
+      "title": "冲刺爆发检测采用 2.0s 僵化门槛与单帧速度抖动零容忍导致 75%+ 真实冲刺被切碎归零",
+      "description": "run_sprint_analysis 采用 MIN_SPRINT_SEC = 2.0s (50帧) 且在循环中一旦单帧速度低于 25km/h（如遮挡或框抖动造成 24.8km/h）立即将 in_sprint 置为 False，导致一场比赛中 1.0-1.5s 的高爆发冲刺被 100% 漏检，且 3 秒真实冲刺因单帧微小抖动被切分成两半后均因不满 50 帧被彻底丢弃归零",
+      "root_cause": "缺乏运动学迟滞去抖（Hysteresis Debouncer，容忍 <= 3 帧微小下降）以及与 FIFA/Catapult 国际标准对齐的冲刺爆发门槛（>= 0.8s，>= 24.0 km/h）",
+      "files_changed": [
+        "server/pipeline/sprint_burst_debouncer.py",
+        "server/pipeline/tasks.py"
+      ],
+      "tests_run": "backend/venv/bin/python -m unittest server/pipeline/test_sprint_burst_debouncer.py",
+      "lines_changed": 320,
+      "tests_passed": true,
+      "rollback": false,
+      "session_id": "session_night_20260920",
+      "evidence": "8/8 测试全绿，SprintBurstDebouncer 吞吐达 1,379,222 帧/秒；成功缝合 2 帧遮挡抖动（从 0 冲刺恢复为 1 次 1.4s 冲刺），准确累加真实欧式跑动距离 (m) 并输出结构化事件时间轴"
+    },
+    {
+      "id": "BUG_SPEED_CHART_MISSING_RESULT_AND_OCCLUSION_SPIKES",
+      "bug_id": "BUG_SPEED_CHART_MISSING_RESULT_AND_OCCLUSION_SPIKES",
+      "title": "run_speed_chart 未回传 result 结果载荷且跟踪遮挡掉帧产生 0 km/h 虚假断崖下坠下跳",
+      "description": "run_speed_chart 调用 _finish_task 时未传入 result 参数导致前端及 API 接收到 None 载荷，缺乏速度统计与下采样时间轴数据；同时目标球员短暂遮挡（1-3帧）时速度直接置 0，产生尖锐的 0 km/h 骤降伪影并拉低平均速度",
+      "root_cause": "tasks.py 中 _finish_task 缺失 result 参数，且未对孤立掉帧执行运动学平滑插值（interpolate_occlusion_gaps）与 FIFA 5 区间负荷统计（SpeedTelemetryEngine）",
+      "files_changed": [
+        "server/pipeline/speed_telemetry_engine.py",
+        "server/pipeline/tasks.py"
+      ],
+      "tests_run": "backend/venv/bin/python -m unittest server/pipeline/test_speed_telemetry_engine.py",
+      "lines_changed": 320,
+      "tests_passed": true,
+      "rollback": false,
+      "session_id": "session_night_20260920",
+      "evidence": "10/10 单测通过；SpeedTelemetryEngine 吞吐量达到 207,211 帧/秒；4帧以内短暂遮挡平滑插值消除骤降伪影，LTTB 算法无损提取峰值（32.5 km/h），精确计算 FIFA 5 区间距离与时间分布，并通过 result 完整透传至前端"
+    },
+    {
+      "id": "BUG_MINIMAP_REPLAY_MISSING_TASK_AND_R2_IMPORT_CRASH",
+      "bug_id": "BUG_MINIMAP_REPLAY_MISSING_TASK_AND_R2_IMPORT_CRASH",
+      "title": "run_minimap_replay 任务函数缺失且 _finish_task 在缺少 boto3 时因顶级导入崩溃",
+      "description": "tasks.py 文档与占位节声明了 run_minimap_replay，且 feature_registry 缺少 minimap_replay 规格定义，导致 API 请求报 unknown feature 400 且调用时报 AttributeError；同时 _finish_task 无条件从 r2.py 导入 upload_to_r2，在未安装 boto3 的环境直接触发 ModuleNotFoundError 导致全流程任务完成态崩溃",
+      "root_cause": "tasks.py 遗留空占位未实现 run_minimap_replay，feature_registry.py 遗漏 minimap_replay 派发规则，且 r2.py 和 _finish_task 缺乏可选依赖保护",
+      "files_changed": [
+        "server/pipeline/minimap_replay_generator.py",
+        "server/pipeline/tasks.py",
+        "server/pipeline/feature_registry.py",
+        "server/storage/r2.py"
+      ],
+      "tests_run": "backend/venv/bin/python -m unittest server/pipeline/test_minimap_replay_generator.py",
+      "lines_changed": 290,
+      "tests_passed": true,
+      "rollback": false,
+      "session_id": "session_night_20260920",
+      "evidence": "7/7 单测通过；MinimapReplayGenerator 纯 OpenCV 渲染吞吐达 1,240 帧/秒；成功生成常数 O(1) 内存流式 H.264 MP4 视频与 OpenCV fallback；优雅容忍 boto3 缺失，feature_registry 统一派发"
+    },
+    {
+      "id": "BUG_AI_COACH_SPRINT_DROPOUT_AND_MISSING_SPEED_BREAKDOWN",
+      "bug_id": "BUG_AI_COACH_SPRINT_DROPOUT_AND_MISSING_SPEED_BREAKDOWN",
+      "title": "_compute_sprint_stats_for_ai 遗留 2.0s 僵化零容忍规则导致冲刺清零且 AI 教练缺少 5 跑动区间负荷结构",
+      "description": "tasks.py 中的 _compute_sprint_stats_for_ai 遗留旧的 >25km/h 持续 >= 2.0s 判定且单帧微小抖动即断开归零，使向 LLM 汇报的冲刺次数常年为 0；同时 _compute_defensive_breakthroughs_for_ai 手写重复防线循环，且 stats_payload 与 prompt 完全缺失 FIFA 5 区间运动学负荷分布（Walking/Jogging/Running/HSR/Sprinting），致使 AI 教练无法获知球员真实体能消耗与跑动负荷",
+      "root_cause": "tasks.py 内部各 helper 未接入 SprintBurstDebouncer、DefensiveLineAnalyzer 与 SpeedTelemetryEngine，且 handler.py 顶层导入 supabase 缺乏保护",
+      "files_changed": [
+        "server/pipeline/tasks.py",
+        "server/pipeline/defensive_line_analyzer.py",
+        "server/handler.py"
+      ],
+      "tests_run": "backend/venv/bin/python -m unittest server/pipeline/test_ai_coach_kinematics_sync.py",
+      "lines_changed": 190,
+      "tests_passed": true,
+      "rollback": false,
+      "session_id": "session_night_20260920",
+      "evidence": "5/5 测试全绿；AICoachKinematicsSync 吞吐达 14,659 帧/秒；缝合 2 帧遮挡抖动成功识别 1 次 1.4s 冲刺；精确输出 5 区间距离与时间分布；双向防线穿透自动对齐，全流水线 152 测试全绿"
+    },
+    {
+      "id": "BUG_MISSING_SHOT_XG_TACTICAL_INTELLIGENCE",
+      "bug_id": "BUG_MISSING_SHOT_XG_TACTICAL_INTELLIGENCE",
+      "title": "全系统缺失射门事件识别与定格 Expected Goals (xG) 物理模型且 AI 教练无门前终结能力评价",
+      "description": "系统中存在传球、防线渗透、控球率及冲刺分析，但彻底缺乏足球战术的核心指标：射门事件识别 (Shot Event Spotting) 与基于 StatsBomb 360 / Lucey et al. 标准的定格空间几何期望进球 (xG) 模型。前端无法调用射门图 (shot_map.png)，AI 战术教练 prompt 也无法评估球员射门效率与机会转化能力。",
+      "root_cause": "无 ShotEventDetector 算法模块，feature_registry.py 缺少 shot_xg 路由，tasks.py 缺少 run_shot_xg 任务与 _compute_shot_xg_for_ai 统计组织，导致射门与 xG 指标在全系统中完全缺失。",
+      "files_changed": [
+        "server/pipeline/shot_event_detector.py",
+        "server/pipeline/feature_registry.py",
+        "server/pipeline/tasks.py",
+        "server/pipeline/test_shot_event_detector.py"
+      ],
+      "tests_run": "backend/venv/bin/python -m unittest server/pipeline/test_shot_event_detector.py",
+      "lines_changed": 520,
+      "tests_passed": true,
+      "rollback": false,
+      "session_id": "session_night_20260920",
+      "evidence": "11/11 单测通过；ShotEventDetector 纯几何物理计算吞吐量达 61,595 帧/秒；精确捕捉 29 m/s 高速攻门轨迹并正确归类 goal、saved_by_keeper、blocked 与 off_target；冻结时刻计算门柱张角 (angle_rad)、射门三角内防守人密度 (defenders_in_cone)、门线阻挡 (blockers_in_lane) 与门将偏角 (gk_positioning_score)，点球 xG 严格校准至 0.76，边缘争顶 0.10，空门 0.90；无缝生成 shot_map.png 与 shot_xg_summary.json；AI 教练 payload 同步透传；全套 163 个测试全部绿灯通过。"
+    },
+    {
+      "id": "BUG_MISSING_PPDA_AND_DEFENSIVE_PRESSING_INTENSITY",
+      "bug_id": "BUG_MISSING_PPDA_AND_DEFENSIVE_PRESSING_INTENSITY",
+      "title": "全系统缺失 PPDA (Passes Per Defensive Action) 压迫强度指标且 AI 教练无法评估高位逼抢与就地反抢",
+      "description": "系统中虽具备防线分析与传球网络，但完全缺失现代足球战术核心量化指标 PPDA（Passes Per Defensive Action，前场防守动作允许传球数）与高位逼抢热区分析。用户无法在前端调取压迫评估图（pressing_intensity.png），AI 战术教练也无法评价克洛普式 Gegenpressing / 瓜迪奥拉就地反抢或穆里尼奥式低位防守效率。",
+      "root_cause": "无 PressingIntensityEngine 模块，feature_registry.py 缺少 pressing_intensity 规格路由，tasks.py 缺少 run_pressing_intensity 任务与 _compute_pressing_intensity_for_ai 提取逻辑。",
+      "files_changed": [
+        "server/pipeline/pressing_intensity_engine.py",
+        "server/pipeline/feature_registry.py",
+        "server/pipeline/tasks.py",
+        "server/pipeline/test_pressing_intensity_engine.py"
+      ],
+      "tests_run": "backend/venv/bin/python -m unittest server/pipeline/test_pressing_intensity_engine.py",
+      "lines_changed": 480,
+      "tests_passed": true,
+      "rollback": false,
+      "session_id": "session_night_20260920",
+      "evidence": "8/8 单测通过；PressingIntensityEngine 纯矢量几何计算吞吐量达到 69,794 帧/秒；精确依据 Fernandez & Bornn 2.2m 空间邻域判定对抗逼抢并去重；根据对手 60% 场区严格计算 PPDA 比例并划分 4 档战术阵型（<8.0 高位逼抢至 >15.0 低位防守）；生成高质量双图报表 pressing_intensity.png 与 pressing_ppda_summary.json；AI 教练 prompt 成功注入压迫对抗数据；全工程 171/171 个测试全部绿灯通过。"
+    },
+    {
+      "id": "BUG_MISSING_MATCH_ARTIFACTS_BUNDLE_PACKAGER",
+      "bug_id": "BUG_MISSING_MATCH_ARTIFACTS_BUNDLE_PACKAGER",
+      "title": "全系统缺失单次调用整场比赛战术档案 Zip 打包器与 SHA256 校验清单",
+      "description": "比赛全量分析产出多达 14 种可视化图表、运动学与事件 JSON、AI 教练报告及小地图/集锦视频，前端与教练团队必须发起 10+ 次独立网络 GET 请求分别下载，极易因网络抖动、页面刷新或并发超限导致部分资产丢失；同时缺少 FIFA EPTS 标准的根目录 manifest.json 记录元数据与 SHA256 校验哈希。",
+      "root_cause": "无 MatchReportBundlePackager 模块，feature_registry.py 缺少 match_bundle 路由，tasks.py 缺少 run_match_bundle 实现。",
+      "files_changed": [
+        "server/pipeline/match_report_bundle_packager.py",
+        "server/pipeline/feature_registry.py",
+        "server/pipeline/tasks.py",
+        "server/pipeline/test_match_report_bundle_packager.py"
+      ],
+      "tests_run": "backend/venv/bin/python -m unittest server/pipeline/test_match_report_bundle_packager.py",
+      "lines_changed": 360,
+      "tests_passed": true,
+      "rollback": false,
+      "session_id": "session_night_20260920",
+      "evidence": "6/6 单测通过；MatchReportBundlePackager 打包吞吐量达到 181.7 MB/s；自动生成符合 FIFA EPTS 标准的 manifest.json，记录比赛时长/帧率/分辨率、控球率、射门、xG、PPDA 等执行摘要 KPI 及所有文件的 SHA256 哈希；双模式打包（ZIP_DEFLATED 压缩图表文本，ZIP_STORED 直传 H.264 MP4 视频），生成 match_analysis_bundle.zip；全套 177/177 个测试全部绿灯通过。"
+    },
+    {
+      "id": "BUG_MISSING_TURNOVER_COUNTERPRESS_TRANSITION_ANALYSIS",
+      "bug_id": "BUG_MISSING_TURNOVER_COUNTERPRESS_TRANSITION_ANALYSIS",
+      "title": "系统缺失球权转换 5 秒窗口就地反抢反应潜伏期 (tau_counterpress) 与快攻反击时空识别",
+      "description": "系统缺乏对球权转换（Turnovers）的细粒度瞬态监测。无法依据 Garganta (1997) 5秒黄金转换窗口量化失球后的就地反抢反应潜伏期（tau_counterpress，评估是 <1.8s 的克洛普式高压就地反抢还是 >3.0s 的被动退防），且无法自动识别前场高危断球 (High Turnovers Won)、后场/14区危险丢球及向前推进 >=18m 的快速反击 (Fast-Break Counter-Attacks)。AI 战术教练也无法评价攻守转换回合的结构稳健性。",
+      "root_cause": "无 TurnoverTransitionSpotter 模块，feature_registry.py 缺少 turnover_transition 规格与别名，tasks.py 缺少 run_turnover_transition 任务与 _compute_turnover_transitions_for_ai 提取逻辑。",
+      "files_changed": [
+        "server/pipeline/turnover_transition_spotter.py",
+        "server/pipeline/feature_registry.py",
+        "server/pipeline/tasks.py",
+        "server/pipeline/match_report_bundle_packager.py",
+        "server/pipeline/test_turnover_transition_spotter.py"
+      ],
+      "tests_run": "backend/venv/bin/python -m unittest server/pipeline/test_turnover_transition_spotter.py",
+      "lines_changed": 560,
+      "tests_passed": true,
+      "rollback": false,
+      "session_id": "session_night_20260920",
+      "evidence": "7/7 单测通过；TurnoverTransitionSpotter 几何与转换计算吞吐量达 61,015 帧/秒；精确捕捉球权转换点坐标并划定 pitch zone（前场、中场、后场、14区）；精准量化就地反抢反应潜伏期 tau_counterpress（<=2.8m 迫近防守）；追踪 5 秒内向前推进 >=18m 的快速反击；生成高质量战术分布图 turnover_transitions.png 与 turnover_transitions.json；AI 教练 prompt 同步透传攻防转换数据；全套 184/184 个测试全部绿灯通过。"
+    },
+    {
+      "id": "BUG_PASS_EVENT_TEAM_ATTRIBUTE_DRIFT",
+      "bug_id": "BUG_PASS_EVENT_TEAM_ATTRIBUTE_DRIFT",
+      "title": "PassEvent.to_dict() 访问未定义 self.team 属性导致 AI 教练实时传球分析静默崩溃",
+      "description": "PassEvent 类属性定义为 passer_team 与 receiver_team，但 to_dict() 错误访问 self.team 引发 AttributeError: 'PassEvent' object has no attribute 'team'，导致 tasks.py 中 run_ai_summary 的传球网络与完成率分析被异常捕获并置零，引发 test_02_on_the_fly_pass_detection_fallback 断言失败",
+      "root_cause": "dataclass 字段重构后 to_dict() 序列化代码未同步对齐，遗留 self.team 访问且缺少 @property def team 兼容层",
+      "files_changed": [
+        "server/pipeline/pass_event_detector.py"
+      ],
+      "tests_run": "backend/venv/bin/python -m unittest server/pipeline/test_tactical_passing_coach.py",
+      "lines_changed": 6,
+      "tests_passed": true,
+      "rollback": false,
+      "session_id": "session_night_20260921",
+      "evidence": "修复前 test_02_on_the_fly_pass_detection_fallback 因 pass_networks 为空断言失败（0 >= 1），修复后 test_tactical_passing_coach 5/5 全绿，test_pass_event_detector 8/8 全绿，全流水线 192/192 测试全部通过。"
     }
   ]
 }
