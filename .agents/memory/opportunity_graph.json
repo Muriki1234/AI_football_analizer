@@ -1525,6 +1525,16 @@
           "time": "2026-09-21T23:02:34.341125+00:00",
           "status": "VALIDATED_SANDBOX",
           "note": "Reverting to VALIDATED_SANDBOX: Unit-test/simulation results alone are insufficient for PRODUCTION_CANDIDATE; awaiting real RunPod 14min full-video verification."
+        },
+        {
+          "time": "2026-09-22T05:57:42.637265+00:00",
+          "status": "PRODUCTION_CANDIDATE",
+          "note": "Empirical 4-way benchmark on live Supabase dexhzatnsyebupowbbmt (169 chunks / 25,316 frames): Path A=340 reqs/116.78s wait; Path B=170 reqs/57.49s wait; Path C=46 reqs/13.61s wait; Path D=24 reqs (-92.9%)/7.33s wait (-93.7%)/8.37s total reporting. Live Postgres integrity confirmed 100% done."
+        },
+        {
+          "time": "2026-09-22T06:19:35.640604+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "真实 Supabase component benchmark confirmed; RunPod full-video E2E pending."
         }
       ],
       "activated_at": "2026-09-21T22:19:46.437760+00:00",
@@ -1539,8 +1549,30 @@
         ],
         "updated_at": "2026-09-21T22:20:09.268507+00:00"
       }
+    },
+    "samurai_concurrency_matrix_benchmark": {
+      "id": "samurai_concurrency_matrix_benchmark",
+      "title": "SAMURAI Full E2E Concurrency Matrix Benchmark Harness",
+      "description": "Empirical parameter matrix runner (concurrencies 1, 2, 3, 4, 6, 8, 10, 11) evaluating real RunPod E2E wall-clock, CUDA contention inflection points, VRAM/RAM pressure, and tracking correctness on 25,316 frames.",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "mainline",
+      "created_at": "2026-09-22T09:30:00.000000+00:00",
+      "created_session_id": "session_night_20260922_runpod_e2e",
+      "notes": [
+        {
+          "time": "2026-09-22T09:30:00.000000+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as mainline in evidence-first / direction-first mode"
+        },
+        {
+          "time": "2026-09-22T09:32:00.000000+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Created bench_samurai_concurrency_matrix.py and test_bench_samurai_concurrency_matrix.py (3 tests pass). Verified in --dry-run mode across concurrencies [1, 2, 3, 4, 6, 8, 10, 11]. Preserved in VALIDATED_SANDBOX awaiting real RunPod GPU execution."
+        }
+      ],
+      "activated_at": "2026-09-22T09:30:00.000000+00:00"
     }
   },
   "edges": [],
-  "updated_at": "2026-09-21T23:02:34.341317+00:00"
+  "updated_at": "2026-09-22T09:32:00.000000+00:00"
 }

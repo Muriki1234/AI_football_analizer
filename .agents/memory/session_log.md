@@ -516,3 +516,32 @@
 [2026-09-22 11:02:34] [session_night_20260922_runpod_e2e] [GRAPH] [EVENT=OPPORTUNITY_TRANSITION] opportunity=samurai_bounded_memory_pool from=PRODUCTION_CANDIDATE to=VALIDATED_SANDBOX
 [2026-09-22 11:02:34] [session_night_20260922_runpod_e2e] [REDISCOVERY] [EVENT=STATE_SYNC] opportunity=supabase_rpc_merge_session_extra_fix mainline=none secondary=none phase=rediscovery
 [2026-09-22 11:02:34] [session_night_20260922_runpod_e2e] [GRAPH] [EVENT=OPPORTUNITY_TRANSITION] opportunity=supabase_rpc_merge_session_extra_fix from=PRODUCTION_CANDIDATE to=VALIDATED_SANDBOX
+[2026-09-22 17:57:42] [session_night_20260922_runpod_e2e] [REDISCOVERY] [EVENT=STATE_SYNC] opportunity=supabase_rpc_merge_session_extra_fix mainline=none secondary=none phase=rediscovery
+[2026-09-22 17:57:42] [session_night_20260922_runpod_e2e] [GRAPH] [EVENT=OPPORTUNITY_TRANSITION] opportunity=supabase_rpc_merge_session_extra_fix from=VALIDATED_SANDBOX to=PRODUCTION_CANDIDATE
+[2026-09-22 17:57:49] [test_finalize_sess] [EXPLORING] [EVENT=SESSION_END] Overnight mode ended explicitly.
+[2026-09-22 17:57:49] [test_finalize_sess] [COMPLETED] [EVENT=SESSION_FINALIZED] Session finalized via canonical shutdown sequence.
+[2026-09-22 17:57:49] [test_sess] [RECON] [EVENT=SESSION_END] Overnight mode ended explicitly.
+[2026-09-22 17:57:49] [test_sess] [COMPLETE] [EVENT=CHECKPOINT] current_action=all_opportunities_validated next_action=morning_report_delivered
+[2026-09-22 17:57:49] [test_sess] [DISCOVERY] [EVENT=CHECKPOINT] [⚠️ [GUARD_INTERCEPT] Intercepted attempt to set phase='complete' while overnight budget remains (0.0m / 240.0m). Mandating Rediscovery Phase instead of early exit.]
+[2026-09-22 17:57:49] [session_night_20260922_runpod_e2e] [GRAPH] [EVENT=EXTERNAL_RESEARCH] opportunity=sample_op decision=hybrid sources=2
+[2026-09-22 17:57:49] [test_sess_deadline] [RECON] [EVENT=SESSION_START] session=test_sess_deadline overnight=True budget=180m deadline=2026-09-22T08:57:49.396303+00:00 mainline=none secondary=none
+[2026-09-22 17:58:27] [session_night_20260922_runpod_e2e] [REDISCOVERY] [EVENT=CHECKPOINT] Supabase 4-way empirical benchmark verified on live DB
+[2026-09-22 18:19:35] [session_night_20260922_runpod_e2e] [REDISCOVERY] [EVENT=STATE_SYNC] opportunity=supabase_rpc_merge_session_extra_fix mainline=none secondary=none phase=rediscovery
+[2026-09-22 18:19:35] [session_night_20260922_runpod_e2e] [GRAPH] [EVENT=OPPORTUNITY_TRANSITION] opportunity=supabase_rpc_merge_session_extra_fix from=PRODUCTION_CANDIDATE to=VALIDATED_SANDBOX
+[2026-09-22 18:21:17] [test_finalize_sess] [EXPLORING] [EVENT=SESSION_END] Overnight mode ended explicitly.
+[2026-09-22 18:21:17] [test_finalize_sess] [COMPLETED] [EVENT=SESSION_FINALIZED] Session finalized via canonical shutdown sequence.
+[2026-09-22 18:21:17] [test_sess] [RECON] [EVENT=SESSION_END] Overnight mode ended explicitly.
+[2026-09-22 18:21:17] [test_sess] [COMPLETE] [EVENT=CHECKPOINT] current_action=all_opportunities_validated next_action=morning_report_delivered
+[2026-09-22 18:21:17] [test_sess] [DISCOVERY] [EVENT=CHECKPOINT] [⚠️ [GUARD_INTERCEPT] Intercepted attempt to set phase='complete' while overnight budget remains (0.0m / 240.0m). Mandating Rediscovery Phase instead of early exit.]
+[2026-09-22 18:21:17] [session_night_20260922_runpod_e2e] [GRAPH] [EVENT=EXTERNAL_RESEARCH] opportunity=sample_op decision=hybrid sources=2
+[2026-09-22 18:21:17] [test_sess_deadline] [RECON] [EVENT=SESSION_START] session=test_sess_deadline overnight=True budget=180m deadline=2026-09-22T09:21:17.140999+00:00 mainline=none secondary=none
+[2026-09-22 18:32:32] [test_finalize_sess] [EXPLORING] [EVENT=SESSION_END] Overnight mode ended explicitly.
+[2026-09-22 18:32:32] [test_finalize_sess] [COMPLETED] [EVENT=SESSION_FINALIZED] Session finalized via canonical shutdown sequence.
+[2026-09-22 18:32:32] [test_sess] [RECON] [EVENT=SESSION_END] Overnight mode ended explicitly.
+[2026-09-22 18:32:32] [test_sess] [COMPLETE] [EVENT=CHECKPOINT] current_action=all_opportunities_validated next_action=morning_report_delivered
+[2026-09-22 18:32:32] [test_sess] [DISCOVERY] [EVENT=CHECKPOINT] [⚠️ [GUARD_INTERCEPT] Intercepted attempt to set phase='complete' while overnight budget remains (0.0m / 240.0m). Mandating Rediscovery Phase instead of early exit.]
+[2026-09-22 18:32:32] [session_night_20260922_runpod_e2e] [GRAPH] [EVENT=EXTERNAL_RESEARCH] opportunity=sample_op decision=hybrid sources=2
+[2026-09-22 18:32:32] [test_sess_deadline] [RECON] [EVENT=SESSION_START] session=test_sess_deadline overnight=True budget=180m deadline=2026-09-22T09:32:32.327474+00:00 mainline=none secondary=none
+[2026-09-22 09:31:06] [session_night_20260922_runpod_e2e] [REDISCOVERY] [EVENT=CHECKPOINT] Completed STEP 0 36-min gap audit: verified worker idle in pool, no AI summary on GPU worker.
+[2026-09-22 09:31:06] [session_night_20260922_runpod_e2e] [GRAPH] [EVENT=OPPORTUNITY_CREATED] opportunity=samurai_concurrency_matrix_benchmark status=VALIDATED_SANDBOX
+[2026-09-22 09:31:06] [session_night_20260922_runpod_e2e] [REDISCOVERY] [EVENT=CHECKPOINT] Author and verify bench_samurai_concurrency_matrix.py (22 tests passing). Awaiting RunPod execution.

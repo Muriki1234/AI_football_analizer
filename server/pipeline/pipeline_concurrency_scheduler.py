@@ -72,7 +72,7 @@ def compute_samurai_concurrency_cap(
     res_factor = max(1.0, (orig_w * orig_h) / baseline_px)
 
     # Use round() so 10.9828 (1926x1080) rounds to 11 instead of truncated down to 10
-    cap = max(2, int(round(base_cap / (res_factor ** 0.5))))
+    cap = max(1, int(round(base_cap / (res_factor ** 0.5))))
     return cap
 
 
