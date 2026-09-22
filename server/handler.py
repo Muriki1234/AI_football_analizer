@@ -922,12 +922,19 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
 
 # 打印版本 + worker mode：方便从 RunPod 日志确认部署的是哪个 commit。
 # 每次 git push 都会改这个常量 → 看到老值就知道 image 没 rebuild。
-HANDLER_VERSION = "v83-fix-json-log"
+HANDLER_VERSION = "v84"
 
 # Print worker mode on import so RunPod logs make it obvious which pool we're on.
 print(f"[HANDLER] WORKER_MODE={WORKER_MODE} version={HANDLER_VERSION} "
       f"({'feature-only (ai_summary + charts)' if WORKER_MODE == 'cpu' else 'all actions'})",
       flush=True)
+
+# ── Pre-flight Physical GPU & Hardware Telemetry (nvidia-smi ground truth) ──
+try:
+    from .pipeline.gpu_hardware_verifier import GPUHardwareVerifier
+    print(GPUHardwareVerifier().format_diagnostic_report(), flush=True)
+except Exception as _gpu_err:
+    print(f"[HANDLER] GPU hardware probe warning: {_gpu_err}", flush=True)
 
 
 # RunPod Serverless boilerplate (only imports when actually running serverless).
