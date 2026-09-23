@@ -148,26 +148,25 @@ class TestPipelineConcurrencyScheduler(unittest.TestCase):
         cap = compute_samurai_concurrency_cap(1926, 1080, env_cap_override=11)
         self.assertEqual(cap, 11)
 
-    def test_09_compute_samurai_concurrency_cap_ram_tiers(self):
+    def test_09_compute_samurai_concurrency_cap_safe_default(self):
         """
-        Verify memory-aware dynamic caps across host RAM tiers:
-        - >=120GB -> 16
-        - >=60GB -> 14
-        - >=40GB -> 12
-        - <40GB -> 8
+        Verify that default concurrency cap is bounded to 5
+        (optimal two-wave execution limit for 10 segments 5+5),
+        while still supporting explicit overrides via env_cap_override.
         """
-        self.assertEqual(compute_samurai_concurrency_cap(1920, 1080, total_ram_gb=515.6), 16)
-        self.assertEqual(compute_samurai_concurrency_cap(1920, 1080, total_ram_gb=64.0), 14)
-        self.assertEqual(compute_samurai_concurrency_cap(1920, 1080, total_ram_gb=48.0), 12)
-        self.assertEqual(compute_samurai_concurrency_cap(1920, 1080, total_ram_gb=32.0), 8)
+        # Default with no override is 5
+        self.assertEqual(compute_samurai_concurrency_cap(1920, 1080), 5)
+        # Explicit overrides work as intended
+        self.assertEqual(compute_samurai_concurrency_cap(1920, 1080, env_cap_override=6), 6)
+        self.assertEqual(compute_samurai_concurrency_cap(1920, 1080, env_cap_override=8), 8)
 
     def test_10_compute_samurai_concurrency_cap_high_res_scaling(self):
         """
         Verify that 4K (3840x2160 = 4x pixels) scales down safely via sqrt:
-        16 / sqrt(4) = 8
+        4 / sqrt(4) = 2
         """
-        cap_4k = compute_samurai_concurrency_cap(3840, 2160, total_ram_gb=515.6)
-        self.assertEqual(cap_4k, 8)
+        cap_4k = compute_samurai_concurrency_cap(3840, 2160)
+        self.assertEqual(cap_4k, 2)
 
 
 if __name__ == "__main__":

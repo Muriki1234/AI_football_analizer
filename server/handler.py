@@ -922,7 +922,7 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
 
 # 打印版本 + worker mode：方便从 RunPod 日志确认部署的是哪个 commit。
 # 每次 git push 都会改这个常量 → 看到老值就知道 image 没 rebuild。
-HANDLER_VERSION = "v85"
+HANDLER_VERSION = "v87"
 
 # Print worker mode on import so RunPod logs make it obvious which pool we're on.
 print(f"[HANDLER] WORKER_MODE={WORKER_MODE} version={HANDLER_VERSION} "

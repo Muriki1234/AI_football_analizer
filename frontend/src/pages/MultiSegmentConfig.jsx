@@ -7,16 +7,11 @@ import { analyzeFrame, getSession } from '../services/api';
 import StepNav from '../components/StepNav';
 import './Configuration.css';
 
-// Auto segment count per period. 5 is the sweet spot for 10-parallel SAMURAI:
+// Auto segment count per period. 5 is the sweet spot for 10-segment (5+5) SAMURAI:
 //   1 period  × 5 = 5 picks total
 //   2 periods × 5 = 10 picks (e.g. first + second half)
-//   N periods × 5 = N*5 picks  (SAMURAI cap=10)
-//
-// 之前阈值是 20s — 30秒视频拆 2 段 (15s each) 反而每段只给 1 segment，用户
-// 加了 break 后预期 4→8 结果变 1→2，反直觉。降到 5s：
-//   - 5秒以下：1 segment（SAMURAI 在 100帧内开 4 进程并行 overhead 大于收益）
-//   - 5秒以上：5 segments
-const TOTAL_SEGS = 11;
+//   N periods × 5 = N*5 picks
+const TOTAL_SEGS = 10;
 const MIN_PERIOD_FOR_MULTI_SEG = 5;   // 秒
 
 /**
