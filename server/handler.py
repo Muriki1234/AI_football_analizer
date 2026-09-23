@@ -292,6 +292,18 @@ def _stream_download(url: str, dest: Path, headers: dict | None = None) -> None:
                         f"refused: stream exceeded {_MAX_DOWNLOAD_BYTES // (1024**2)} MB cap"
                     )
                 out.write(chunk)
+
+        # 第 4 层：校验传输完整性 —— 防止网络中断导致只下载了残缺视频（如 3MB / 638MB）
+        if content_length > 0 and bytes_read < content_length:
+            try:
+                dest.unlink()
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"Incomplete download: received {bytes_read // (1024*1024)} MB of {content_length // (1024*1024)} MB "
+                f"({bytes_read}/{content_length} bytes). Network connection was severed prematurely."
+            )
+
         if head_size is None and content_length == 0:
             # 服务器既无 HEAD 也无 Content-Length —— 记一笔便于后续排查
             log.warning(
@@ -922,7 +934,7 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
 
 # 打印版本 + worker mode：方便从 RunPod 日志确认部署的是哪个 commit。
 # 每次 git push 都会改这个常量 → 看到老值就知道 image 没 rebuild。
-HANDLER_VERSION = "v87"
+HANDLER_VERSION = "v88"
 
 # Print worker mode on import so RunPod logs make it obvious which pool we're on.
 print(f"[HANDLER] WORKER_MODE={WORKER_MODE} version={HANDLER_VERSION} "
