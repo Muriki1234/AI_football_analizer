@@ -7,11 +7,8 @@ import { analyzeFrame, getSession } from '../services/api';
 import StepNav from '../components/StepNav';
 import './Configuration.css';
 
-// Auto segment count per period. 5 is the sweet spot for 10-segment (5+5) SAMURAI:
-//   1 period  × 5 = 5 picks total
-//   2 periods × 5 = 10 picks (e.g. first + second half)
-//   N periods × 5 = N*5 picks
-const TOTAL_SEGS = 10;
+// Auto segment count per period: 8 segments per period (e.g. 8 for 1 period, 8+8=16 for 2 periods).
+const SEGS_PER_PERIOD = 8;
 const MIN_PERIOD_FOR_MULTI_SEG = 5;   // 秒
 
 /**
@@ -27,6 +24,9 @@ function keyframesIn(startFrame, endFrame, n) {
 }
 
 function distributeSegments(periodsFr, fps) {
+    const numPeriods = Array.isArray(periodsFr) && periodsFr.length > 0 ? periodsFr.length : 1;
+    const targetTotal = numPeriods * SEGS_PER_PERIOD;
+
     // Total duration across all periods
     const totalSec = periodsFr.reduce((sum, pr) => sum + (pr.endFrame - pr.startFrame) / fps, 0);
     
@@ -34,13 +34,13 @@ function distributeSegments(periodsFr, fps) {
     const counts = periodsFr.map(pr => {
         const periodSec = (pr.endFrame - pr.startFrame) / fps;
         if (!Number.isFinite(periodSec) || periodSec < MIN_PERIOD_FOR_MULTI_SEG) return 1;
-        return Math.max(1, Math.round((periodSec / totalSec) * TOTAL_SEGS));
+        return Math.max(1, Math.round((periodSec / totalSec) * targetTotal));
     });
 
-    // Adjust sum to exactly TOTAL_SEGS
-    while (counts.reduce((a, b) => a + b, 0) !== TOTAL_SEGS) {
+    // Adjust sum to exactly targetTotal
+    while (counts.reduce((a, b) => a + b, 0) !== targetTotal) {
         const sum = counts.reduce((a, b) => a + b, 0);
-        if (sum < TOTAL_SEGS) {
+        if (sum < targetTotal) {
             // Find longest period and add 1
             const maxIdx = periodsFr.reduce((maxI, pr, i, arr) => 
                 (pr.endFrame - pr.startFrame) > (arr[maxI].endFrame - arr[maxI].startFrame) ? i : maxI, 0);
@@ -134,7 +134,7 @@ export default function MultiSegmentConfig() {
                 }));
                 setPeriodsFrames(periodsFr);
 
-                // Build the segment list — each period contributes its share of the 11 segments
+                // Build the segment list — each period contributes its share of segments (8 per period)
                 const newSegments = [];
                 const indices = [];
                 const segmentCounts = distributeSegments(periodsFr, fps);
@@ -167,74 +167,87 @@ export default function MultiSegmentConfig() {
     }, [sessionId]);
 
     // 2. Background loading queue for segment detection.
-    // Prioritizes the active segment, then sequentially loads the rest in the background.
+    // Concurrency pool with up to 4 parallel detections.
+    // Prioritizes the active segment, then fills remaining slots in order.
     useEffect(() => {
         if (segments.length === 0) return;
         
-        // If we are currently detecting something, wait for it to finish.
-        const isDetecting = segments.some(s => s.detecting);
-        if (isDetecting) return;
+        const MAX_CONCURRENT_DETECTIONS = 4;
+        const currentlyDetecting = segments.filter(s => s.detecting).length;
+        const availableSlots = MAX_CONCURRENT_DETECTIONS - currentlyDetecting;
+        if (availableSlots <= 0) return;
         
-        // Find the best segment to detect next
-        let targetIdx = -1;
-        
+        // Find segments to detect next (up to availableSlots)
+        const candidates = [];
+
+        const needsDetection = (idx) => {
+            const seg = segments[idx];
+            if (!seg || seg.detecting || seg.error || seg.frameUrl) return false;
+            const key = `${idx}:${seg.frame}`;
+            return !detectedSegs.current.has(key);
+        };
+
         // Priority 1: The currently active segment
-        const activeKey = `${activeIdx}:${segments[activeIdx]?.frame}`;
-        if (!detectedSegs.current.has(activeKey) && !segments[activeIdx].error && !segments[activeIdx].frameUrl) {
-            targetIdx = activeIdx;
-        } else {
-            // Priority 2: Next segments in order
-            for (let i = 1; i < segments.length; i++) {
-                const checkIdx = (activeIdx + i) % segments.length;
-                const checkFrame = segments[checkIdx]?.frame;
-                const checkKey = `${checkIdx}:${checkFrame}`;
-                if (!detectedSegs.current.has(checkKey) && !segments[checkIdx].error && !segments[checkIdx].frameUrl) {
-                    targetIdx = checkIdx;
-                    break;
-                }
+        if (needsDetection(activeIdx)) {
+            candidates.push(activeIdx);
+        }
+
+        // Priority 2: Next segments in order from activeIdx
+        for (let i = 1; i < segments.length && candidates.length < availableSlots; i++) {
+            const checkIdx = (activeIdx + i) % segments.length;
+            if (checkIdx !== activeIdx && needsDetection(checkIdx)) {
+                candidates.push(checkIdx);
             }
         }
-        
-        // All segments are processed
-        if (targetIdx === -1) return;
-        
-        const targetFrame = segments[targetIdx].frame;
-        const detectKey = `${targetIdx}:${targetFrame}`;
-        detectedSegs.current.add(detectKey);
 
+        if (candidates.length === 0) return;
+
+        // Mark candidate keys in detectedSegs ref immediately to avoid duplicate dispatch
+        candidates.forEach(idx => {
+            const key = `${idx}:${segments[idx].frame}`;
+            detectedSegs.current.add(key);
+        });
+
+        // Set detecting: true in state for all chosen candidates
         setSegments((prev) => prev.map((s, i) =>
-            i === targetIdx ? { ...s, detecting: true, error: null } : s
+            candidates.includes(i) ? { ...s, detecting: true, error: null } : s
         ));
 
-        analyzeFrame(sessionId, targetFrame)
-            .then((data) => {
-                const players = (data.players_data || []).map((p, i) => ({
-                    id: p.id || i + 1,
-                    bbox: p.bbox,
-                }));
-                setSegments((prev) => prev.map((s, i) =>
-                    i === targetIdx
-                        ? {
-                            ...s,
-                            detecting: false,
-                            players,
-                            frameUrl: data.annotated_frame_url,
-                            imgDims: data.image_dimensions,
-                            error: players.length === 0
-                                ? 'No players detected here — nudge to a different frame'
-                                : null,
-                          }
-                        : s
-                ));
-            })
-            .catch((e) => {
-                detectedSegs.current.delete(detectKey);  // allow retry
-                setSegments((prev) => prev.map((s, i) =>
-                    i === targetIdx
-                        ? { ...s, detecting: false, error: e.message || 'Detection failed' }
-                        : s
-                ));
-            });
+        // Dispatch requests in parallel
+        candidates.forEach(targetIdx => {
+            const targetFrame = segments[targetIdx].frame;
+            const detectKey = `${targetIdx}:${targetFrame}`;
+
+            analyzeFrame(sessionId, targetFrame)
+                .then((data) => {
+                    const players = (data.players_data || []).map((p, i) => ({
+                        id: p.id || i + 1,
+                        bbox: p.bbox,
+                    }));
+                    setSegments((prev) => prev.map((s, i) =>
+                        i === targetIdx
+                            ? {
+                                ...s,
+                                detecting: false,
+                                players,
+                                frameUrl: data.annotated_frame_url,
+                                imgDims: data.image_dimensions,
+                                error: players.length === 0
+                                    ? 'No players detected here — nudge to a different frame'
+                                    : null,
+                              }
+                            : s
+                    ));
+                })
+                .catch((e) => {
+                    detectedSegs.current.delete(detectKey);  // allow retry
+                    setSegments((prev) => prev.map((s, i) =>
+                        i === targetIdx
+                            ? { ...s, detecting: false, error: e.message || 'Detection failed' }
+                            : s
+                    ));
+                });
+        });
     }, [segments, activeIdx, sessionId]);
 
     /**

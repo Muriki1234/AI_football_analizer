@@ -150,12 +150,11 @@ class TestPipelineConcurrencyScheduler(unittest.TestCase):
 
     def test_09_compute_samurai_concurrency_cap_safe_default(self):
         """
-        Verify that default concurrency cap is bounded to 5
-        (optimal two-wave execution limit for 10 segments 5+5),
+        Verify that default concurrency cap is bounded to 4 (4-parallel execution),
         while still supporting explicit overrides via env_cap_override.
         """
-        # Default with no override is 5
-        self.assertEqual(compute_samurai_concurrency_cap(1920, 1080), 5)
+        # Default with no override is 4
+        self.assertEqual(compute_samurai_concurrency_cap(1920, 1080), 4)
         # Explicit overrides work as intended
         self.assertEqual(compute_samurai_concurrency_cap(1920, 1080, env_cap_override=6), 6)
         self.assertEqual(compute_samurai_concurrency_cap(1920, 1080, env_cap_override=8), 8)
