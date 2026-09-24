@@ -210,15 +210,21 @@ export default function Dashboard() {
                     currentSession = await getSession(sessionId).catch(() => null);
                 }
                 const status = currentSession?.status;
-                if (['queued', 'processing', 'tracking', 'analyzing', 'analysis_done'].includes(status)) {
-                    // Check if it's a zombie (dead worker)
+                if (['queued', 'processing', 'tracking', 'analyzing', 'analysis_done', 'analysis_failed', 'tracking_failed'].includes(status)) {
                     const lastUpdated = new Date(currentSession?.updated_at || currentSession?.created_at).getTime();
                     const minsSinceUpdate = (Date.now() - lastUpdated) / 60000;
-                    if (minsSinceUpdate <= 20) {
-                        console.log(`Session is already in state: ${status} (updated ${Math.round(minsSinceUpdate)}m ago). Skipping auto-start.`);
+                    if (minsSinceUpdate <= 20 || status.includes('failed') || status.includes('done')) {
+                        console.log(`Session is in state: ${status}. Skipping auto-start.`);
                         return;
                     }
-                    console.log(`Session is ${status} but stale for >20 mins. Assuming dead worker and allowing restart.`);
+                }
+
+                // Sanitize history state so subsequent refresh/back-forward won't re-trigger
+                if (isFreshAnalysis) {
+                    navigate(`${location.pathname}?sessionId=${encodeURIComponent(sessionId)}`, {
+                        replace: true,
+                        state: { sessionId, videoId: sessionId },
+                    });
                 }
 
                 if (multiSegments && multiSegments.length > 0) {

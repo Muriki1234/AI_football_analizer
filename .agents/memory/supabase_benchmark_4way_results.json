@@ -1,0 +1,78 @@
+[
+  {
+    "path": "D. RPC + Throttled Reporter",
+    "get_count": 0,
+    "patch_count": 0,
+    "rpc_count": 24,
+    "total_http_requests": 24,
+    "blocking_wait_sec": 7.326,
+    "total_reporting_sec": 8.366,
+    "integrity": {
+      "status": "analysis_done",
+      "progress": 100,
+      "stage": "done",
+      "has_final_tracks": true,
+      "has_pass_events": true,
+      "has_e2e_complete": true,
+      "extra_keys_count": 26,
+      "updated_at": "2026-09-22T05:08:05.92161+00:00"
+    }
+  },
+  {
+    "path": "C. Throttled Reporter Only",
+    "get_count": 23,
+    "patch_count": 23,
+    "rpc_count": 0,
+    "total_http_requests": 46,
+    "blocking_wait_sec": 13.607,
+    "total_reporting_sec": 14.723,
+    "integrity": {
+      "status": "analysis_done",
+      "progress": 100,
+      "stage": "done",
+      "has_final_tracks": true,
+      "has_pass_events": true,
+      "has_e2e_complete": true,
+      "extra_keys_count": 24,
+      "updated_at": "2026-09-22T05:08:05.92161+00:00"
+    }
+  },
+  {
+    "path": "B. RPC Only",
+    "get_count": 0,
+    "patch_count": 0,
+    "rpc_count": 170,
+    "total_http_requests": 170,
+    "blocking_wait_sec": 57.488,
+    "total_reporting_sec": 57.491,
+    "integrity": {
+      "status": "analysis_done",
+      "progress": 100,
+      "stage": "done",
+      "has_final_tracks": true,
+      "has_pass_events": true,
+      "has_e2e_complete": true,
+      "extra_keys_count": 172,
+      "updated_at": "2026-09-22T05:09:19.519423+00:00"
+    }
+  },
+  {
+    "path": "A. Fallback GET + PATCH",
+    "get_count": 170,
+    "patch_count": 170,
+    "rpc_count": 0,
+    "total_http_requests": 340,
+    "blocking_wait_sec": 116.775,
+    "total_reporting_sec": 116.778,
+    "integrity": {
+      "status": "analysis_done",
+      "progress": 100,
+      "stage": "done",
+      "has_final_tracks": true,
+      "has_pass_events": true,
+      "has_e2e_complete": true,
+      "extra_keys_count": 172,
+      "updated_at": "2026-09-22T05:09:19.519423+00:00"
+    }
+  }
+]

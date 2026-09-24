@@ -108,7 +108,7 @@ export async function requireSessionOwner(req, res, sessionId, userJwt) {
         });
         const { data, error } = await userClient
             .from('sessions')
-            .select('id, user_id, video_url, status')
+            .select('id, user_id, video_url, status, extra, updated_at')
             .eq('id', sessionId)
             .maybeSingle();
         if (error) {

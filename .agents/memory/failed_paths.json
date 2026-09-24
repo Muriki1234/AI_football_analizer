@@ -30,5 +30,13 @@
     "action_taken": "Immediately demoted opportunity back to VALIDATED_SANDBOX. Established explicit Evidence Hierarchy Rule: Isolated component/network benchmarks only validate sandboxed prototypes (VALIDATED_SANDBOX); promotion to PRODUCTION_CANDIDATE strictly requires target hardware full-video E2E orchestrator verification.",
     "result": "Cleaned evidence boundary; preserved strict production gate integrity against 'component-evidence inflation'.",
     "reusable_lesson": "Real component-level network/DB benchmark != Full production E2E verification. Never promote to PRODUCTION_CANDIDATE without target hardware end-to-end full-video evidence."
+  },
+  {
+    "id": "PITFALL-05",
+    "observed_in_session": "session_night_20260923",
+    "evidence": "In infinite-horizon Markov value iteration for Expected Threat (xT), normalizing transition matrices with sum(T)=1.0 without a possession-loss absorption state causes threat to diffuse uniformly across the pitch, collapsing own-half and midfield threat to an unrealistic ~0.45.",
+    "action_taken": "Incorporated empirical pass/carry retention factor gamma = 0.78 (22% turnover rate), establishing the true decaying exponential spatial threat gradient (0.028 in own box -> 0.558 in 6-yard box).",
+    "result": "Restored strictly monotonic progressive threat delta (forward passes into Zone 14 yield +0.05~0.10 xT).",
+    "reusable_lesson": "Any pitch possession Markov model must enforce an absorbing turnover state (retention < 1.0) to prevent artificial infinite-walk value diffusion."
   }
 ]

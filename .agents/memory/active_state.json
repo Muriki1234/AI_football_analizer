@@ -1,17 +1,8 @@
 {
-  "session_id": "session_night_20260922_runpod_e2e",
-  "phase": "rediscovery",
-  "mainline": "bench_samurai_concurrency_matrix",
-  "secondary": "pipeline_bottleneck_audit_v86",
-  "current_action": "concurrency_matrix_harness_ready_and_timeline_audited",
-  "last_completed_action": "completed_step0_gap_audit_and_bench_samurai_harness",
-  "blocked_reason": null,
-  "next_action": "execute_bench_samurai_concurrency_matrix_on_runpod",
-  "updated_at": "2026-09-22T09:30:00+00:00",
-  "overnight_mode": true,
-  "started_at": "2026-09-21T22:11:01.091358+00:00",
-  "max_runtime_minutes": 240,
-  "consecutive_no_progress_count": 0,
-  "no_progress_limit": 3,
-  "budget_deadline": "2026-09-22T02:11:01.091358+00:00"
+  "session_id": "session_night_20260924_evidence_review",
+  "phase": "exploring",
+  "mainline": "samurai_bounded_memory_pool",
+  "secondary": "supabase_rpc_merge_session_extra_fix",
+  "notes": "Evidence review of RunPod production logs completed (cap=11 OOM crash vs cap=4 success). Mainline samurai_bounded_memory_pool and secondary supabase_rpc_merge_session_extra_fix remain strictly in VALIDATED_SANDBOX until full-video RunPod E2E matrix sweep is executed. Enhanced bench_samurai_concurrency_matrix.py to instrument contention vs unconstrained FPS.",
+  "updated_at": "2026-09-24T07:38:00.000000+00:00"
 }

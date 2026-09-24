@@ -286,6 +286,39 @@
       "rollback": false,
       "session_id": "session_night_20260921",
       "evidence": "修复前 test_02_on_the_fly_pass_detection_fallback 因 pass_networks 为空断言失败（0 >= 1），修复后 test_tactical_passing_coach 5/5 全绿，test_pass_event_detector 8/8 全绿，全流水线 192/192 测试全部通过。"
+    },
+    {
+      "id": "BUG_BENCH_SAMURAI_ENV_VAR_LEAK",
+      "bug_id": "BUG_BENCH_SAMURAI_ENV_VAR_LEAK",
+      "title": "bench_samurai_concurrency_matrix _execute_single_run 未在 finally 中还原 SAMURAI_MAX_PARALLEL 导致全局环境变量污染与动态内存并发度截断失效",
+      "description": "bench_samurai_concurrency_matrix 压测脚本在 _execute_single_run 中设置 os.environ['SAMURAI_MAX_PARALLEL'] = str(concurrency) 后未恢复原始环境变量，导致同进程内后续执行的 compute_samurai_concurrency_cap 始终读取到残留的硬编码并发度（如 4），错误覆写 RAM 梯度自适应计算（515GB RAM 计算出 4 而非 16，4K 分辨率计算出 2 而非 8），导致全量单测套件失败",
+      "root_cause": "缺少 try...finally 保证环境变量在测试/压测单次运行结束后被完全还原或弹出",
+      "files_changed": [
+        "server/pipeline/bench_samurai_concurrency_matrix.py"
+      ],
+      "tests_run": "backend/venv/bin/python -m unittest discover -s server -p 'test_*.py'",
+      "lines_changed": 12,
+      "tests_passed": true,
+      "rollback": false,
+      "session_id": "session_night_20260923",
+      "evidence": "修复前 test_09 与 test_10 失败（4 != 16, 2 != 8）；修复后在 finally 块中原子恢复 prev_env，运行全量 252/252 个测试全绿通过（Ran 252 tests in 12.388s, OK）。"
+    },
+    {
+      "id": "BUG_SELF_EVAL_TOTAL_OPS_NAME_ERROR",
+      "bug_id": "BUG_SELF_EVAL_TOTAL_OPS_NAME_ERROR",
+      "title": "self_eval.py audit() 未定义 total_ops 变量导致 NameError 崩溃",
+      "description": "self_eval.py 在 audit() 函数内计算 conversion_rate = round((validated_ops / total_ops * 100), 1) if total_ops else 0.0 时，未定义 total_ops 变量，直接触发 NameError: name 'total_ops' is not defined 导致五维实证评估引擎崩溃",
+      "root_cause": "重构 audit() 提取 graph['nodes'] 时遗漏了 total_ops = len(nodes) 赋值语句",
+      "files_changed": [
+        ".agents/skills/autonomous_expansion/scripts/self_eval.py",
+        ".agents/skills/autonomous_expansion/scripts/test_autonomous_expansion.py"
+      ],
+      "tests_run": "pytest .agents/skills/autonomous_expansion/scripts/test_autonomous_expansion.py",
+      "lines_changed": 2,
+      "tests_passed": true,
+      "rollback": false,
+      "session_id": "session_night_20260923",
+      "evidence": "修复前 python3 self_eval.py 报 NameError 退出码 1；修复后 total_ops = len(nodes) 正常统计，全套 38 个自治扩展单测全绿通过，audit() 成功输出五维实证报告。"
     }
   ]
 }

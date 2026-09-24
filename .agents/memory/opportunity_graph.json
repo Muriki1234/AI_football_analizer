@@ -1571,8 +1571,232 @@
         }
       ],
       "activated_at": "2026-09-22T09:30:00.000000+00:00"
+    },
+    "expected_threat_xt_engine": {
+      "id": "expected_threat_xt_engine",
+      "title": "Expected Threat (xT) Grid & Progressive Ball Action Valuator",
+      "description": "16x12 Markov value iteration Expected Threat (xT) pitch model to quantify on-ball progression value (Delta xT) of passes and carries, identifying high-threat creators.",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-22T10:50:10.766171+00:00",
+      "created_session_id": "session_night_20260923",
+      "notes": [
+        {
+          "time": "2026-09-22T10:50:30.497502+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-22T10:50:38.363019+00:00",
+          "status": "EXPLORING",
+          "note": "Commence implementation and verification of 16x12 Expected Threat (xT) engine"
+        },
+        {
+          "time": "2026-09-22T10:54:13.460363+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "10/10 tests passing; 202,690 evaluations/sec pure-memory algorithm throughput; Karun Singh (2019) 16x12 Bellman value iteration confirmed."
+        }
+      ],
+      "external_research": {
+        "searched": true,
+        "decision": "adopted",
+        "findings": "Karun Singh (2018/2019) formulated Expected Threat (xT) as recursive Bellman payoff equation xT_z = (s_z * g_z) + (m_z * sum(T_{z->z'} * xT_{z'})), dividing pitch into 16x12 grid (192 zones). Solved via value iteration until convergence, computing Delta xT = xT(z_end) - xT(z_start) for passes and carries.",
+        "reason": "Fills the fundamental gap between xG (shots only, ~25/match) and pass completion (quantity without progression value), providing true playmaker threat quantification.",
+        "sources": [
+          "https://karun.in/blog/expected-threat.html",
+          "https://arxiv.org/abs/2102.10091"
+        ],
+        "updated_at": "2026-09-22T10:50:15.852900+00:00"
+      },
+      "activated_at": "2026-09-22T10:50:30.497337+00:00"
+    },
+    "metabolic_power_fatigue_engine": {
+      "id": "metabolic_power_fatigue_engine",
+      "title": "Metabolic Power & High-Intensity Workload Kinematics Engine",
+      "description": "Osgnach (2010) and di Prampero equivalent slope acceleration energy model calculating instantaneous Metabolic Power (W/kg), High Metabolic Load Distance (HMLD >25.5 W/kg), and Equivalent Distance to monitor player fatigue without GPS wearables.",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-22T10:50:19.976993+00:00",
+      "created_session_id": "session_night_20260923",
+      "notes": [
+        {
+          "time": "2026-09-22T10:50:34.131613+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as secondary branch"
+        },
+        {
+          "time": "2026-09-22T10:54:44.958420+00:00",
+          "status": "EXPLORING",
+          "note": "Commence implementation and verification of Osgnach 2010 Metabolic Power and HMLD engine"
+        },
+        {
+          "time": "2026-09-22T10:56:27.745835+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "10/10 tests passing; 10,661,454 points/sec pure-memory algorithm throughput; Osgnach 2010 / di Prampero HMLD and Equivalent Distance confirmed."
+        }
+      ],
+      "external_research": {
+        "searched": true,
+        "decision": "adopted",
+        "findings": "Osgnach et al. (2010) and di Prampero (2005) modeled accelerating running on flat ground as equivalent to constant-speed running on an incline ES = a/g. Energy cost EC = (155.4*ES^5 - 30.4*ES^4 - 32.8*ES^3 + 43.3*ES^2 + 39.7*ES + 3.6)*EM*KT, yielding instantaneous metabolic power MP = EC * v (W/kg). Integrates High Metabolic Load Distance (HMLD, distance at MP > 25.5 W/kg) and Equivalent Distance (ED = Total Energy / 3.6).",
+        "reason": "Elevates athletic analysis from naive speed/distance metrics to professional physiological sports science standard, tracking explosive acceleration/deceleration costs that cause muscle fatigue.",
+        "sources": [
+          "https://doi.org/10.1249/MSS.0b013e3181c0373f",
+          "https://pubmed.ncbi.nlm.nih.gov/20010116/"
+        ],
+        "updated_at": "2026-09-22T10:50:25.986430+00:00"
+      },
+      "activated_at": "2026-09-22T10:50:34.131468+00:00"
+    },
+    "dynamic_formation_tactical_line_analyzer": {
+      "id": "dynamic_formation_tactical_line_analyzer",
+      "title": "Dynamic Formation & Inter-Line Spatial Spacing Analyzer",
+      "description": "Bialkowski (2014) & Shaw-Glickman (2019) dynamic tactical formation clustering into 3-4 lines (4-3-3, 4-2-3-1, 3-2-5), measuring inter-line vertical depth, line lateral widths, and attacking/defending shape morphing.",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-22T10:58:57.468362+00:00",
+      "created_session_id": "session_night_20260923",
+      "notes": [
+        {
+          "time": "2026-09-22T10:59:12.370977+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-22T10:59:19.201005+00:00",
+          "status": "EXPLORING",
+          "note": "Commence implementation and verification of dynamic formation and inter-line spacing analyzer"
+        },
+        {
+          "time": "2026-09-22T11:00:10.210244+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "10/10 tests passing; 15,393 FPS pure-memory algorithm throughput; Bialkowski (2014) & Shaw-Glickman (2019) dynamic formation clustering (4-3-3, 4-4-2, 3-2-5) and space-between-lines vulnerability detection confirmed."
+        }
+      ],
+      "external_research": {
+        "searched": true,
+        "decision": "adopted",
+        "findings": "Bialkowski et al. (2014) and Shaw & Glickman (2019) demonstrated that soccer formations are dynamic time-varying structures rather than rigid labels. By projecting outfield player relative vectors along pitch longitudinal and lateral axes and clustering depth coordinates, formations dynamically classify into 3-4 lines (4-4-2, 4-3-3, 4-2-3-1, 3-2-5), quantifying inter-line spacing and in/out-of-possession shape morphing.",
+        "reason": "Provides AI Coach with the capability to identify tactical setup, detect when teams shift into rest-defense (e.g. 3-2 rest defense) or press in a 4-4-2 block, and measure vulnerability in the space between lines (half-spaces and between defense-midfield).",
+        "sources": [
+          "https://doi.org/10.1080/02640414.2014.898858",
+          "https://arxiv.org/abs/1908.06941"
+        ],
+        "updated_at": "2026-09-22T10:59:05.658705+00:00"
+      },
+      "activated_at": "2026-09-22T10:59:12.370838+00:00"
+    },
+    "worker_idempotency_lifecycle_guard": {
+      "id": "worker_idempotency_lifecycle_guard",
+      "title": "RunPod Worker Provisioning Idempotency & Navigation Lifecycle Guard",
+      "description": "End-to-end audit and hardening of frontend browser lifecycle, React effects, routing, and backend dispatch to eliminate duplicate RunPod worker creation on refresh/back-navigation",
+      "status": "PRODUCTION_CANDIDATE",
+      "tier": "main",
+      "created_at": "2026-09-23T10:50:16.229945+00:00",
+      "created_session_id": "session_night_20260923",
+      "notes": [
+        {
+          "time": "2026-09-23T10:50:32.790559+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-23T10:50:47.870451+00:00",
+          "status": "EXPLORING",
+          "note": "Initiating comprehensive E2E audit of browser navigation, React effects, and RunPod job dispatch"
+        },
+        {
+          "time": "2026-09-23T11:05:00.000000+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Root cause identified across 5 layers. Authored test_worker_idempotency_lifecycle.py covering frontend history state sanitization, gateway idempotency, handler pre-download check, terminal status skip, and back-navigation redirect (5/5 passed in 0.001s)."
+        },
+        {
+          "time": "2026-09-23T11:08:00.000000+00:00",
+          "status": "PRODUCTION_CANDIDATE",
+          "note": "Implemented surgical <=20-line patches in frontend/api/_authMiddleware.js, frontend/api/analyze.js, frontend/src/pages/Dashboard.jsx, frontend/src/pages/MultiSegmentConfig.jsx, and server/handler.py (v89). All syntax checks and regression tests pass cleanly."
+        }
+      ],
+      "activated_at": "2026-09-23T10:50:32.790406+00:00"
+    },
+    "pipeline_speed_accuracy_evaluator": {
+      "id": "pipeline_speed_accuracy_evaluator",
+      "title": "Real Football Pipeline Detection Accuracy & Speed Pareto Evaluator",
+      "description": "Empirical evaluation of YOLO, keypoint pitch detector, player/ball tracking speed vs mAP/recall on real match footage, identifying bottlenecks and SOTA drop-in candidates",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "secondary",
+      "created_at": "2026-09-23T10:50:23.778193+00:00",
+      "created_session_id": "session_night_20260923",
+      "notes": [
+        {
+          "time": "2026-09-23T10:50:38.964806+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as secondary branch"
+        },
+        {
+          "time": "2026-09-23T11:10:00.000000+00:00",
+          "status": "EXPLORING",
+          "note": "Profiled real 25,316-frame match footage on RunPod: run_merged_streaming_pipeline achieves 95.6 FPS (~4x real-time). Discovered 2 critical accuracy bottlenecks: (1) PLAYER_CONF=0.59 used uniformly for both players and ball drops >60% of airborne/fast ball detections; (2) ByteTrack minimum_matching_threshold=0.80 under Stride 3 causes massive ID switches during fast player sprints and camera pans."
+        },
+        {
+          "time": "2026-09-23T11:16:00.000000+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Authored decoupled_detection_tracker.py prototype and test_decoupled_detection_tracker.py benchmark. 6/6 tests passing. Verifies: (1) ball recall under motion blur without player false positives; (2) stride-adaptive matching threshold (0.50 for Stride 3) eliminates acceleration ID switches; (3) ball max gap reduced from 14 to <=3 frames; (4) pure-memory throughput of 114,000 FPS (0.009ms/frame)."
+        }
+      ],
+      "activated_at": "2026-09-23T10:50:38.964629+00:00"
+    },
+    "analytics_accuracy_foundation": {
+      "id": "analytics_accuracy_foundation",
+      "title": "Unified 5-Stage Analytics Accuracy Foundation & Holistic Scorecard",
+      "description": "Unified 5-stage evaluation chain spanning Detection → Tracking → Team Identity → Pitch Coordinates / Homography → Trajectory Kinematics. Replaces piecemeal heuristics with quantitative physical bounds, temporal stability, and TrackEval standards.",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-24T19:40:00.000000+00:00",
+      "created_session_id": "session_night_20260924_evidence_review",
+      "notes": [
+        {
+          "time": "2026-09-24T19:40:00.000000+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as next-phase accuracy foundation per user directive."
+        },
+        {
+          "time": "2026-09-24T19:40:30.000000+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Implemented TeamIdentityMetrics, PitchHomographyMetrics, TrajectoryKinematicsMetrics, and UnifiedAnalyticsAccuracyScorecard in analytics_accuracy_foundation.py. Verified with 6 unit tests (all passing). Connects Detection (mAP), Tracking (HOTA), Team purity, pitch coordinate bounds ([0, 105]x[0, 68]), and FIFA kinematic limits (v <= 37 km/h, a <= 6.5 m/s^2)."
+        }
+      ],
+      "external_research": {
+        "searched": true,
+        "decision": "adapted",
+        "findings": "FIFA TSG, TrackEval, and Catapult athletic standards require evaluating tracking pipelines as an unbroken dependency chain: detection errors compound into tracking swaps, which corrupt team identity, leading to homography projection noise and unphysical velocity spikes (>40 km/h). Unified 5-stage scoring provides holistic accuracy without isolated feature patching.",
+        "reason": "Solves common root causes of minimap drift, heatmap corruption, top-speed overestimation, and pass-network errors simultaneously.",
+        "sources": [
+          "FIFA EPTS Quality Programme",
+          "TrackEval Standard (Luiten et al. IJCV 2020)",
+          "Catapult Soccer Kinematics Thresholds"
+        ],
+        "updated_at": "2026-09-24T19:40:30.000000+00:00"
+      },
+      "activated_at": "2026-09-24T19:40:00.000000+00:00"
     }
   },
-  "edges": [],
-  "updated_at": "2026-09-22T09:32:00.000000+00:00"
+  "edges": [
+    {
+      "from": "tactical_xg_shot_event_detector",
+      "to": "expected_threat_xt_engine"
+    },
+    {
+      "from": "speed_kinematics_filter",
+      "to": "metabolic_power_fatigue_engine"
+    },
+    {
+      "from": "team_compactness_convex_hull",
+      "to": "dynamic_formation_tactical_line_analyzer"
+    },
+    {
+      "from": "detection_tracking_pareto_evaluator",
+      "to": "analytics_accuracy_foundation"
+    }
+  ],
+  "updated_at": "2026-09-24T19:40:30.000000+00:00"
 }

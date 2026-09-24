@@ -891,22 +891,10 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
             else:
                 return {"error": f"no session {session_id!r} and no video_url"}
 
-        # 大部分任务都需要本地视频文件：
-        #   - GPU: detect_frame / track / analyze 直接读帧
-        #   - CPU: ai_summary 用 ffmpeg 切片再上传 Gemini
-        # 只有少数 CPU feature 任务（heatmap/charts 等）只读 tracks.pkl
-        # 不碰视频。简单起见：除了那些纯 stats 的 feature 之外，全部走下载。
-        _feat = (payload.get("feature") or "").strip()
-        canon_feat = resolve_canonical_feature(_feat)
-        _needs_video = not (action == "feature" and canon_feat in _STATS_ONLY_FEATURES)
-        if _needs_video:
-            _ensure_local_video(session_id, video_url or s.get("video_url", ""), sm)
-            s = sm.get_session(session_id)
-
-        # Protect against duplicate runs (e.g. from UI refresh)
+        # Protect against duplicate runs BEFORE downloading any video
         if action in ["track", "analyze"]:
             status = s.get("status")
-            if status in ["processing", "tracking", "analyzing"]:
+            if status in ["processing", "tracking", "analyzing", "analysis_done"]:
                 import datetime
                 updated_at_str = s.get("updated_at") or s.get("created_at")
                 is_zombie = False
@@ -922,9 +910,21 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
                         pass
                 
                 progress = s.get("progress") or 0
-                if not is_zombie and progress > 1:
-                    log.warning(f"Session {session_id} is already in '{status}' (progress={progress}%). Preventing duplicate run.")
-                    return {"error": f"Session is already {status}. Cannot start a new run."}
+                if not is_zombie and (progress > 1 or status in ["tracking", "analyzing", "analysis_done"]):
+                    log.warning(f"Session {session_id} is already in '{status}' (progress={progress}%). Preventing duplicate worker.")
+                    return {"error": f"Session is already {status}. Rejecting duplicate worker.", "already_running": True}
+
+        # 大部分任务都需要本地视频文件：
+        #   - GPU: detect_frame / track / analyze 直接读帧
+        #   - CPU: ai_summary 用 ffmpeg 切片再上传 Gemini
+        # 只有少数 CPU feature 任务（heatmap/charts 等）只读 tracks.pkl
+        # 不碰视频。简单起见：除了那些纯 stats 的 feature 之外，全部走下载。
+        _feat = (payload.get("feature") or "").strip()
+        canon_feat = resolve_canonical_feature(_feat)
+        _needs_video = not (action == "feature" and canon_feat in _STATS_ONLY_FEATURES)
+        if _needs_video:
+            _ensure_local_video(session_id, video_url or s.get("video_url", ""), sm)
+            s = sm.get_session(session_id)
 
         return fn(session_id, s, payload, sm)
     except Exception as exc:
@@ -934,7 +934,7 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
 
 # 打印版本 + worker mode：方便从 RunPod 日志确认部署的是哪个 commit。
 # 每次 git push 都会改这个常量 → 看到老值就知道 image 没 rebuild。
-HANDLER_VERSION = "v88"
+HANDLER_VERSION = "v89"
 
 # Print worker mode on import so RunPod logs make it obvious which pool we're on.
 print(f"[HANDLER] WORKER_MODE={WORKER_MODE} version={HANDLER_VERSION} "

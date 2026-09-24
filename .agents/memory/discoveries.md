@@ -35,3 +35,39 @@
 * **领域事实与理论解耦**：基于 Fernandez & Bornn (2018) 以及 Moura et al. (2012) 阵型时空动力学，将阵型紧凑度量化为外场球员 2D 凸包面积（$m^2$）、径向拉伸指数（Stretch Index，到质心的欧氏距离均值，纵向/横向分离）及双队质心距离。
 * **孤立门将动态剔除算法**：通过边界极大空隙差（Left Gap vs Right Gap）与进攻朝向解耦，自动剔除拖后门将，防止其虚假拉伸后防线凸包面积（在 $50m \times 40m$ 阵型中准确还原 $2000m^2$ 外场形状）。
 * **实证基准与科学边界**：`test_team_compactness_engine.py` 8/8 单测全绿，纯内存凸包吞吐量达 12,467 帧/秒。支持进攻扩张（1200-2200 $m^2$）与防守压缩（400-800 $m^2$）的相位扩张比自动计算，并生成双面板时序图表。
+
+### 7. 期望威胁 (xT) 马尔可夫贝尔曼网格价值迭代与球权转移吸积机制 (Expected Threat xT & Progressive Action Valuator)
+* **文献与理论事实**：基于 Karun Singh (2018/2019) 与 Javier Fernández et al. (2021) 空间持有价值模型，解决传统足球数据中“只有射门有 xG，而占全场 98% 的 800+ 次传球推进缺乏定量价值衡量”的断层。在 105m×68m 球场上构建 16×12 离散化网格（192 个战术微元），求解递推贝尔曼收益方程：
+  $$xT(z) = s_z \cdot g_z + m_z \cdot \gamma \sum_{z'} T_{z \to z'} \cdot xT(z')$$
+* **实证踩坑与吸收态转移修正**：若忽略球权丢失率（即设转移矩阵行和恒等于 1.0），无折扣马尔可夫随机游走会导致全场扩散平衡（后场与中场虚高收敛至 ~0.45）。引入真实足球单次传球控球保留率 $\gamma = 0.78$（对应约 22% 拦截与失误率）后，精确还原出从本方禁区（0.028）到后场（0.038）、中场（0.061）、进攻三区 14 区（0.125）至对方小禁区（0.558）的严格单调上升时空梯度，使向前推进传球产生稳定的 $\Delta xT \approx +0.05 \sim +0.10$。
+* **实证基准与科学边界**：`test_expected_threat_xt_engine.py` 10/10 单元测试全绿通过。纯内存算法基准测试吞吐量达到 202,690 次动作评估/秒（50,000 次操作耗时 246.68ms），并生成广播级 2D 俯视威胁热力图与推进向量图。
+
+### 8. Osgnach (2010) 代谢功率 (Metabolic Power) 与等效坡度加速度疲劳动力学 (Metabolic Power & HMLD Kinematics)
+* **文献与理论事实**：基于 Cristian Osgnach 与 Pietro Enrico di Prampero (2010, MSSE) 等效坡度 (Equivalent Slope, ES) 理论，运动员在平地前向加速等效于在倾角为 $\alpha$ 的斜坡上以恒速做功：
+  $$g' = \sqrt{a_f^2 + g^2}, \quad ES = \tan \alpha = \frac{a_f}{g}$$
+  结合 Minetti et al. (2002) 五次多项式：
+  $$EC = (155.4 ES^5 - 30.4 ES^4 - 43.3 ES^3 + 46.3 ES^2 + 19.5 ES + 3.6) \cdot \frac{g'}{g} \cdot KT$$
+  计算瞬时代谢功率 $P_{met} = EC \cdot v$ (W/kg)。
+* **实证突破与对传统速度指标的降维打击**：传统速度门槛（如高速奔跑 $>19.8 km/h$）会完全漏掉球员从 1.5 m/s 剧烈提速至 3.5 m/s（$a = 3.5 m/s^2$）的大量高耗能爆发；代谢功率模型成功捕捉到此时 $P_{met} > 25.5 W/kg$，将其精准计入高代谢负荷距离（HMLD, High Metabolic Load Distance）。同时，通过等效距离指标 $EDI = ED / \text{Actual Distance}$（走走停停爆发性跑动产生 $EDI > 1.15$），直观揭示了加减速带来的“额外生理账单”。
+* **实证基准与科学边界**：`test_metabolic_power_fatigue_engine.py` 10/10 单元测试全绿通过。纯内存算法基准测试吞吐量达到 10,661,454 点/秒（50,000 点耗时 4.69ms），并生成包含 5 区能量分布与生理负荷总览的仪表盘图表。
+
+### 10. 真实 RunPod 全视频 GPU 争用与内存伸缩实证 (SAMURAI Concurrency Contention & OOM Threshold)
+* **实证现象与客观事实**：基于 25,316 帧（14.1 分钟）真实 1080p 比赛视频在同一 NVIDIA RTX A5000（24GB VRAM，503GB Host RAM）上的两次生产运行对比：
+  1. **并发度 C=11（Run A, worker `91ujs9ikyqeab1`）**：设置 cap=16 触发 11 个切片全并发，流水线启动 84 秒后被 Linux OOM killer 强制 SIGKILL 终止（exit code 137）。实证证明单切片内存开销与多进程并发呈近似线性累加，单节点无限制并发必然导致 OOM 崩溃。
+  2. **并发度 C=4（Run B, worker `hq087wf2auxm50`）**：分三波执行（4+4+3），全流程 439.4 秒成功跑通，Host RAM 峰值稳定在 99.7 GB（占 503GB 主机的 19.3%），SAMURAI 累计耗时 240.55s，YOLO 耗时 439.38s（平均 102.0 FPS），并发节省 240.55s（35.4%）。
+* **CUDA 算力争用关键拐点暴露**：
+  - 在纯单任务或波次收尾阶段，YOLO 推理速度稳定在 **150~187 FPS**。
+  - 在 4 个 SAMURAI 进程平稳并行期，YOLO 降至 **108~150 FPS**（算力争用轻微）。
+  - 在波次交替切换（Wave 1→Wave 2 切片交接，短暂并发重叠）时，YOLO 出现严重算力降速至 **38~43 FPS**（持续约 49 秒）。
+* **科学结论与工程边界**：证明“无脑提高 SAMURAI 并发”是错误的伪优化；最优并发点是 SAMURAI 缩短时长、YOLO 算力争用降速与 Host RAM 峰值安全三者的帕累托折中，必须通过参数矩阵完整跑测。
+
+### 11. 统一五阶足球时空视觉分析基准架构 (Unified 5-Stage Analytics Accuracy Foundation)
+* **领域痛点与理论洞察**：过往实践中，小地图飘移、热力图异常弥散、最高速度虚高（超 40 km/h）以及跑动距离过量累加（5倍误差）常被作为孤立的前端或任务级 bug 分别修补打补丁。但理论与数据流上，它们共享唯一的底层因果依赖链：
+  $$\text{Detection} \longrightarrow \text{Tracking} \longrightarrow \text{Team Identity} \longrightarrow \text{Pitch Coordinates / Homography} \longrightarrow \text{Trajectory Kinematics}$$
+  前序阶梯的极小抖动（如 ByteTrack 单次 ID 跳跃或单帧透视变换噪点）会在后续阶梯被微分放大为几十倍的速度突变与队伍反转。
+* **统一评测闭环与独立原型构建**：在 `analytics_accuracy_foundation.py` 中实现了贯穿全链条的量化指标体系统：
+  1. **Team Identity**：队伍标签翻转率（Flip Rate）与时间多数派纯度（Majority Purity）。
+  2. **Pitch Homography**：标准球场边界约束（[0, 105]m × [0, 68]m）合法率与亚毫秒级瞬时瞬变（Teleportation Jumps >12 m/s）检出率。
+  3. **Trajectory Kinematics**：FIFA/Catapult 生理速度硬约束（$v \le 37.0$ km/h）与加减速物理界限（$a \le 6.5$ m/s$^2$）。
+  4. **Unified Scorecard**：融合 mAP/F1、HOTA、Team Purity、Homography Bounds 与 Kinematics 物理合理性，输出加权整体精度指数（Holistic Accuracy Index, HAI）。
+* **实证基准与科学边界**：`test_analytics_accuracy_foundation.py` 6/6 单测全绿通过，端到端完整闭环验证成功。为后续在全量 25k 帧与 Golden Set 750 帧上同时优化 Speed + Accuracy + Resource Efficiency 奠定了统一评价基准。

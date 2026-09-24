@@ -545,3 +545,104 @@
 [2026-09-22 09:31:06] [session_night_20260922_runpod_e2e] [REDISCOVERY] [EVENT=CHECKPOINT] Completed STEP 0 36-min gap audit: verified worker idle in pool, no AI summary on GPU worker.
 [2026-09-22 09:31:06] [session_night_20260922_runpod_e2e] [GRAPH] [EVENT=OPPORTUNITY_CREATED] opportunity=samurai_concurrency_matrix_benchmark status=VALIDATED_SANDBOX
 [2026-09-22 09:31:06] [session_night_20260922_runpod_e2e] [REDISCOVERY] [EVENT=CHECKPOINT] Author and verify bench_samurai_concurrency_matrix.py (22 tests passing). Awaiting RunPod execution.
+[2026-09-22 22:45:36] [session_night_20260922_runpod_e2e] [GRAPH] [EVENT=EXTERNAL_RESEARCH] opportunity=sample_op decision=hybrid sources=2
+[2026-09-22 22:45:36] [test_sess] [RECON] [EVENT=SESSION_END] Overnight mode ended explicitly.
+[2026-09-22 22:45:36] [test_sess] [COMPLETE] [EVENT=CHECKPOINT] current_action=all_opportunities_validated next_action=morning_report_delivered
+[2026-09-22 22:45:36] [test_sess] [DISCOVERY] [EVENT=CHECKPOINT] [⚠️ [GUARD_INTERCEPT] Intercepted attempt to set phase='complete' while overnight budget remains (0.0m / 240.0m). Mandating Rediscovery Phase instead of early exit.]
+[2026-09-22 22:45:36] [test_sess_deadline] [RECON] [EVENT=SESSION_START] session=test_sess_deadline overnight=True budget=180m deadline=2026-09-22T13:45:36.134163+00:00 mainline=none secondary=none
+[2026-09-22 22:45:36] [test_finalize_sess] [EXPLORING] [EVENT=SESSION_END] Overnight mode ended explicitly.
+[2026-09-22 22:45:36] [test_finalize_sess] [COMPLETED] [EVENT=SESSION_FINALIZED] Session finalized via canonical shutdown sequence.
+[2026-09-22 22:46:16] [session_night_20260922_runpod_e2e] [GRAPH] [EVENT=EXTERNAL_RESEARCH] opportunity=sample_op decision=hybrid sources=2
+[2026-09-22 22:46:16] [test_sess] [RECON] [EVENT=SESSION_END] Overnight mode ended explicitly.
+[2026-09-22 22:46:16] [test_sess] [COMPLETE] [EVENT=CHECKPOINT] current_action=all_opportunities_validated next_action=morning_report_delivered
+[2026-09-22 22:46:16] [test_sess] [DISCOVERY] [EVENT=CHECKPOINT] [⚠️ [GUARD_INTERCEPT] Intercepted attempt to set phase='complete' while overnight budget remains (0.0m / 240.0m). Mandating Rediscovery Phase instead of early exit.]
+[2026-09-22 22:46:16] [test_sess_deadline] [RECON] [EVENT=SESSION_START] session=test_sess_deadline overnight=True budget=180m deadline=2026-09-22T13:46:16.538558+00:00 mainline=none secondary=none
+[2026-09-22 22:46:16] [test_finalize_sess] [EXPLORING] [EVENT=SESSION_END] Overnight mode ended explicitly.
+[2026-09-22 22:46:16] [test_finalize_sess] [COMPLETED] [EVENT=SESSION_FINALIZED] Session finalized via canonical shutdown sequence.
+[2026-09-22 22:46:25] [session_night_20260922_runpod_e2e] [GRAPH] [EVENT=EXTERNAL_RESEARCH] opportunity=sample_op decision=hybrid sources=2
+[2026-09-22 22:46:25] [test_sess] [RECON] [EVENT=SESSION_END] Overnight mode ended explicitly.
+[2026-09-22 22:46:25] [test_sess] [COMPLETE] [EVENT=CHECKPOINT] current_action=all_opportunities_validated next_action=morning_report_delivered
+[2026-09-22 22:46:25] [test_sess] [DISCOVERY] [EVENT=CHECKPOINT] [⚠️ [GUARD_INTERCEPT] Intercepted attempt to set phase='complete' while overnight budget remains (0.0m / 240.0m). Mandating Rediscovery Phase instead of early exit.]
+[2026-09-22 22:46:25] [test_sess_deadline] [RECON] [EVENT=SESSION_START] session=test_sess_deadline overnight=True budget=180m deadline=2026-09-22T13:46:25.562646+00:00 mainline=none secondary=none
+[2026-09-22 22:46:25] [test_finalize_sess] [EXPLORING] [EVENT=SESSION_END] Overnight mode ended explicitly.
+[2026-09-22 22:46:25] [test_finalize_sess] [COMPLETED] [EVENT=SESSION_FINALIZED] Session finalized via canonical shutdown sequence.
+[2026-09-22 22:48:21] [session_night_20260923] [REDISCOVERY] [EVENT=SESSION_START] session=session_night_20260923 overnight=True budget=240m deadline=2026-09-22T14:48:21.803364+00:00 mainline=none secondary=none
+[2026-09-22 22:48:37] [session_night_20260923] [REDISCOVERY] [EVENT=STATE_RECONCILE] Reconciled active state with opportunity graph.
+[2026-09-22 22:50:10] [session_night_20260923] [GRAPH] [EVENT=OPPORTUNITY_CREATED] opportunity=expected_threat_xt_engine status=PARKED
+[2026-09-22 22:50:15] [session_night_20260923] [GRAPH] [EVENT=EXTERNAL_RESEARCH] opportunity=expected_threat_xt_engine decision=adopted sources=2
+[2026-09-22 22:50:19] [session_night_20260923] [GRAPH] [EVENT=OPPORTUNITY_CREATED] opportunity=metabolic_power_fatigue_engine status=PARKED
+[2026-09-22 22:50:25] [session_night_20260923] [GRAPH] [EVENT=EXTERNAL_RESEARCH] opportunity=metabolic_power_fatigue_engine decision=adopted sources=2
+[2026-09-22 22:50:30] [session_night_20260923] [GRAPH] [EVENT=BRANCH_ACTIVATED] tier=main opportunity=expected_threat_xt_engine
+[2026-09-22 22:50:30] [session_night_20260923] [EXPLORING] [EVENT=STATE_SYNC] opportunity=expected_threat_xt_engine mainline=expected_threat_xt_engine secondary=none phase=exploring
+[2026-09-22 22:50:30] [session_night_20260923] [GRAPH] [EVENT=OPPORTUNITY_TRANSITION] opportunity=expected_threat_xt_engine from=PARKED to=ACTIVATED
+[2026-09-22 22:50:34] [session_night_20260923] [GRAPH] [EVENT=BRANCH_ACTIVATED] tier=secondary opportunity=metabolic_power_fatigue_engine
+[2026-09-22 22:50:34] [session_night_20260923] [EXPLORING] [EVENT=STATE_SYNC] opportunity=metabolic_power_fatigue_engine mainline=expected_threat_xt_engine secondary=metabolic_power_fatigue_engine phase=exploring
+[2026-09-22 22:50:34] [session_night_20260923] [GRAPH] [EVENT=OPPORTUNITY_TRANSITION] opportunity=metabolic_power_fatigue_engine from=PARKED to=ACTIVATED
+[2026-09-22 22:50:38] [session_night_20260923] [EXPLORING] [EVENT=STATE_SYNC] opportunity=expected_threat_xt_engine mainline=expected_threat_xt_engine secondary=metabolic_power_fatigue_engine phase=exploring
+[2026-09-22 22:50:38] [session_night_20260923] [GRAPH] [EVENT=OPPORTUNITY_TRANSITION] opportunity=expected_threat_xt_engine from=ACTIVATED to=EXPLORING
+[2026-09-22 22:50:43] [session_night_20260923] [EXPLORING] [EVENT=CHECKPOINT] Implementing standalone Expected Threat (xT) engine with 16x12 Markov value iteration
+[2026-09-22 22:54:13] [session_night_20260923] [GRAPH] [EVENT=BRANCH_DEACTIVATED] tier=main opportunity=expected_threat_xt_engine status=VALIDATED_SANDBOX
+[2026-09-22 22:54:13] [session_night_20260923] [EXPLORING] [EVENT=STATE_SYNC] opportunity=expected_threat_xt_engine mainline=none secondary=metabolic_power_fatigue_engine phase=exploring
+[2026-09-22 22:54:13] [session_night_20260923] [GRAPH] [EVENT=OPPORTUNITY_TRANSITION] opportunity=expected_threat_xt_engine from=EXPLORING to=VALIDATED_SANDBOX
+[2026-09-22 22:54:44] [session_night_20260923] [EXPLORING] [EVENT=STATE_SYNC] opportunity=metabolic_power_fatigue_engine mainline=none secondary=metabolic_power_fatigue_engine phase=exploring
+[2026-09-22 22:54:44] [session_night_20260923] [GRAPH] [EVENT=OPPORTUNITY_TRANSITION] opportunity=metabolic_power_fatigue_engine from=ACTIVATED to=EXPLORING
+[2026-09-22 22:54:50] [session_night_20260923] [EXPLORING] [EVENT=CHECKPOINT] Exploring Osgnach 2010 Metabolic Power and High Metabolic Load Distance engine
+[2026-09-22 22:56:27] [session_night_20260923] [GRAPH] [EVENT=BRANCH_DEACTIVATED] tier=secondary opportunity=metabolic_power_fatigue_engine status=VALIDATED_SANDBOX
+[2026-09-22 22:56:27] [session_night_20260923] [REDISCOVERY] [EVENT=STATE_SYNC] opportunity=metabolic_power_fatigue_engine mainline=none secondary=none phase=rediscovery
+[2026-09-22 22:56:27] [session_night_20260923] [GRAPH] [EVENT=OPPORTUNITY_TRANSITION] opportunity=metabolic_power_fatigue_engine from=EXPLORING to=VALIDATED_SANDBOX
+[2026-09-22 22:56:44] [session_night_20260923] [REDISCOVERY] [EVENT=STATE_RECONCILE] Reconciled active state with opportunity graph.
+[2026-09-22 22:56:57] [session_night_20260923] [GRAPH] [EVENT=EXTERNAL_RESEARCH] opportunity=sample_op decision=hybrid sources=2
+[2026-09-22 22:56:57] [test_sess] [RECON] [EVENT=SESSION_END] Overnight mode ended explicitly.
+[2026-09-22 22:56:57] [test_sess] [COMPLETE] [EVENT=CHECKPOINT] current_action=all_opportunities_validated next_action=morning_report_delivered
+[2026-09-22 22:56:57] [test_sess] [DISCOVERY] [EVENT=CHECKPOINT] [⚠️ [GUARD_INTERCEPT] Intercepted attempt to set phase='complete' while overnight budget remains (0.0m / 240.0m). Mandating Rediscovery Phase instead of early exit.]
+[2026-09-22 22:56:57] [test_sess_deadline] [RECON] [EVENT=SESSION_START] session=test_sess_deadline overnight=True budget=180m deadline=2026-09-22T13:56:57.382367+00:00 mainline=none secondary=none
+[2026-09-22 22:56:57] [test_finalize_sess] [EXPLORING] [EVENT=SESSION_END] Overnight mode ended explicitly.
+[2026-09-22 22:56:57] [test_finalize_sess] [COMPLETED] [EVENT=SESSION_FINALIZED] Session finalized via canonical shutdown sequence.
+[2026-09-22 22:58:57] [session_night_20260923] [GRAPH] [EVENT=OPPORTUNITY_CREATED] opportunity=dynamic_formation_tactical_line_analyzer status=PARKED
+[2026-09-22 22:59:05] [session_night_20260923] [GRAPH] [EVENT=EXTERNAL_RESEARCH] opportunity=dynamic_formation_tactical_line_analyzer decision=adopted sources=2
+[2026-09-22 22:59:12] [session_night_20260923] [GRAPH] [EVENT=BRANCH_SWITCHED] tier=main from=expected_threat_xt_engine to=dynamic_formation_tactical_line_analyzer
+[2026-09-22 22:59:12] [session_night_20260923] [EXPLORING] [EVENT=STATE_SYNC] opportunity=dynamic_formation_tactical_line_analyzer mainline=dynamic_formation_tactical_line_analyzer secondary=none phase=exploring
+[2026-09-22 22:59:12] [session_night_20260923] [GRAPH] [EVENT=OPPORTUNITY_TRANSITION] opportunity=dynamic_formation_tactical_line_analyzer from=PARKED to=ACTIVATED
+[2026-09-22 22:59:19] [session_night_20260923] [EXPLORING] [EVENT=STATE_SYNC] opportunity=dynamic_formation_tactical_line_analyzer mainline=dynamic_formation_tactical_line_analyzer secondary=none phase=exploring
+[2026-09-22 22:59:19] [session_night_20260923] [GRAPH] [EVENT=OPPORTUNITY_TRANSITION] opportunity=dynamic_formation_tactical_line_analyzer from=ACTIVATED to=EXPLORING
+[2026-09-22 22:59:24] [session_night_20260923] [EXPLORING] [EVENT=CHECKPOINT] Implementing dynamic tactical formation clustering and inter-line spacing analyzer
+[2026-09-22 23:00:10] [session_night_20260923] [GRAPH] [EVENT=BRANCH_DEACTIVATED] tier=main opportunity=dynamic_formation_tactical_line_analyzer status=VALIDATED_SANDBOX
+[2026-09-22 23:00:10] [session_night_20260923] [REDISCOVERY] [EVENT=STATE_SYNC] opportunity=dynamic_formation_tactical_line_analyzer mainline=none secondary=none phase=rediscovery
+[2026-09-22 23:00:10] [session_night_20260923] [GRAPH] [EVENT=OPPORTUNITY_TRANSITION] opportunity=dynamic_formation_tactical_line_analyzer from=EXPLORING to=VALIDATED_SANDBOX
+[2026-09-22 23:00:31] [session_night_20260923] [REDISCOVERY] [EVENT=STATE_RECONCILE] Reconciled active state with opportunity graph.
+[2026-09-23 13:44:14] [test_finalize_sess] [EXPLORING] [EVENT=SESSION_END] Overnight mode ended explicitly.
+[2026-09-23 13:44:14] [test_finalize_sess] [COMPLETED] [EVENT=SESSION_FINALIZED] Session finalized via canonical shutdown sequence.
+[2026-09-23 13:44:14] [test_sess] [RECON] [EVENT=SESSION_END] Overnight mode ended explicitly.
+[2026-09-23 13:44:14] [test_sess] [COMPLETE] [EVENT=CHECKPOINT] current_action=all_opportunities_validated next_action=morning_report_delivered
+[2026-09-23 13:44:14] [test_sess] [DISCOVERY] [EVENT=CHECKPOINT] [⚠️ [GUARD_INTERCEPT] Intercepted attempt to set phase='complete' while overnight budget remains (0.0m / 240.0m). Mandating Rediscovery Phase instead of early exit.]
+[2026-09-23 13:44:14] [session_night_20260923] [GRAPH] [EVENT=EXTERNAL_RESEARCH] opportunity=sample_op decision=hybrid sources=2
+[2026-09-23 13:44:14] [test_sess_deadline] [RECON] [EVENT=SESSION_START] session=test_sess_deadline overnight=True budget=180m deadline=2026-09-23T04:44:14.887354+00:00 mainline=none secondary=none
+[2026-09-23 22:50:16] [session_night_20260923] [GRAPH] [EVENT=OPPORTUNITY_CREATED] opportunity=worker_idempotency_lifecycle_guard status=PARKED
+[2026-09-23 22:50:23] [session_night_20260923] [GRAPH] [EVENT=OPPORTUNITY_CREATED] opportunity=pipeline_speed_accuracy_evaluator status=PARKED
+[2026-09-23 22:50:32] [session_night_20260923] [GRAPH] [EVENT=BRANCH_SWITCHED] tier=main from=dynamic_formation_tactical_line_analyzer to=worker_idempotency_lifecycle_guard
+[2026-09-23 22:50:32] [session_night_20260923] [EXPLORING] [EVENT=STATE_SYNC] opportunity=worker_idempotency_lifecycle_guard mainline=worker_idempotency_lifecycle_guard secondary=none phase=exploring
+[2026-09-23 22:50:32] [session_night_20260923] [GRAPH] [EVENT=OPPORTUNITY_TRANSITION] opportunity=worker_idempotency_lifecycle_guard from=PARKED to=ACTIVATED
+[2026-09-23 22:50:38] [session_night_20260923] [GRAPH] [EVENT=BRANCH_SWITCHED] tier=secondary from=metabolic_power_fatigue_engine to=pipeline_speed_accuracy_evaluator
+[2026-09-23 22:50:38] [session_night_20260923] [EXPLORING] [EVENT=STATE_SYNC] opportunity=pipeline_speed_accuracy_evaluator mainline=worker_idempotency_lifecycle_guard secondary=pipeline_speed_accuracy_evaluator phase=exploring
+[2026-09-23 22:50:38] [session_night_20260923] [GRAPH] [EVENT=OPPORTUNITY_TRANSITION] opportunity=pipeline_speed_accuracy_evaluator from=PARKED to=ACTIVATED
+[2026-09-23 22:50:47] [session_night_20260923] [EXPLORING] [EVENT=STATE_SYNC] opportunity=worker_idempotency_lifecycle_guard mainline=worker_idempotency_lifecycle_guard secondary=pipeline_speed_accuracy_evaluator phase=exploring
+[2026-09-23 22:50:47] [session_night_20260923] [GRAPH] [EVENT=OPPORTUNITY_TRANSITION] opportunity=worker_idempotency_lifecycle_guard from=ACTIVATED to=EXPLORING
+[2026-09-23 23:05:00] [session_night_20260923] [EXPLORING] [EVENT=CHECKPOINT] Authored test_worker_idempotency_lifecycle.py covering 5-layer reproduction & regression (refresh, back-navigation, gateway idempotency, handler pre-download check, history state sanitization). 5/5 tests passed in 0.001s.
+[2026-09-23 23:08:00] [session_night_20260923] [GRAPH] [EVENT=OPPORTUNITY_TRANSITION] opportunity=worker_idempotency_lifecycle_guard from=EXPLORING to=PRODUCTION_CANDIDATE
+[2026-09-23 23:08:00] [session_night_20260923] [EXPLORING] [EVENT=STATE_SYNC] opportunity=worker_idempotency_lifecycle_guard mainline=worker_idempotency_lifecycle_guard secondary=pipeline_speed_accuracy_evaluator phase=exploring
+[2026-09-23 23:10:00] [session_night_20260923] [GRAPH] [EVENT=OPPORTUNITY_TRANSITION] opportunity=pipeline_speed_accuracy_evaluator from=ACTIVATED to=EXPLORING
+[2026-09-23 23:10:00] [session_night_20260923] [CONSOLIDATION] [EVENT=STATE_SYNC] opportunity=pipeline_speed_accuracy_evaluator mainline=worker_idempotency_lifecycle_guard secondary=pipeline_speed_accuracy_evaluator phase=consolidation
+[2026-09-23 23:10:00] [session_night_20260923] [CONSOLIDATION] [EVENT=CHECKPOINT] Profiled RunPod 25k frame execution: 95.6 FPS (~4x real-time). Identified 2 critical accuracy bottlenecks: uniform PLAYER_CONF=0.59 dropping balls, and ByteTrack match_thresh=0.80 under Stride 3.
+
+[2026-09-24 19:12:00] [session_night_20260924_evidence_review] [IDLE] [EVENT=SESSION_START] session=session_night_20260924_evidence_review mainline=samurai_concurrency_matrix_benchmark secondary=supabase_rpc_merge_session_extra_fix
+[2026-09-24 19:12:05] [session_night_20260924_evidence_review] [RECON] [EVENT=CHECKPOINT] Resuming Autonomous Expansion: reading 2 RunPod production logs (C=11 OOM crash, C=4 success) for session fc54b442-3891-4cd4-8869-f6efef0d6583
+[2026-09-24 19:14:00] [session_night_20260924_evidence_review] [RECON] [EVENT=CHECKPOINT] Read opportunity_graph.json (1764 lines, all nodes), session_log.md, failed_paths.json. Confirmed all opportunities at VALIDATED_SANDBOX. 4 opportunities at INTEGRATED (human-authorized).
+[2026-09-24 19:16:00] [session_night_20260924_evidence_review] [EXPLORING] [EVENT=CHECKPOINT] Deep analysis of RunPod logs: Run A (cap=16→11 parallel) OOM exit 137 after 84s. Run B (cap=4→4+4+3 waves) success in 439.4s E2E, 240.5s SAMURAI, 102 FPS avg YOLO.
+[2026-09-24 19:18:00] [session_night_20260924_evidence_review] [EXPLORING] [EVENT=CHECKPOINT] Created comprehensive evidence review artifact: YOLO contention FPS curve (38-150 during C=4 waves), pipeline bottleneck taxonomy (4 tiers), comparative C=10 vs C=4 vs C=11 analysis.
+[2026-09-24 19:20:00] [session_night_20260924_evidence_review] [EXPLORING] [EVENT=CHECKPOINT] Enhanced bench_samurai_concurrency_matrix.py with per-chunk YOLO FPS instrumentation: contention vs unconstrained phase detection via SAMURAI done timestamp. All 13 tests pass (3 benchmark + 10 scheduler).
+[2026-09-24 19:38:00] [session_night_20260924_evidence_review] [DISCOVERY] [EVENT=CHECKPOINT] Mandatory Rediscovery Phase initiated per user directive. Investigated common root causes connecting minimap, heatmap, top speed, and running distance.
+[2026-09-24 19:40:00] [session_night_20260924_evidence_review] [GRAPH] [EVENT=OPPORTUNITY_CREATED] opportunity=analytics_accuracy_foundation status=ACTIVATED
+[2026-09-24 19:40:30] [session_night_20260924_evidence_review] [EXPLORING] [EVENT=CHECKPOINT] Implemented server/pipeline/analytics_accuracy_foundation.py: TeamIdentityMetrics (purity/flips), PitchHomographyMetrics (bounds/teleports), TrajectoryKinematicsMetrics (speed/accel violations), UnifiedAnalyticsAccuracyScorecard (Holistic Accuracy Index).
+[2026-09-24 19:41:00] [session_night_20260924_evidence_review] [GRAPH] [EVENT=OPPORTUNITY_TRANSITION] opportunity=analytics_accuracy_foundation from=ACTIVATED to=VALIDATED_SANDBOX
+[2026-09-24 19:41:00] [session_night_20260924_evidence_review] [VALIDATING] [EVENT=CHECKPOINT] 6/6 unit tests passed in test_analytics_accuracy_foundation.py. Full 5-suite regression clean (30/30 passed).
+[2026-09-24 19:41:30] [session_night_20260924_evidence_review] [REDISCOVERY] [EVENT=CHECKPOINT] Documented Discoveries #10 (RunPod C=11 OOM vs C=4 wave transition contention) and #11 (Unified 5-Stage Analytics Accuracy Foundation) in discoveries.md.

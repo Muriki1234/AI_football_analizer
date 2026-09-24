@@ -26,6 +26,28 @@ export default async function handler(req, res) {
   const session = await requireSessionOwner(req, res, sessionId, jwt);
   if (!session) return;
 
+  // Idempotency: prevent duplicate RunPod worker provisioning on refresh / back navigation
+  if ((input.action === 'track' || input.action === 'analyze') && !input.force_retry) {
+    const ACTIVE = ['queued', 'processing', 'tracking', 'analyzing', 'samurai_multi_pending'];
+    if (ACTIVE.includes(session.status)) {
+      const lastUpdate = new Date(session.updated_at || Date.now()).getTime();
+      if ((Date.now() - lastUpdate) < 20 * 60 * 1000) {
+        return res.status(200).json({
+          id: session.extra?.runpod_job_id || `active-${session.status}`,
+          status: session.status,
+          already_running: true,
+        });
+      }
+    }
+    if (session.status === 'analysis_done') {
+      return res.status(200).json({
+        status: 'analysis_done',
+        message: 'Analysis already completed for this session',
+        already_running: true,
+      });
+    }
+  }
+
   // 3) 不信任前端传来的 video_url：从 DB 取服务端可信版本。
   //    之前用户 A 能 POST {input: {session_id: B 的 id, video_url: 任意 URL}} —
   //    后端 SSRF 防线还会再拦一次，但这里直接断绝。

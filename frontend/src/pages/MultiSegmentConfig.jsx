@@ -95,6 +95,10 @@ export default function MultiSegmentConfig() {
         (async () => {
             try {
                 const s = await getSession(sessionId);
+                if (['queued', 'processing', 'tracking', 'analyzing', 'analysis_done'].includes(s?.status)) {
+                    navigate(`/dashboard?sessionId=${sessionId}`, { replace: true, state: { sessionId, videoId: sessionId } });
+                    return;
+                }
                 const fps = Number(s?.video_fps) || 25;
                 let total = Number(s?.total_frames) || 0;
                 let durationSec = total > 0 ? total / fps : 0;
