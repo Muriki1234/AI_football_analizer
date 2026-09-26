@@ -669,5 +669,49 @@
       "action_count": 0,
       "event_count": 0
     }
+  },
+  {
+    "timestamp": "2026-09-24T11:24:34.203953+00:00",
+    "session_id": "session_night_20260924_traditional_expansion",
+    "version": "v5.4",
+    "status": "CONFIRMED",
+    "metrics": {
+      "session_yield": 8.0,
+      "session_switches": 0,
+      "session_redundant_loops": 0,
+      "memory_fidelity": null,
+      "validation_rate": 100.0,
+      "cumulative_leverage": 305.0,
+      "session_bugs": 2,
+      "session_prototypes": 0,
+      "session_pitfalls": 0
+    },
+    "operational_metadata": {
+      "opportunity_count": 45,
+      "action_count": 0,
+      "event_count": 6
+    }
+  },
+  {
+    "timestamp": "2026-09-24T11:35:59.840718+00:00",
+    "session_id": "session_night_20260924_traditional_expansion",
+    "version": "v5.4",
+    "status": "PENDING_EVALUATION",
+    "metrics": {
+      "session_yield": 14.0,
+      "session_switches": 0,
+      "session_redundant_loops": 0,
+      "memory_fidelity": null,
+      "validation_rate": 100.0,
+      "cumulative_leverage": 333.5,
+      "session_bugs": 2,
+      "session_prototypes": 2,
+      "session_pitfalls": 0
+    },
+    "operational_metadata": {
+      "opportunity_count": 47,
+      "action_count": 0,
+      "event_count": 24
+    }
   }
 ]

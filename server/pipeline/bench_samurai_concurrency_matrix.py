@@ -285,22 +285,29 @@ class SamuraiConcurrencyBenchmarkHarness:
         session_id = f"bench_c{concurrency}_r{run_idx}_{int(time.time())}"
         self.perform_cold_start_cleanup(session_id)
 
-        # Set environment variable to enforce concurrency
-        os.environ["SAMURAI_MAX_PARALLEL"] = str(concurrency)
+        # Set environment variable to enforce concurrency with guaranteed cleanup
+        prev_env = os.environ.get("SAMURAI_MAX_PARALLEL")
+        try:
+            os.environ["SAMURAI_MAX_PARALLEL"] = str(concurrency)
 
-        telemetry = BackgroundTelemetryMonitor(polling_interval_sec=0.5)
-        telemetry.start()
+            telemetry = BackgroundTelemetryMonitor(polling_interval_sec=0.5)
+            telemetry.start()
 
-        t_start_e2e = time.perf_counter()
-        stage_timestamps: Dict[str, float] = {"start": t_start_e2e}
+            t_start_e2e = time.perf_counter()
+            stage_timestamps: Dict[str, float] = {"start": t_start_e2e}
 
-        if self.dry_run:
-            res = self._execute_dry_run_simulation(concurrency, run_idx, session_id, telemetry, t_start_e2e)
-        else:
-            res = self._execute_real_e2e_pipeline(concurrency, run_idx, session_id, telemetry, t_start_e2e)
+            if self.dry_run:
+                res = self._execute_dry_run_simulation(concurrency, run_idx, session_id, telemetry, t_start_e2e)
+            else:
+                res = self._execute_real_e2e_pipeline(concurrency, run_idx, session_id, telemetry, t_start_e2e)
 
-        self.perform_cold_start_cleanup(session_id)
-        return res
+            self.perform_cold_start_cleanup(session_id)
+            return res
+        finally:
+            if prev_env is not None:
+                os.environ["SAMURAI_MAX_PARALLEL"] = prev_env
+            else:
+                os.environ.pop("SAMURAI_MAX_PARALLEL", None)
 
     def _execute_dry_run_simulation(
         self,
@@ -360,6 +367,11 @@ class SamuraiConcurrencyBenchmarkHarness:
         """
         Executes the actual production pipeline via PipelineConcurrencyScheduler,
         recording true wall-clock, segment timings, contention FPS, and output hashes.
+
+        Instrumentation enhancements (v2):
+        - Captures per-chunk YOLO FPS via progress_callback timestamping
+        - Detects contention vs unconstrained FPS phases using SAMURAI done event
+        - Logs SAMURAI segment completion timestamps for wave analysis
         """
         from server.pipeline.pipeline_concurrency_scheduler import PipelineConcurrencyScheduler
         from server.pipeline import tasks as pipeline_tasks
@@ -391,6 +403,31 @@ class SamuraiConcurrencyBenchmarkHarness:
 
         scheduler = PipelineConcurrencyScheduler(min_free_vram_gb=6.0)
 
+        # ── Enhanced instrumentation: per-chunk YOLO FPS tracking ────────
+        _chunk_timestamps: List[Dict[str, Any]] = []
+        _chunk_lock = threading.Lock()
+        _samurai_done_ts: List[Optional[float]] = [None]
+
+        def _yolo_progress_hook(ratio: float, frames_done: int,
+                                total: int, eta: float):
+            """Captures per-progress-report timestamp for FPS analysis."""
+            with _chunk_lock:
+                _chunk_timestamps.append({
+                    "wall_time": time.perf_counter(),
+                    "frames_done": frames_done,
+                    "total": total,
+                    "ratio": round(ratio, 4),
+                    "eta_sec": round(eta, 1),
+                })
+
+        # Monkey-patch a SAMURAI done timestamp tracker
+        _original_samurai_runner = pipeline_tasks.run_samurai_tracking_multi
+
+        def _instrumented_samurai_runner(sid, sess, segs, sm_):
+            result = _original_samurai_runner(sid, sess, segs, sm_)
+            _samurai_done_ts[0] = time.perf_counter()
+            return result
+
         # Instrumentation trackers for segment timings and contention FPS
         segment_timings: List[Dict[str, Any]] = []
         yolo_contention_fps: Optional[float] = None
@@ -405,9 +442,7 @@ class SamuraiConcurrencyBenchmarkHarness:
                 session=session_meta,
                 segments=segments,
                 sm=sm,
-                samurai_runner=lambda sid, sess, segs, sm_: pipeline_tasks.run_samurai_tracking_multi(
-                    sid, sess, segs, sm_
-                ),
+                samurai_runner=_instrumented_samurai_runner,
                 yolo_runner=lambda sid, sess, sm_: pipeline_tasks.run_global_analysis(
                     sid, sess, sm_
                 ),
@@ -424,6 +459,43 @@ class SamuraiConcurrencyBenchmarkHarness:
 
         stage_timestamps["end"] = time.perf_counter()
         gpu_avg, gpu_peak, vram_peak, ram_peak, cpu_avg = telemetry.stop()
+
+        # ── Post-hoc FPS phase analysis from chunk timestamps ────────────
+        if len(_chunk_timestamps) >= 2:
+            samurai_done_t = _samurai_done_ts[0]
+            contention_fps_samples = []
+            free_fps_samples = []
+
+            for i in range(1, len(_chunk_timestamps)):
+                prev = _chunk_timestamps[i - 1]
+                curr = _chunk_timestamps[i]
+                dt = curr["wall_time"] - prev["wall_time"]
+                df = curr["frames_done"] - prev["frames_done"]
+                if dt > 0.01 and df > 0:
+                    chunk_fps = df / dt
+                    if samurai_done_t and curr["wall_time"] > samurai_done_t:
+                        free_fps_samples.append(chunk_fps)
+                    else:
+                        contention_fps_samples.append(chunk_fps)
+
+            if contention_fps_samples:
+                yolo_contention_fps = round(
+                    sum(contention_fps_samples) / len(contention_fps_samples), 1
+                )
+            if free_fps_samples:
+                yolo_unconstrained_fps = round(
+                    sum(free_fps_samples) / len(free_fps_samples), 1
+                )
+
+            log.info(
+                "FPS phase analysis: contention=%s (n=%d), unconstrained=%s (n=%d)",
+                yolo_contention_fps, len(contention_fps_samples),
+                yolo_unconstrained_fps, len(free_fps_samples),
+            )
+
+        # Store raw chunk timeline for deep post-hoc analysis
+        stage_timestamps["chunk_timeline"] = _chunk_timestamps
+        stage_timestamps["samurai_done_ts"] = _samurai_done_ts[0]
 
         # Extract tracking checksum and verification metrics
         samurai_pkl_path = output_dir / "samurai_tracking.pkl"

@@ -1,0 +1,30 @@
+diff --git a/server/handler.py b/server/handler.py
+--- a/server/handler.py
++++ b/server/handler.py
+@@ -750,6 +750,21 @@
+     s_merged = sm.get_session(session_id) or s_merged
+ 
++    # ── Optional Bounded Pool Hook (Enabled via RUNPOD_TEST_PROTOTYPE=1) ──
++    if os.environ.get("ENABLE_SAMURAI_BOUNDED_POOL", "0") == "1":
++        try:
++            from .pipeline.samurai_bounded_memory_pool import SamuraiBoundedWorkerPool
++            _pool = SamuraiBoundedWorkerPool(max_total_ram_gb=24.0)
++            _plan = _pool.calculate_safe_worker_concurrency(len(segments), orig_w=1920, orig_h=1080, is_concurrent_with_yolo=True)
++            print(f"[RUNPOD-PROTOTYPE] SamuraiBoundedWorkerPool active: {_plan['max_workers']} workers (capped <= 24GB)", flush=True)
++            os.environ["SAMURAI_MAX_PARALLEL"] = str(_plan["max_workers"])
++        except Exception as _pool_err:
++            print(f"[RUNPOD-PROTOTYPE] Pool initialization fallback: {_pool_err}", flush=True)
++
+     # ── Execute SAMURAI and Global Analysis via Concurrency Scheduler ──
+@@ -928,6 +943,13 @@
+ print(f"[HANDLER] WORKER_MODE={WORKER_MODE} version={HANDLER_VERSION} "
+       f"({'feature-only (ai_summary + charts)' if WORKER_MODE == 'cpu' else 'all actions'})",
+       flush=True)
+ 
++# ── Pre-flight Physical GPU & Driver Telemetry (nvidia-smi ground truth) ──
++try:
++    from .pipeline.gpu_hardware_verifier import GPUHardwareVerifier
++    print(GPUHardwareVerifier().format_diagnostic_report(), flush=True)
++except Exception as _gpu_err:
++    print(f"[HANDLER] GPU hardware probe warning: {_gpu_err}", flush=True)
++

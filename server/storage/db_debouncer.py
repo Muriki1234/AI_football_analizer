@@ -13,6 +13,7 @@ Rules:
 4. Thread-Safe: Protected by an internal reentrant lock.
 """
 
+import queue
 import threading
 import time
 from typing import Any, Callable, Dict, Optional
@@ -24,6 +25,7 @@ class DebouncedStatusUpdater:
         update_fn: Callable[..., Any],
         min_interval_sec: float = 1.2,
         min_progress_delta: int = 5,
+        async_dispatch: bool = False,
     ):
         """
         Args:
@@ -31,16 +33,31 @@ class DebouncedStatusUpdater:
                        (session_id, status, progress, stage, error, **extra)
             min_interval_sec: Minimum seconds between routine progress flushes.
             min_progress_delta: Minimum progress % jump to bypass time throttle.
+            async_dispatch: When True, dispatches routine updates to a background
+                            worker thread so caller (e.g. YOLO loop) does not block on HTTP.
         """
         self.update_fn = update_fn
         self.min_interval_sec = min_interval_sec
         self.min_progress_delta = min_progress_delta
+        self.async_dispatch = async_dispatch
 
         self._lock = threading.RLock()
         self._last_flush_time = 0.0
         self._last_flushed_status: Optional[str] = None
         self._last_flushed_stage: Optional[str] = None
         self._last_flushed_progress: Optional[int] = None
+
+        if self.async_dispatch:
+            self._queue: queue.Queue = queue.Queue(maxsize=20)
+            self._worker_thread = threading.Thread(
+                target=self._worker_loop,
+                name="db_debouncer_async_worker",
+                daemon=True,
+            )
+            self._worker_thread.start()
+        else:
+            self._queue = None
+            self._worker_thread = None
 
         # Pending dirty state
         self._pending_session_id: Optional[str] = None
@@ -115,29 +132,80 @@ class DebouncedStatusUpdater:
             time_elapsed = (now - self._last_flush_time) >= self.min_interval_sec
 
             if is_critical or progress_jumped or time_elapsed:
-                self._execute_flush()
+                self._execute_flush(is_critical=is_critical)
             else:
                 self.throttled_calls += 1
 
+    def _worker_loop(self) -> None:
+        """Background daemon thread worker processing non-critical status flushes."""
+        while True:
+            try:
+                task = self._queue.get()
+                if task is None:
+                    self._queue.task_done()
+                    break
+                session_id, status, progress, stage, error, extra = task
+                try:
+                    self.update_fn(
+                        session_id,
+                        status,
+                        progress=progress,
+                        stage=stage,
+                        error=error,
+                        **extra,
+                    )
+                except Exception:
+                    pass
+                finally:
+                    self._queue.task_done()
+            except Exception:
+                pass
+
     def flush(self) -> None:
-        """Forces an immediate transmission of any pending buffered updates."""
+        """Forces an immediate transmission of any pending buffered updates and drains queue."""
         with self._lock:
             if self._has_pending:
-                self._execute_flush()
+                self._execute_flush(is_critical=True)
 
-    def _execute_flush(self) -> None:
+        if self.async_dispatch and self._queue is not None:
+            self._queue.join()
+
+    def _execute_flush(self, is_critical: bool = False) -> None:
         """Internal flush execution (must be called with _lock acquired)."""
         if not self._has_pending or not self._pending_session_id or not self._pending_status:
             return
 
-        self.update_fn(
-            self._pending_session_id,
-            self._pending_status,
-            progress=self._pending_progress,
-            stage=self._pending_stage,
-            error=self._pending_error,
-            **self._pending_extra,
-        )
+        sid = self._pending_session_id
+        stat = self._pending_status
+        prog = self._pending_progress
+        stg = self._pending_stage
+        err = self._pending_error
+        ext = dict(self._pending_extra)
+
+        if is_critical or not self.async_dispatch or self._queue is None:
+            # Synchronous direct execution for critical state transitions
+            self.update_fn(
+                sid,
+                stat,
+                progress=prog,
+                stage=stg,
+                error=err,
+                **ext,
+            )
+        else:
+            # Asynchronous background execution: zero blocking on caller thread
+            task = (sid, stat, prog, stg, err, ext)
+            if self._queue.full():
+                try:
+                    self._queue.get_nowait()
+                    self._queue.task_done()
+                except Exception:
+                    pass
+            try:
+                self._queue.put_nowait(task)
+            except Exception:
+                # Fallback to direct synchronous execution if queue full/error
+                self.update_fn(sid, stat, progress=prog, stage=stg, error=err, **ext)
 
         self._last_flush_time = time.time()
         self._last_flushed_status = self._pending_status

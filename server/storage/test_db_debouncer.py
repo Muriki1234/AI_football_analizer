@@ -169,6 +169,40 @@ class TestDebouncedStatusUpdater(unittest.TestCase):
 
         self.assertGreaterEqual(latency_reduction_pct, 60.0)
 
+    def test_async_non_blocking_dispatch(self):
+        # Verify that slow network calls do not block the caller when async_dispatch=True
+        slow_calls = []
+
+        def mock_slow_db(session_id, status, progress=None, stage=None, error=None, **extra):
+            time.sleep(0.08)  # 80ms slow network RTT
+            slow_calls.append({"progress": progress, "stage": stage})
+
+        updater = DebouncedStatusUpdater(
+            mock_slow_db,
+            min_interval_sec=0.01,
+            async_dispatch=True,
+        )
+
+        t0 = time.perf_counter()
+        # Initial call is critical (stage change None -> 'yolo'), flushes synchronously
+        updater.update("sess_async", "analyzing", progress=10, stage="yolo")
+        t_init = (time.perf_counter() - t0) * 1000.0
+
+        # Routine updates within same stage -> must be dispatched asynchronously in < 15ms
+        time.sleep(0.02)  # ensure min_interval_sec elapsed
+        t1 = time.perf_counter()
+        updater.update("sess_async", "analyzing", progress=15, stage="yolo")
+        t_async = (time.perf_counter() - t1) * 1000.0
+
+        # Caller returned in < 25ms despite the underlying database call taking 80ms!
+        self.assertLess(t_async, 25.0)
+
+        # Flush drains the background worker thread completely
+        updater.flush()
+        self.assertEqual(len(slow_calls), 2)
+        self.assertEqual(slow_calls[-1]["progress"], 15)
+
 
 if __name__ == "__main__":
     unittest.main()
+

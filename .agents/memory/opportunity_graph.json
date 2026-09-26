@@ -1477,6 +1477,11 @@
           "time": "2026-09-21T23:02:34.289852+00:00",
           "status": "VALIDATED_SANDBOX",
           "note": "Reverting to VALIDATED_SANDBOX: Unit-test/simulation results alone are insufficient for PRODUCTION_CANDIDATE; awaiting real RunPod 14min full-video verification."
+        },
+        {
+          "time": "2026-09-24T20:53:00.000000+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "RunPod empirical verification on full 25,316-frame 14min match video (Session aef150d8, worker ilag1azmakfqlo): 10 segments + Cap=5 achieved 408.69s total E2E (-30.7s vs Cap=4 baseline), SAMURAI duration 199.11s (-41.44s), YOLO avg 112.4 FPS (up from 102.0 FPS), RAM peak 88.5 GB (safe). Maintained in VALIDATED_SANDBOX awaiting comparison with Cap=4 / Cap=6 matrix sweep."
         }
       ],
       "activated_at": "2026-09-21T22:19:42.087698+00:00",
@@ -1778,6 +1783,114 @@
         "updated_at": "2026-09-24T19:40:30.000000+00:00"
       },
       "activated_at": "2026-09-24T19:40:00.000000+00:00"
+    },
+    "tracklet_perceptual_team_classifier": {
+      "id": "tracklet_perceptual_team_classifier",
+      "title": "Perceptual CIE Lab Tracklet Team Clustering & Grass Rejection Engine",
+      "description": "Continuous multi-frame tracklet jersey extraction in CIE Lab color space with Otsu turf subtraction, bimodal clustering, and goalkeeper outlier isolation, eliminating sparse 20-frame voting and Team 1 default bias.",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-24T11:18:03.584667+00:00",
+      "created_session_id": "session_night_20260924_evidence_review",
+      "notes": [
+        {
+          "time": "2026-09-24T11:18:18.617785+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-24T11:18:30.307481+00:00",
+          "status": "EXPLORING",
+          "note": "Commencing algorithmic development of CIE Lab perceptual torso extraction and multi-tracklet bimodal clustering"
+        },
+        {
+          "time": "2026-09-24T11:21:17.130589+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "7/7 unit tests passing with 100% green suite: Otsu/HSV turf rejection, bimodal CIE Lab K-Means++, goalkeeper/referee outlier detection, reservoir quality replacement, and zero-bias fallback continuity."
+        }
+      ],
+      "activated_at": "2026-09-24T11:18:18.617661+00:00"
+    },
+    "target_player_continuous_kinematic_accumulator": {
+      "id": "target_player_continuous_kinematic_accumulator",
+      "title": "Continuous Tracklet Kinematic Distance & FIFA Speed Accumulator",
+      "description": "Continuous multi-tracklet trajectory accumulator with deadband filtering, step displacement integration, and standard FIFA/Catapult match average speed, resolving ByteTrack ID switch sawtooth distance drops and inflated average speed.",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-24T11:18:09.375296+00:00",
+      "created_session_id": "session_night_20260924_evidence_review",
+      "notes": [
+        {
+          "time": "2026-09-24T11:18:23.485088+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as secondary branch"
+        },
+        {
+          "time": "2026-09-24T11:18:35.092687+00:00",
+          "status": "EXPLORING",
+          "note": "Commencing development of continuous step displacement accumulator and deadband filter"
+        },
+        {
+          "time": "2026-09-24T11:22:29.456526+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "5/5 unit tests passing with 100% green suite: continuous step displacement across ID switches, jitter deadband stationary noise rejection, FIFA vs active speed separation, velocity clamping, and 5-zone distribution."
+        }
+      ],
+      "activated_at": "2026-09-24T11:18:23.484957+00:00"
+    },
+    "canonical_pitch_coordinate_normalizer": {
+      "id": "canonical_pitch_coordinate_normalizer",
+      "title": "FIFA 105x68m Canonical Pitch Coordinate Normalizer & Metric Guard",
+      "description": "Unifies the 120x70m Soccana ground model with standard 105x68m FIFA match pitch space, resolving 100x cm-m scale ambiguities and screen-pixel fallback bleedthrough across 9 downstream tactical engines.",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-24T11:30:13.485158+00:00",
+      "created_session_id": "session_night_20260924_traditional_expansion",
+      "notes": [
+        {
+          "time": "2026-09-24T11:30:29.881125+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-24T11:30:54.408855+00:00",
+          "status": "EXPLORING",
+          "note": "Developing coordinate normalizer, affine scaling, and metric boundary guard"
+        },
+        {
+          "time": "2026-09-24T11:32:51.038888+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "7/7 unit tests passing: 120x70 Soccana to 105x68 FIFA affine mapping, cm-m scale auto-detection, screen-pixel fallback rejection, singularity suppression, and minimap canvas alignment."
+        }
+      ],
+      "activated_at": "2026-09-24T11:30:29.880989+00:00"
+    },
+    "cuda_stream_priority_concurrency_governor": {
+      "id": "cuda_stream_priority_concurrency_governor",
+      "title": "Dynamic CUDA Stream Priority & Worker Memory Budget Governor",
+      "description": "Allocates high-priority CUDA compute streams to primary YOLO detector and enforces memory budget gating during multi-process SAMURAI wave handoffs to eliminate the 49-second 38 FPS slump on RTX A5000.",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-24T11:30:23.330028+00:00",
+      "created_session_id": "session_night_20260924_traditional_expansion",
+      "notes": [
+        {
+          "time": "2026-09-24T11:30:44.037299+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as secondary branch"
+        },
+        {
+          "time": "2026-09-24T11:31:04.047537+00:00",
+          "status": "EXPLORING",
+          "note": "Developing CUDA stream priority allocator and memory-budgeted wave prefetch governor"
+        },
+        {
+          "time": "2026-09-24T11:34:05.998905+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "5/5 unit tests passing: YOLO high-priority stream allocation (-1), dynamic VRAM/RAM cap calculation for RTX A5000, balanced wave partitioning (5+5 and 4+4), and admission throttling under compute contention."
+        }
+      ],
+      "activated_at": "2026-09-24T11:30:44.037147+00:00"
     }
   },
   "edges": [
@@ -1798,5 +1911,5 @@
       "to": "analytics_accuracy_foundation"
     }
   ],
-  "updated_at": "2026-09-24T19:40:30.000000+00:00"
+  "updated_at": "2026-09-24T11:34:05.999052+00:00"
 }

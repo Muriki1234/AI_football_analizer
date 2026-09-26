@@ -319,6 +319,38 @@
       "rollback": false,
       "session_id": "session_night_20260923",
       "evidence": "修复前 python3 self_eval.py 报 NameError 退出码 1；修复后 total_ops = len(nodes) 正常统计，全套 38 个自治扩展单测全绿通过，audit() 成功输出五维实证报告。"
+    },
+    {
+      "id": "BUG_FRONTEND_AI_SUMMARY_MODE_OVERWRITE",
+      "bug_id": "BUG_FRONTEND_AI_SUMMARY_MODE_OVERWRITE",
+      "title": "Dashboard.jsx applyTasks/onTask 任务类型匹配顺序错误导致球员个人 AI 报告覆盖全队报告",
+      "description": "queueFeature(sessionId, 'ai_summary', { mode: 'player' }) 创建任务时 task_type 仍为 'ai_summary' 且携带 result.analysis_mode = 'player'。Dashboard 优先检查 t.task_type === 'ai_summary' 将结果派发给 setAiSummaryTeam，导致球员 Tab 始终停留在 Waiting/Generate 且抹除已有全队报告",
+      "root_cause": "applyTasks 与 onTask 缺少对 result.analysis_mode === 'player' 的优先判定分支",
+      "files_changed": [
+        "frontend/src/pages/Dashboard.jsx"
+      ],
+      "tests_run": "npm run build in frontend",
+      "lines_changed": 15,
+      "tests_passed": true,
+      "rollback": false,
+      "session_id": "session_night_20260924_traditional_expansion",
+      "evidence": "抽取 handleAiTask 优先检查 isPlayer，正确将球员专属报告与全队战术报告隔离派发"
+    },
+    {
+      "id": "BUG_SESSIONS_PAGE_DEADEND_NAVIGATION",
+      "bug_id": "BUG_SESSIONS_PAGE_DEADEND_NAVIGATION",
+      "title": "Sessions.jsx 点击 uploaded 状态历史会话跳往空死角 Dashboard",
+      "description": "在 Sessions.jsx 列表中点击已上传但未配置半场/未选择追踪目标的 session 时，原代码无条件 navigate(/dashboard)，导致用户进入无视频、无追踪数据的空死角",
+      "root_cause": "Sessions.jsx open() 未像 Welcome.jsx 一样按 match_periods_sec 配置阶段进行分流导航",
+      "files_changed": [
+        "frontend/src/pages/Sessions.jsx"
+      ],
+      "tests_run": "npm run build in frontend",
+      "lines_changed": 10,
+      "tests_passed": true,
+      "rollback": false,
+      "session_id": "session_night_20260924_traditional_expansion",
+      "evidence": "open(s) 判定 s.status === 'uploaded' 时，若已设半场则导向 /configure-multi，未设半场则导向 /trim，消除空死角"
     }
   ]
 }

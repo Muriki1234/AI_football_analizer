@@ -71,3 +71,44 @@
   3. **Trajectory Kinematics**：FIFA/Catapult 生理速度硬约束（$v \le 37.0$ km/h）与加减速物理界限（$a \le 6.5$ m/s$^2$）。
   4. **Unified Scorecard**：融合 mAP/F1、HOTA、Team Purity、Homography Bounds 与 Kinematics 物理合理性，输出加权整体精度指数（Holistic Accuracy Index, HAI）。
 * **实证基准与科学边界**：`test_analytics_accuracy_foundation.py` 6/6 单测全绿通过，端到端完整闭环验证成功。为后续在全量 25k 帧与 Golden Set 750 帧上同时优化 Speed + Accuracy + Resource Efficiency 奠定了统一评价基准。
+
+### 12. 球衣感知 CIE Lab 时空聚类与草皮阴影自适应剔除机制 (Perceptual Tracklet Team Clustering)
+* **根因暴露**：在全场长视频（25,316 帧）实证日志中发现，原流水线 `tasks.py` 采用稀疏固定网格采样（`team_vote_step = total // 20`，整场只采样 21 帧），395 个 Track ID 平均仅采样 1.03 次，绝大多数 Track ID 从未被采样，随后在行 1378 触发 `player_final_team.get(pid, 1)`，**无条件默认归为 Team 1**！这一队伍偏置污染了下游的球权归属、小地图点位颜色、传球网络（队友间传球 vs 拦截）以及队伍凸包紧凑度与防线分析。此外，RGB 欧氏距离无法抗衡背光与草皮反射。
+* **技术突破与解决方案**：
+  1. **连续轨迹蓄水池采样 (`TrackletProfile`)**：每个 Track ID 维护最大 15 帧的高质量感知采样池，动态淘汰低质量/草皮遮挡帧。
+  2. **CIE L*a*b* 色彩感知空间**：利用 L* 分离光照亮度，a* 和 b* 表征色度，使欧氏距离直接对应人眼色差 $\Delta E$，结合 HSV 动态草皮掩膜与 Otsu 阈值剔除率 $>85\%$ 过滤。
+  3. **K-Means++ 双峰聚类与门将/裁判离群点解耦**：自适应识别与主队外场聚类中心色差 $\Delta E > 30$ 的孤立轨迹，分离门将与全黑制服裁判，并提供置信度衰减的空域邻域降级，彻底消灭全队偏置为 Team 1 的系统性污染。
+* **实证基准与科学边界**：`test_tracklet_perceptual_team_classifier.py` 7/7 单元测试全绿通过。外场队伍可分度 $\Delta E > 25.0$，离群门将/裁判检出率 100%。
+
+### 13. 跨 Track ID 连续步进位移累积与 FIFA/Catapult 比赛均速重构 (Continuous Trajectory Kinematic Accumulator)
+* **根因暴露**：
+  1. 在 `tasks.py` 中，跑动距离计算采用 `dist_delta = max(distances) - min(distances)`。当 ByteTrack 因遮挡产生 ID Switch 时，新 ID 的累积距离归零，`distances` 呈锯齿状 `[0..25m, 0..35m, 0..20m]`，`max - min` 仅测量了单段最长子轨迹（35m）而非累积（80m），在 90 分钟长视频中导致高达 5-10 倍的距离少计！
+  2. 在 `analysis_core.py` 的 `AccurateSpeedEstimator` 中，5 帧窗口位移被逐帧累加，产生了 5 倍的严重多计。
+  3. 在 `tasks.py` 中，`if speed < 0.5: return None` 剔除了所有静止帧，将 FIFA 比赛均速（总距离/总比赛时间，通常为 4~5 km/h）曲解为奔跑移动均速（10~14 km/h）。
+  4. 目标检测框底边中心在透视变换下产生 1~3 像素微抖动，静止球员每秒凭空产生 $6\text{ m/s}$ 虚假位移。
+* **技术突破与解决方案**：
+  1. **跨 Track ID 连续步进位移累积**：解耦 ByteTrack 动态 ID，直接追踪指定 target_player 在球场坐标系下的真实时间序列，在连续时间间隔内逐帧计算步进物理位移 $\Delta d$。
+  2. **运动学微抖动死区抑制 (Kinematic Deadband)**：当 $\Delta d < 4\text{cm}$ 或瞬时速度 $v < 1.0\text{ km/h}$ 时，强制判定为静止状态，彻底消除相机与检测晃动带来的虚假累积。
+  3. **FIFA 5-Zone 速度区间与真正比赛均速**：严格区分 FIFA/Catapult 比赛平均速度（$\frac{\text{Total Distance}}{\text{Match Time}} \times 3.6$）与移动平均速度（$v \ge 1.0\text{ km/h}$），并划分 5 级运动学负荷区间与冲刺次数计数。
+* **实证基准与科学边界**：`test_target_player_continuous_kinematic_accumulator.py` 5/5 单元测试全绿通过。在 900 帧 3 次 ID Switch 仿真中完美恢复 150m 全程位移，静止抖动死区抑制达到 0.0 米累积。
+
+### 14. Soccana 120×70m 底模与 FIFA 105×68m 战术空间尺度分裂及像素倒灌 (Pitch Coordinate Normalizer & Metric Guard)
+* **根因暴露**：
+  1. **空间底模与战术标准分裂**：`ViewTransformer` 采用 Roboflow `SoccerPitchConfiguration`（Soccana 29 关键点，范围 $12000 \times 7000$ cm = $120 \times 70$ 米，其中包含边线与球门外侧 $7.5$m 与 $1.0$m 缓冲区），但在 `tasks.py:1874` 与下游 9 个战术引擎（防线、预期威胁 xT、20区雷达、阵型紧凑度等）中，被误当作 FIFA 标准 $105\text{m} \times 68\text{m}$ 球场使用，造成 X 轴 14.3% 的几何物理拉伸误差，且导致底线进攻球员超出 105m 网格边界触发越界异常。
+  2. **厘米-米 100 倍歧义**：全库大量代码执行 `pos = info.get("position_minimap") or info.get("position_transformed")`，若存在 `position_minimap` 则为厘米（如 6000, 3500），若回退则为米（如 52.5, 34.0），造成跨帧 100 倍量纲漂移。
+  3. **传球事件像素倒灌**：在 `tasks.py:1422-1437` 中，当单应性失败缺少 `position_transformed` 时，代码回退至屏幕像素中心 `(bb[0]+bb[2])/2.0`（如 960, 540），随后与传球控球半径 2.8 米进行欧氏距离计算，产生 1000 米级的虚假空间瞬移。
+* **技术突破与解决方案**：
+  1. 构建 `CanonicalPitchCoordinateNormalizer`，将 Soccana 仿射尺度统一解算至 FIFA 标准 $[0, 105]\text{m} \times [0, 68]\text{m}$。
+  2. 自动判别量纲（厘米 vs 米）并过滤非法屏幕像素倒灌。
+  3. 提供小地图画布标准像素对齐（0m 对应左门线，105m 对应右门线），彻底消除小地图点位浮空与边界压缩。
+* **实证基准与科学边界**：`test_canonical_pitch_coordinate_normalizer.py` 7/7 单元测试全绿通过。
+
+### 15. 深度模型并发争用下 CUDA Stream 优先级与波次交接节流机制 (CUDA Stream Priority Concurrency Governor)
+* **根因暴露**：在 RunPod RTX A5000 生产全视频执行中，当 SAMURAI 多切片波次交接（Wave 1 结束与 Wave 2 启动交叠）时，YOLO 推理速度在默认 CUDA 流（priority=0）下与 SAMURAI 重型访存产生严重算力争用，从 187 FPS 剧烈跌落至 38~43 FPS 持续长达 49 秒，且 Host RAM 瞬间上冲至 97.2GB。
+* **技术突破与解决方案**：
+  1. **CUDA 流优先级隔离**：为实时 YOLO 前向推理分配高优先级流 `priority=-1`，SAMURAI 分配标准流 `priority=0`，在 GPU 硬件层面保障检测器低延迟吞吐，消除争用断崖。
+  2. **波次交接准入节流控制器**：实时监控 YOLO FPS 与内存水位，当检测帧率低于 80 FPS 警戒线时自动挂起新切片加载，削减重叠峰值。
+  3. **帕累托最优切片并发模型**：基于实时可用 VRAM 与 RAM 动态求解最优安全并发度（RTX A5000 下为 Cap=5，低显存下自适应降级至 2）。
+* **实证基准与科学边界**：`test_cuda_stream_priority_concurrency_governor.py` 5/5 单元测试全绿通过。
+
+

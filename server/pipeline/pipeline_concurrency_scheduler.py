@@ -252,3 +252,36 @@ class PipelineConcurrencyScheduler:
             "samurai_result": samurai_result[0],
             "yolo_result": yolo_result,
         }
+
+
+def schedule_balanced_waves(
+    total_segments: int,
+    concurrency_cap: int,
+) -> list[list[int]]:
+    """
+    Partitions segment processing into balanced waves, preventing lone stragglers
+    and minimizing inter-wave contention transitions.
+    Examples:
+        10 segments, cap 5 -> [[0, 1, 2, 3, 4], [5, 6, 7, 8, 9]] (5 + 5)
+        8 segments, cap 4  -> [[0, 1, 2, 3], [4, 5, 6, 7]] (4 + 4)
+        11 segments, cap 4 -> [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10]] (4 + 4 + 3)
+    """
+    if total_segments <= 0:
+        return []
+
+    cap = max(1, concurrency_cap)
+    if total_segments <= cap:
+        return [list(range(total_segments))]
+
+    num_waves = (total_segments + cap - 1) // cap
+    base_size = total_segments // num_waves
+    extra = total_segments % num_waves
+
+    waves: list[list[int]] = []
+    cur_idx = 0
+    for w in range(num_waves):
+        wave_len = base_size + (1 if w < extra else 0)
+        waves.append(list(range(cur_idx, cur_idx + wave_len)))
+        cur_idx += wave_len
+
+    return waves

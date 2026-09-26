@@ -257,18 +257,16 @@ export default function Dashboard() {
         if (!sessionId) return;
         let cancelled = false;
 
+        const handleAiTask = (t) => {
+            const isPlayer = t.task_type === 'ai_summary_player' || t.result?.analysis_mode === 'player';
+            if (isPlayer) setAiSummaryPlayer(t.result || null);
+            else if (t.task_type === 'ai_summary' || t.task_type === 'ai_summary_team') setAiSummaryTeam(t.result || null);
+            else return;
+            setAiProgress(Math.max(0, Math.min(100, Number(t.progress) || 0)));
+        };
+
         const applyTasks = (tasks = []) => {
-            for (const t of tasks) {
-                if (t.task_type === 'ai_summary' || t.task_type === 'ai_summary_team') {
-                    setAiSummaryTeam(t.result || null);
-                    // Only update progress if we are in team mode, or if progress is generic
-                    // We'll update aiProgress in a more comprehensive way below
-                    setAiProgress(Math.max(0, Math.min(100, Number(t.progress) || 0)));
-                } else if (t.task_type === 'ai_summary_player') {
-                    setAiSummaryPlayer(t.result || null);
-                    setAiProgress(Math.max(0, Math.min(100, Number(t.progress) || 0)));
-                }
-            }
+            for (const t of tasks) handleAiTask(t);
         };
 
         getSession(sessionId).then((s) => { if (!cancelled) setSession(s); }).catch(() => { });
@@ -303,14 +301,7 @@ export default function Dashboard() {
             onSession: (s) => { realtimeEvents.current += 1; setSession((prev) => ({ ...prev, ...s })); },
             onTask: (t) => {
                 realtimeEvents.current += 1;
-
-                if (t.task_type === 'ai_summary' || t.task_type === 'ai_summary_team') {
-                    setAiSummaryTeam(t.result || null);
-                    setAiProgress(Math.max(0, Math.min(100, Number(t.progress) || 0)));
-                } else if (t.task_type === 'ai_summary_player') {
-                    setAiSummaryPlayer(t.result || null);
-                    setAiProgress(Math.max(0, Math.min(100, Number(t.progress) || 0)));
-                }
+                handleAiTask(t);
             },
         });
 

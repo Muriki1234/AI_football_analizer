@@ -1,0 +1,562 @@
+[
+  {
+    "concurrency": 1,
+    "run_index": 0,
+    "full_e2e_wall_clock": 150.0,
+    "samurai_wall_clock": 130.0,
+    "yolo_wall_clock": 150.0,
+    "yolo_contention_fps": 138.5,
+    "yolo_unconstrained_fps": 185.0,
+    "gpu_utilization_avg": 0.0,
+    "gpu_utilization_peak": 0.0,
+    "vram_peak_mb": 0.0,
+    "host_ram_peak_mb": 183.8,
+    "cpu_utilization_avg": 20.0,
+    "supabase_reporting_latency_sec": "UNAVAILABLE (dry-run)",
+    "tracking_bbox_count": 24227,
+    "tracking_checksum": "dryrun_simulated_checksum",
+    "samurai_coverage_pct": 95.7,
+    "errors_retries": 0,
+    "stage_timestamps": {
+      "start": 281474.136195875,
+      "end": 281474.659851833
+    },
+    "segment_timings": [
+      {
+        "seg_idx": 0,
+        "duration_sec": 130.0
+      },
+      {
+        "seg_idx": 1,
+        "duration_sec": 130.0
+      },
+      {
+        "seg_idx": 2,
+        "duration_sec": 130.0
+      },
+      {
+        "seg_idx": 3,
+        "duration_sec": 130.0
+      },
+      {
+        "seg_idx": 4,
+        "duration_sec": 130.0
+      },
+      {
+        "seg_idx": 5,
+        "duration_sec": 130.0
+      },
+      {
+        "seg_idx": 6,
+        "duration_sec": 130.0
+      },
+      {
+        "seg_idx": 7,
+        "duration_sec": 130.0
+      },
+      {
+        "seg_idx": 8,
+        "duration_sec": 130.0
+      },
+      {
+        "seg_idx": 9,
+        "duration_sec": 130.0
+      },
+      {
+        "seg_idx": 10,
+        "duration_sec": 130.0
+      }
+    ],
+    "notes": "Dry-run synthetic validation"
+  },
+  {
+    "concurrency": 2,
+    "run_index": 0,
+    "full_e2e_wall_clock": 150.0,
+    "samurai_wall_clock": 70.0,
+    "yolo_wall_clock": 150.0,
+    "yolo_contention_fps": 112.5,
+    "yolo_unconstrained_fps": 185.0,
+    "gpu_utilization_avg": 0.0,
+    "gpu_utilization_peak": 0.0,
+    "vram_peak_mb": 0.0,
+    "host_ram_peak_mb": 183.8,
+    "cpu_utilization_avg": 21.1,
+    "supabase_reporting_latency_sec": "UNAVAILABLE (dry-run)",
+    "tracking_bbox_count": 24227,
+    "tracking_checksum": "dryrun_simulated_checksum",
+    "samurai_coverage_pct": 95.7,
+    "errors_retries": 0,
+    "stage_timestamps": {
+      "start": 281474.733919,
+      "end": 281475.243281708
+    },
+    "segment_timings": [
+      {
+        "seg_idx": 0,
+        "duration_sec": 35.0
+      },
+      {
+        "seg_idx": 1,
+        "duration_sec": 35.0
+      },
+      {
+        "seg_idx": 2,
+        "duration_sec": 35.0
+      },
+      {
+        "seg_idx": 3,
+        "duration_sec": 35.0
+      },
+      {
+        "seg_idx": 4,
+        "duration_sec": 35.0
+      },
+      {
+        "seg_idx": 5,
+        "duration_sec": 35.0
+      },
+      {
+        "seg_idx": 6,
+        "duration_sec": 35.0
+      },
+      {
+        "seg_idx": 7,
+        "duration_sec": 35.0
+      },
+      {
+        "seg_idx": 8,
+        "duration_sec": 35.0
+      },
+      {
+        "seg_idx": 9,
+        "duration_sec": 35.0
+      },
+      {
+        "seg_idx": 10,
+        "duration_sec": 35.0
+      }
+    ],
+    "notes": "Dry-run synthetic validation"
+  },
+  {
+    "concurrency": 3,
+    "run_index": 0,
+    "full_e2e_wall_clock": 150.0,
+    "samurai_wall_clock": 50.0,
+    "yolo_wall_clock": 150.0,
+    "yolo_contention_fps": 94.7,
+    "yolo_unconstrained_fps": 185.0,
+    "gpu_utilization_avg": 0.0,
+    "gpu_utilization_peak": 0.0,
+    "vram_peak_mb": 0.0,
+    "host_ram_peak_mb": 183.8,
+    "cpu_utilization_avg": 21.0,
+    "supabase_reporting_latency_sec": "UNAVAILABLE (dry-run)",
+    "tracking_bbox_count": 24227,
+    "tracking_checksum": "dryrun_simulated_checksum",
+    "samurai_coverage_pct": 95.7,
+    "errors_retries": 0,
+    "stage_timestamps": {
+      "start": 281475.3149725,
+      "end": 281475.827072666
+    },
+    "segment_timings": [
+      {
+        "seg_idx": 0,
+        "duration_sec": 16.67
+      },
+      {
+        "seg_idx": 1,
+        "duration_sec": 16.67
+      },
+      {
+        "seg_idx": 2,
+        "duration_sec": 16.67
+      },
+      {
+        "seg_idx": 3,
+        "duration_sec": 16.67
+      },
+      {
+        "seg_idx": 4,
+        "duration_sec": 16.67
+      },
+      {
+        "seg_idx": 5,
+        "duration_sec": 16.67
+      },
+      {
+        "seg_idx": 6,
+        "duration_sec": 16.67
+      },
+      {
+        "seg_idx": 7,
+        "duration_sec": 16.67
+      },
+      {
+        "seg_idx": 8,
+        "duration_sec": 16.67
+      },
+      {
+        "seg_idx": 9,
+        "duration_sec": 16.67
+      },
+      {
+        "seg_idx": 10,
+        "duration_sec": 16.67
+      }
+    ],
+    "notes": "Dry-run synthetic validation"
+  },
+  {
+    "concurrency": 4,
+    "run_index": 0,
+    "full_e2e_wall_clock": 150.0,
+    "samurai_wall_clock": 40.0,
+    "yolo_wall_clock": 150.0,
+    "yolo_contention_fps": 81.8,
+    "yolo_unconstrained_fps": 185.0,
+    "gpu_utilization_avg": 0.0,
+    "gpu_utilization_peak": 0.0,
+    "vram_peak_mb": 0.0,
+    "host_ram_peak_mb": 183.8,
+    "cpu_utilization_avg": 21.5,
+    "supabase_reporting_latency_sec": "UNAVAILABLE (dry-run)",
+    "tracking_bbox_count": 24227,
+    "tracking_checksum": "dryrun_simulated_checksum",
+    "samurai_coverage_pct": 95.7,
+    "errors_retries": 0,
+    "stage_timestamps": {
+      "start": 281475.89694275,
+      "end": 281476.409140416
+    },
+    "segment_timings": [
+      {
+        "seg_idx": 0,
+        "duration_sec": 10.0
+      },
+      {
+        "seg_idx": 1,
+        "duration_sec": 10.0
+      },
+      {
+        "seg_idx": 2,
+        "duration_sec": 10.0
+      },
+      {
+        "seg_idx": 3,
+        "duration_sec": 10.0
+      },
+      {
+        "seg_idx": 4,
+        "duration_sec": 10.0
+      },
+      {
+        "seg_idx": 5,
+        "duration_sec": 10.0
+      },
+      {
+        "seg_idx": 6,
+        "duration_sec": 10.0
+      },
+      {
+        "seg_idx": 7,
+        "duration_sec": 10.0
+      },
+      {
+        "seg_idx": 8,
+        "duration_sec": 10.0
+      },
+      {
+        "seg_idx": 9,
+        "duration_sec": 10.0
+      },
+      {
+        "seg_idx": 10,
+        "duration_sec": 10.0
+      }
+    ],
+    "notes": "Dry-run synthetic validation"
+  },
+  {
+    "concurrency": 6,
+    "run_index": 0,
+    "full_e2e_wall_clock": 150.0,
+    "samurai_wall_clock": 30.0,
+    "yolo_wall_clock": 150.0,
+    "yolo_contention_fps": 64.3,
+    "yolo_unconstrained_fps": 185.0,
+    "gpu_utilization_avg": 0.0,
+    "gpu_utilization_peak": 0.0,
+    "vram_peak_mb": 0.0,
+    "host_ram_peak_mb": 183.9,
+    "cpu_utilization_avg": 20.3,
+    "supabase_reporting_latency_sec": "UNAVAILABLE (dry-run)",
+    "tracking_bbox_count": 24227,
+    "tracking_checksum": "dryrun_simulated_checksum",
+    "samurai_coverage_pct": 95.7,
+    "errors_retries": 0,
+    "stage_timestamps": {
+      "start": 281476.480009875,
+      "end": 281476.991892291
+    },
+    "segment_timings": [
+      {
+        "seg_idx": 0,
+        "duration_sec": 5.0
+      },
+      {
+        "seg_idx": 1,
+        "duration_sec": 5.0
+      },
+      {
+        "seg_idx": 2,
+        "duration_sec": 5.0
+      },
+      {
+        "seg_idx": 3,
+        "duration_sec": 5.0
+      },
+      {
+        "seg_idx": 4,
+        "duration_sec": 5.0
+      },
+      {
+        "seg_idx": 5,
+        "duration_sec": 5.0
+      },
+      {
+        "seg_idx": 6,
+        "duration_sec": 5.0
+      },
+      {
+        "seg_idx": 7,
+        "duration_sec": 5.0
+      },
+      {
+        "seg_idx": 8,
+        "duration_sec": 5.0
+      },
+      {
+        "seg_idx": 9,
+        "duration_sec": 5.0
+      },
+      {
+        "seg_idx": 10,
+        "duration_sec": 5.0
+      }
+    ],
+    "notes": "Dry-run synthetic validation"
+  },
+  {
+    "concurrency": 8,
+    "run_index": 0,
+    "full_e2e_wall_clock": 150.0,
+    "samurai_wall_clock": 25.0,
+    "yolo_wall_clock": 150.0,
+    "yolo_contention_fps": 52.9,
+    "yolo_unconstrained_fps": 185.0,
+    "gpu_utilization_avg": 0.0,
+    "gpu_utilization_peak": 0.0,
+    "vram_peak_mb": 0.0,
+    "host_ram_peak_mb": 183.9,
+    "cpu_utilization_avg": 19.4,
+    "supabase_reporting_latency_sec": "UNAVAILABLE (dry-run)",
+    "tracking_bbox_count": 24227,
+    "tracking_checksum": "dryrun_simulated_checksum",
+    "samurai_coverage_pct": 95.7,
+    "errors_retries": 0,
+    "stage_timestamps": {
+      "start": 281477.065433958,
+      "end": 281477.577133125
+    },
+    "segment_timings": [
+      {
+        "seg_idx": 0,
+        "duration_sec": 3.12
+      },
+      {
+        "seg_idx": 1,
+        "duration_sec": 3.12
+      },
+      {
+        "seg_idx": 2,
+        "duration_sec": 3.12
+      },
+      {
+        "seg_idx": 3,
+        "duration_sec": 3.12
+      },
+      {
+        "seg_idx": 4,
+        "duration_sec": 3.12
+      },
+      {
+        "seg_idx": 5,
+        "duration_sec": 3.12
+      },
+      {
+        "seg_idx": 6,
+        "duration_sec": 3.12
+      },
+      {
+        "seg_idx": 7,
+        "duration_sec": 3.12
+      },
+      {
+        "seg_idx": 8,
+        "duration_sec": 3.12
+      },
+      {
+        "seg_idx": 9,
+        "duration_sec": 3.12
+      },
+      {
+        "seg_idx": 10,
+        "duration_sec": 3.12
+      }
+    ],
+    "notes": "Dry-run synthetic validation"
+  },
+  {
+    "concurrency": 10,
+    "run_index": 0,
+    "full_e2e_wall_clock": 150.0,
+    "samurai_wall_clock": 22.0,
+    "yolo_wall_clock": 150.0,
+    "yolo_contention_fps": 45.0,
+    "yolo_unconstrained_fps": 185.0,
+    "gpu_utilization_avg": 0.0,
+    "gpu_utilization_peak": 0.0,
+    "vram_peak_mb": 0.0,
+    "host_ram_peak_mb": 183.9,
+    "cpu_utilization_avg": 19.0,
+    "supabase_reporting_latency_sec": "UNAVAILABLE (dry-run)",
+    "tracking_bbox_count": 24227,
+    "tracking_checksum": "dryrun_simulated_checksum",
+    "samurai_coverage_pct": 95.7,
+    "errors_retries": 0,
+    "stage_timestamps": {
+      "start": 281477.647927125,
+      "end": 281478.156801333
+    },
+    "segment_timings": [
+      {
+        "seg_idx": 0,
+        "duration_sec": 2.2
+      },
+      {
+        "seg_idx": 1,
+        "duration_sec": 2.2
+      },
+      {
+        "seg_idx": 2,
+        "duration_sec": 2.2
+      },
+      {
+        "seg_idx": 3,
+        "duration_sec": 2.2
+      },
+      {
+        "seg_idx": 4,
+        "duration_sec": 2.2
+      },
+      {
+        "seg_idx": 5,
+        "duration_sec": 2.2
+      },
+      {
+        "seg_idx": 6,
+        "duration_sec": 2.2
+      },
+      {
+        "seg_idx": 7,
+        "duration_sec": 2.2
+      },
+      {
+        "seg_idx": 8,
+        "duration_sec": 2.2
+      },
+      {
+        "seg_idx": 9,
+        "duration_sec": 2.2
+      },
+      {
+        "seg_idx": 10,
+        "duration_sec": 2.2
+      }
+    ],
+    "notes": "Dry-run synthetic validation"
+  },
+  {
+    "concurrency": 11,
+    "run_index": 0,
+    "full_e2e_wall_clock": 150.0,
+    "samurai_wall_clock": 20.91,
+    "yolo_wall_clock": 150.0,
+    "yolo_contention_fps": 41.9,
+    "yolo_unconstrained_fps": 185.0,
+    "gpu_utilization_avg": 0.0,
+    "gpu_utilization_peak": 0.0,
+    "vram_peak_mb": 0.0,
+    "host_ram_peak_mb": 183.9,
+    "cpu_utilization_avg": 23.5,
+    "supabase_reporting_latency_sec": "UNAVAILABLE (dry-run)",
+    "tracking_bbox_count": 24227,
+    "tracking_checksum": "dryrun_simulated_checksum",
+    "samurai_coverage_pct": 95.7,
+    "errors_retries": 0,
+    "stage_timestamps": {
+      "start": 281478.215636666,
+      "end": 281478.72420175
+    },
+    "segment_timings": [
+      {
+        "seg_idx": 0,
+        "duration_sec": 1.9
+      },
+      {
+        "seg_idx": 1,
+        "duration_sec": 1.9
+      },
+      {
+        "seg_idx": 2,
+        "duration_sec": 1.9
+      },
+      {
+        "seg_idx": 3,
+        "duration_sec": 1.9
+      },
+      {
+        "seg_idx": 4,
+        "duration_sec": 1.9
+      },
+      {
+        "seg_idx": 5,
+        "duration_sec": 1.9
+      },
+      {
+        "seg_idx": 6,
+        "duration_sec": 1.9
+      },
+      {
+        "seg_idx": 7,
+        "duration_sec": 1.9
+      },
+      {
+        "seg_idx": 8,
+        "duration_sec": 1.9
+      },
+      {
+        "seg_idx": 9,
+        "duration_sec": 1.9
+      },
+      {
+        "seg_idx": 10,
+        "duration_sec": 1.9
+      }
+    ],
+    "notes": "Dry-run synthetic validation"
+  }
+]

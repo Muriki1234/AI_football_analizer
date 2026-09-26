@@ -19,6 +19,7 @@ import stop_hook
 import opportunity_graph
 import checkpoint
 import overnight_report
+import self_eval
 
 
 class TestStopHook(unittest.TestCase):
@@ -888,6 +889,18 @@ class TestProductionIntegrationGate(unittest.TestCase):
         with self.assertRaises(SystemExit) as cm:
             opportunity_graph.transition_status("feat_depr", "VALIDATED")
         self.assertIn("Legacy Status Deprecated", str(cm.exception))
+
+
+class TestSelfEval(unittest.TestCase):
+    def test_self_eval_audit_runs_cleanly(self):
+        """Verify that self_eval.audit() executes without NameError or crash."""
+        res = self_eval.audit()
+        self.assertIsInstance(res, dict)
+        self.assertIn("divergence_quality", res)
+        self.assertIn("convergence_balance", res)
+        self.assertIn("memory_quality", res)
+        self.assertIn("execution_value", res)
+        self.assertIn("evolution_check", res)
 
 
 if __name__ == "__main__":

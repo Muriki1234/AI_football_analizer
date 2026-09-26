@@ -46,8 +46,13 @@ class SessionManager:
 
         try:
             from .db_debouncer import DebouncedStatusUpdater
+            min_interval = float(os.environ.get("DB_DEBOUNCE_INTERVAL_SEC", "4.0"))
+            min_delta = int(os.environ.get("DB_DEBOUNCE_DELTA_PCT", "3"))
             self._debouncer = DebouncedStatusUpdater(
-                self._raw_update_status, min_interval_sec=2.0, min_progress_delta=2
+                self._raw_update_status,
+                min_interval_sec=min_interval,
+                min_progress_delta=min_delta,
+                async_dispatch=True,
             )
         except Exception:
             self._debouncer = None

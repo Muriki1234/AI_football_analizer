@@ -117,9 +117,18 @@ export default function Sessions() {
         return sessions.filter((s) => matchesStatus(s.status) && matchesSearch(s));
     }, [sessions, search, statusFilter]);
 
-    const open = (id) => navigate(`/dashboard?sessionId=${encodeURIComponent(id)}`, {
-        state: { sessionId: id, videoId: id },
-    });
+    const open = (s) => {
+        const id = s.id;
+        const periods = Array.isArray(s.match_periods_sec) ? s.match_periods_sec : null;
+        if (s.status === 'uploaded') {
+            const dest = periods && periods.length > 0 ? `/configure-multi?sessionId=${encodeURIComponent(id)}` : `/trim?sessionId=${encodeURIComponent(id)}`;
+            navigate(dest, { state: { sessionId: id, videoId: id, matchPeriods: periods } });
+            return;
+        }
+        navigate(`/dashboard?sessionId=${encodeURIComponent(id)}`, {
+            state: { sessionId: id, videoId: id },
+        });
+    };
 
     const [deleting, setDeleting] = useState(null);  // session id currently being deleted
 
@@ -222,7 +231,7 @@ export default function Sessions() {
                                 key={s.id}
                                 type="button"
                                 className="sessions-page__row"
-                                onClick={() => open(s.id)}
+                                onClick={() => open(s)}
                                 initial={{ opacity: 0, y: 5 }}
                                 animate={{ opacity: 1, y: 0 }}
                                 transition={{ delay: 0.02 * i }}

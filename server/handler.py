@@ -785,6 +785,8 @@ def _action_track(session_id: str, s: dict, payload: dict, sm: SessionManager) -
             pass
         return {"error": err}
 
+    # Flush all asynchronous telemetry queue items before returning
+    sm.flush()
     # _run_auto_full_replay(session_id, sm)
     return {"ok": True, "session": sm.get_session(session_id)}
 

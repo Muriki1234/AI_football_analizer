@@ -167,6 +167,18 @@ class TestPipelineConcurrencyScheduler(unittest.TestCase):
         cap_4k = compute_samurai_concurrency_cap(3840, 2160)
         self.assertEqual(cap_4k, 2)
 
+    def test_11_schedule_balanced_waves(self):
+        from server.pipeline.pipeline_concurrency_scheduler import schedule_balanced_waves
+        # 10 segments with cap 5 -> 5 + 5
+        self.assertEqual(schedule_balanced_waves(10, 5), [[0, 1, 2, 3, 4], [5, 6, 7, 8, 9]])
+        # 8 segments with cap 4 -> 4 + 4
+        self.assertEqual(schedule_balanced_waves(8, 4), [[0, 1, 2, 3], [4, 5, 6, 7]])
+        # 11 segments with cap 4 -> 4 + 4 + 3
+        self.assertEqual(schedule_balanced_waves(11, 4), [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10]])
+        # Edge cases
+        self.assertEqual(schedule_balanced_waves(0, 5), [])
+        self.assertEqual(schedule_balanced_waves(3, 5), [[0, 1, 2]])
+
 
 if __name__ == "__main__":
     unittest.main()

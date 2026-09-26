@@ -1215,7 +1215,42 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                     print("[WARN] Team color initialization failed — all players assigned to team 1")
 
                 _pfd: dict = {}  # player_final_team
-                if _tci:
+                _perceptual_classifier = None
+                try:
+                    from .tracklet_perceptual_team_classifier import (
+                        TrackletPerceptualTeamClassifier,
+                        lab_to_bgr,
+                    )
+                    _clf = TrackletPerceptualTeamClassifier()
+                    for _fidx, _fimg in team_sample_frames.items():
+                        if _fimg is not None and _fidx < len(tracks["players"]):
+                            for _pid, _pinfo in tracks["players"][_fidx].items():
+                                _bb = _pinfo.get("bbox")
+                                if _bb and len(_bb) == 4:
+                                    _clf.add_observation(_fidx, _pid, _bb, _fimg)
+                    if len(_clf.tracklets) >= 2:
+                        _fit_info = _clf.fit()
+                        if _fit_info.get("success"):
+                            _perceptual_classifier = _clf
+                            # Assign all player tracklets present in tracks
+                            for _p_dict in tracks["players"]:
+                                for _pid in _p_dict.keys():
+                                    if _pid not in _pfd:
+                                        _pfd[_pid] = _clf.predict(_pid)["team_id"]
+                            _tci = True
+                            if _clf.team_centroids_lab is not None:
+                                _ta.team_colors = {
+                                    1: lab_to_bgr(_clf.team_centroids_lab[0]),
+                                    2: lab_to_bgr(_clf.team_centroids_lab[1]),
+                                }
+                            print(
+                                f"[INFO] Perceptual Team Classifier fitted: {len(_pfd)} players assigned across "
+                                f"{len(_clf.tracklets)} tracklets (inter-team ΔE={_fit_info.get('inter_team_delta_e')})"
+                            )
+                except Exception as _clf_err:
+                    print(f"[WARN] Perceptual team classifier fallback to legacy voting: {_clf_err}")
+
+                if not _pfd and _tci:
                     sm.update_status(session_id, "analyzing",
                                      stage="team_voting")
                     _t = _time.perf_counter()
@@ -1275,6 +1310,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                     "team_assigner":         _ta,
                     "team_color_initialized": _tci,
                     "player_final_team":      _pfd,
+                    "team_classifier":        _perceptual_classifier,
                 })
             except Exception:
                 _capture_exc(_team_exc)
@@ -1361,6 +1397,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         team_color_initialized = _team_result["team_color_initialized"]
         player_final_team      = _team_result["player_final_team"]
         segments               = _scene_result["segments"]
+        team_classifier        = _team_result.get("team_classifier")
 
         # ── 8. 球权检测（串行，写入 tracks；需要 B 的 player_final_team）──
         team_control  = []
@@ -1375,7 +1412,13 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                 for pid, info in p_tracks.items():
                     if not info:
                         continue
-                    tid = player_final_team.get(pid, 1)
+                    tid = player_final_team.get(pid)
+                    if tid is None and team_classifier is not None:
+                        pred_res = team_classifier.predict(pid)
+                        tid = pred_res.get("team_id")
+                    if tid is None:
+                        tid = 1
+                    player_final_team[pid] = tid
                     info["team"]       = tid
                     info["team_color"] = team_assigner.team_colors.get(tid, np.array([0,0,0]))
 
@@ -1410,18 +1453,17 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         pass_networks_data = {}
         try:
             from server.pipeline.pass_event_detector import PassEventDetector
+            from server.pipeline.canonical_pitch_coordinate_normalizer import CanonicalPitchCoordinateNormalizer
             pass_detector = PassEventDetector(fps=fps, control_radius_m=2.8, min_pass_distance_m=3.5)
+            pitch_normalizer = CanonicalPitchCoordinateNormalizer()
 
-            # 提取全场足球与球员二维轨迹
+            # 提取全场足球与球员二维轨迹（严格使用规范化球场米制坐标，杜绝屏幕像素倒灌）
             ball_traj = {}
             for i, b_dict in enumerate(tracks["ball"]):
                 b_info = b_dict.get(1, {})
-                pt = b_info.get("position_transformed")
-                if pt and len(pt) == 2:
-                    ball_traj[i] = (float(pt[0]), float(pt[1]))
-                elif "bbox" in b_info and len(b_info["bbox"]) == 4:
-                    bb = b_info["bbox"]
-                    ball_traj[i] = ((bb[0] + bb[2]) / 2.0, (bb[1] + bb[3]) / 2.0)
+                norm_pt = pitch_normalizer.extract_from_player_info(b_info)
+                if norm_pt is not None:
+                    ball_traj[i] = norm_pt
 
             player_traj = {}
             for i, p_dict in enumerate(tracks["players"]):
@@ -1429,12 +1471,9 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                 for pid, p_info in p_dict.items():
                     if not p_info:
                         continue
-                    pt = p_info.get("position_transformed")
-                    if pt and len(pt) == 2:
-                        f_players[pid] = (float(pt[0]), float(pt[1]))
-                    elif "bbox" in p_info and len(p_info["bbox"]) == 4:
-                        bb = p_info["bbox"]
-                        f_players[pid] = ((bb[0] + bb[2]) / 2.0, (bb[1] + bb[3]) / 2.0)
+                    norm_pt = pitch_normalizer.extract_from_player_info(p_info)
+                    if norm_pt is not None:
+                        f_players[pid] = norm_pt
                 player_traj[i] = f_players
 
             detected_passes = pass_detector.detect_passes(
@@ -1671,6 +1710,12 @@ def _speed_fields(speeds: list[float], rejected_count: int) -> dict:
 def _summary_for_range(tracks: dict, tracked_bboxes: dict, team_control: list,
                         start: int, end: int, fps: int) -> dict:
     """对 [start, end) 帧区间计算一份 summary（不含全局字段）"""
+    from server.pipeline.target_player_continuous_kinematic_accumulator import TargetPlayerContinuousKinematicAccumulator
+    from server.pipeline.canonical_pitch_coordinate_normalizer import CanonicalPitchCoordinateNormalizer
+
+    accum = TargetPlayerContinuousKinematicAccumulator(fps=float(fps))
+    normalizer = CanonicalPitchCoordinateNormalizer()
+
     speeds, distances, has_ball_count, rejected_count = [], [], 0, 0
 
     end = min(end, len(tracks["players"]))
@@ -1689,6 +1734,16 @@ def _summary_for_range(tracks: dict, tracked_bboxes: dict, team_control: list,
             if matched.get("has_ball"):
                 has_ball_count += 1
 
+            pos = normalizer.extract_from_player_info(matched)
+            if pos is not None:
+                accum.add_point(
+                    frame_idx=i,
+                    timestamp_s=i / max(1.0, float(fps)),
+                    x_m=pos[0],
+                    y_m=pos[1],
+                    track_id=matched.get("track_id"),
+                )
+
     sub_ctrl = team_control[start:min(end, len(team_control))]
     arr = np.array(sub_ctrl) if sub_ctrl else np.array([])
     t1 = int(np.sum(arr == 1)) if arr.size else 0
@@ -1704,20 +1759,40 @@ def _summary_for_range(tracks: dict, tracked_bboxes: dict, team_control: list,
         if t != 0:
             prev_team = t
 
-    # distance 是累计值，用区间首末的差 更准（而非 max）
-    dist_delta = 0.0
-    if distances:
-        dist_delta = float(max(distances) - min(distances))
+    k_summary = accum.get_summary()
+    has_valid_kinematics = (k_summary["frames_analyzed"] >= 2 and k_summary["total_distance_m"] > 0)
 
-    return {
+    if has_valid_kinematics:
+        dist_val = k_summary["total_distance_m"]
+        avg_speed_val = k_summary["fifa_avg_speed_kmh"]
+        max_speed_val = k_summary["max_speed_kmh"]
+    else:
+        dist_val = float(max(distances) - min(distances)) if distances else 0.0
+        spd_res = _speed_fields(speeds, rejected_count)
+        avg_speed_val = spd_res.get("avg_speed_kmh")
+        max_speed_val = spd_res.get("max_speed_kmh")
+
+    res = {
         **_speed_fields(speeds, rejected_count),
-        "total_distance_m":     round(dist_delta,                0),
+        "total_distance_m":     round(dist_val,                  0),
         "possession_seconds":   round(has_ball_count / fps,      1),
         "team1_possession_pct": round(t1 / total_ctrl * 100,     1),
         "team2_possession_pct": round(t2 / total_ctrl * 100,     1),
         "neutral_possession_pct": round(neu / total_ctrl * 100,  1),
         "possession_switches":  possession_switches,
     }
+    if has_valid_kinematics:
+        res["avg_speed_kmh"] = avg_speed_val
+        res["max_speed_kmh"] = max_speed_val
+        res["speed_telemetry"] = {
+            "fifa_avg_speed_kmh": k_summary["fifa_avg_speed_kmh"],
+            "active_moving_avg_speed_kmh": k_summary["active_moving_avg_speed_kmh"],
+            "speed_zones_m": k_summary["speed_zones_m"],
+            "speed_zones_pct": k_summary["speed_zones_pct"],
+            "sprint_count": k_summary["sprint_count"],
+            "reliability_score": k_summary["reliability_score"],
+        }
+    return res
 
 
 def _compute_player_summary(tracks: dict, tracked_bboxes: dict,
@@ -1729,6 +1804,12 @@ def _compute_player_summary(tracks: dict, tracked_bboxes: dict,
     若提供 segments，overall 只统计实际比赛帧（排除 halftime），
     并额外返回 by_segment 字段（上下半场分别统计）。
     """
+    from server.pipeline.target_player_continuous_kinematic_accumulator import TargetPlayerContinuousKinematicAccumulator
+    from server.pipeline.canonical_pitch_coordinate_normalizer import CanonicalPitchCoordinateNormalizer
+
+    accum = TargetPlayerContinuousKinematicAccumulator(fps=float(fps))
+    normalizer = CanonicalPitchCoordinateNormalizer()
+
     total_frames = len(tracks["players"])
 
     # ── Overall：有分段时只统计真正比赛帧，避免中场/赛前/赛后稀释均值 ──
@@ -1757,6 +1838,16 @@ def _compute_player_summary(tracks: dict, tracked_bboxes: dict,
                 distances.append(matched.get("distance", 0))
                 if matched.get("has_ball"):
                     has_ball_count += 1
+
+                pos = normalizer.extract_from_player_info(matched)
+                if pos is not None:
+                    accum.add_point(
+                        frame_idx=i,
+                        timestamp_s=i / max(1.0, float(fps)),
+                        x_m=pos[0],
+                        y_m=pos[1],
+                        track_id=matched.get("track_id"),
+                    )
         sub = team_control[rng_start:min(rng_end, len(team_control))]
         all_sub_ctrl.extend(sub)
 
@@ -1774,17 +1865,39 @@ def _compute_player_summary(tracks: dict, tracked_bboxes: dict,
         if t != 0:
             prev_team = t
 
-    dist_delta = float(max(distances) - min(distances)) if distances else 0.0
+    k_summary = accum.get_summary()
+    has_valid_kinematics = (k_summary["frames_analyzed"] >= 2 and k_summary["total_distance_m"] > 0)
+
+    if has_valid_kinematics:
+        dist_val = k_summary["total_distance_m"]
+        avg_speed_val = k_summary["fifa_avg_speed_kmh"]
+        max_speed_val = k_summary["max_speed_kmh"]
+    else:
+        dist_val = float(max(distances) - min(distances)) if distances else 0.0
+        spd_res = _speed_fields(speeds, rejected_count)
+        avg_speed_val = spd_res.get("avg_speed_kmh")
+        max_speed_val = spd_res.get("max_speed_kmh")
 
     overall = {
         **_speed_fields(speeds, rejected_count),
-        "total_distance_m":     round(dist_delta,                0),
+        "total_distance_m":     round(dist_val,                  0),
         "possession_seconds":   round(has_ball_count / fps,      1),
         "team1_possession_pct": round(t1 / total_ctrl * 100,     1),
         "team2_possession_pct": round(t2 / total_ctrl * 100,     1),
         "neutral_possession_pct": round(neu / total_ctrl * 100,  1),
         "possession_switches":  possession_switches,
     }
+    if has_valid_kinematics:
+        overall["avg_speed_kmh"] = avg_speed_val
+        overall["max_speed_kmh"] = max_speed_val
+        overall["speed_telemetry"] = {
+            "fifa_avg_speed_kmh": k_summary["fifa_avg_speed_kmh"],
+            "active_moving_avg_speed_kmh": k_summary["active_moving_avg_speed_kmh"],
+            "speed_zones_m": k_summary["speed_zones_m"],
+            "speed_zones_pct": k_summary["speed_zones_pct"],
+            "sprint_count": k_summary["sprint_count"],
+            "reliability_score": k_summary["reliability_score"],
+        }
     if team_colors:
         try:
             overall["team_colors_hex"] = {str(k): bgr_to_hex(v) for k, v in team_colors.items()}
@@ -1834,6 +1947,8 @@ def _export_position_jsons(session_id: str, tracks: dict, tracked_bboxes: dict,
     Both upload to R2 and return their public URLs (or None on failure).
     """
     import json
+    from server.pipeline.canonical_pitch_coordinate_normalizer import CanonicalPitchCoordinateNormalizer
+    pitch_normalizer = CanonicalPitchCoordinateNormalizer()
 
     pitch_length = 12000  # cm — matches SoccerPitchConfiguration default
     pitch_width  = 7000
@@ -1866,21 +1981,16 @@ def _export_position_jsons(session_id: str, tracks: dict, tracked_bboxes: dict,
         for pid, info in (frame_players or {}).items():
             mm_pos = info.get("position_minimap")
             tr_pos = info.get("position_transformed")
-            if mm_pos is not None:
-                # position_minimap is already in SoccerPitchConfiguration scale
-                # (0-12000 × 0-7000 cm) — use directly.
-                pos = mm_pos
-            elif tr_pos is not None:
-                # position_transformed is in METRES (0-105 × 0-68).
-                # Convert to the same cm scale so toPx() on the frontend works:
-                #   x_cm = x_m * 100,  y_cm = y_m * 100
-                pos = [float(tr_pos[0]) * 100.0, float(tr_pos[1]) * 100.0]
-            else:
+            raw_pos = mm_pos if mm_pos is not None else tr_pos
+            if raw_pos is None:
                 continue
-            try:
-                x = float(pos[0]); y = float(pos[1])
-            except (TypeError, IndexError):
+            norm_res = pitch_normalizer.normalize(raw_pos, allow_run_off=True)
+            if norm_res is None or not norm_res.is_valid:
                 continue
+
+            # Map canonical FIFA meters [0, 105] x [0, 68] to Soccana [0, 12000] x [0, 7000] cm
+            x = (norm_res.x_m + 7.5) * 100.0
+            y = (norm_res.y_m + 1.0) * 100.0
             team = int(info.get("team", 0)) if info.get("team") is not None else 0
             entry = {
                 "id": int(pid),
@@ -1899,17 +2009,13 @@ def _export_position_jsons(session_id: str, tracks: dict, tracked_bboxes: dict,
             if matched:
                 mm = matched.get("position_minimap")
                 tr = matched.get("position_transformed")
-                if mm is not None:
-                    tpos = [float(mm[0]), float(mm[1])]
-                elif tr is not None:
-                    tpos = [float(tr[0]) * 100.0, float(tr[1]) * 100.0]
-                else:
-                    tpos = None
-                if tpos is not None:
-                    try:
-                        tracked_positions.append([round(tpos[0], 1), round(tpos[1], 1)])
-                    except (TypeError, IndexError):
-                        pass
+                raw_pos = mm if mm is not None else tr
+                if raw_pos is not None:
+                    norm_res = pitch_normalizer.normalize(raw_pos, allow_run_off=True)
+                    if norm_res is not None and norm_res.is_valid:
+                        tx = (norm_res.x_m + 7.5) * 100.0
+                        ty = (norm_res.y_m + 1.0) * 100.0
+                        tracked_positions.append([round(tx, 1), round(ty, 1)])
 
         # Per-minimap-sample bookkeeping
         if emit_minimap:
@@ -1946,17 +2052,14 @@ def _export_position_jsons(session_id: str, tracks: dict, tracked_bboxes: dict,
                     continue
                 b_mm = b.get("position_minimap")
                 b_tr = b.get("position_transformed")
-                if b_mm is not None:
-                    bpos = [float(b_mm[0]), float(b_mm[1])]
-                elif b_tr is not None:
-                    bpos = [float(b_tr[0]) * 100.0, float(b_tr[1]) * 100.0]
-                else:
-                    continue
-                try:
-                    bx_data = [round(bpos[0], 1), round(bpos[1], 1)]
-                except (TypeError, IndexError):
-                    pass
-                break
+                raw_b = b_mm if b_mm is not None else b_tr
+                if raw_b is not None:
+                    b_norm = pitch_normalizer.normalize(raw_b, allow_run_off=True)
+                    if b_norm is not None and b_norm.is_valid:
+                        bx = (b_norm.x_m + 7.5) * 100.0
+                        by = (b_norm.y_m + 1.0) * 100.0
+                        bx_data = [round(bx, 1), round(by, 1)]
+                        break
             ball_path.append(bx_data)
 
     team_colors_hex = {

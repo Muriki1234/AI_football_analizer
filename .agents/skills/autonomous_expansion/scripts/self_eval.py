@@ -194,6 +194,7 @@ def audit() -> Dict[str, Any]:
 
     graph = load_json(GRAPH_FILE, {"nodes": {}})
     nodes = graph.get("nodes", {}) if isinstance(graph, dict) else {}
+    total_ops = len(nodes)
     validated_ops = sum(
         1 for node in nodes.values()
         if node.get("status") in {"VALIDATED_SANDBOX", "VALIDATED", "PRODUCTION_CANDIDATE", "INTEGRATED"}
