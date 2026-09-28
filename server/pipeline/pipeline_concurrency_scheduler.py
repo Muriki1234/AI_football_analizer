@@ -58,10 +58,10 @@ def compute_samurai_concurrency_cap(
                 except Exception:
                     total_ram_gb = 48.0
 
-            # Production default: 5 concurrent SAMURAI workers (5+5 two-wave execution on 10 segments).
-            # Memory footprint: 16 GB base + 5 * 10.5 GB = 68.5 GB (well below 125 GB container limit).
+            # Production default: 4 concurrent SAMURAI workers (4-parallel execution).
+            # Memory footprint: 16 GB base + 4 * 10.5 GB = 58 GB (well below 125 GB container limit).
             # Overridable via SAMURAI_MAX_PARALLEL or env_cap_override.
-            base_cap = 5
+            base_cap = 4
 
     # Baseline: 1080p (1920×1080 ≈ 2.07M pixels)
     baseline_px = 1920 * 1080
