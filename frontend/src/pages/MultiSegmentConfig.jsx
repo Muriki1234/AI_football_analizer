@@ -7,8 +7,8 @@ import { analyzeFrame, getSession } from '../services/api';
 import StepNav from '../components/StepNav';
 import './Configuration.css';
 
-// Auto segment count per period: 8 segments per period (e.g. 8 for 1 period, 8+8=16 for 2 periods).
-const SEGS_PER_PERIOD = 8;
+// Auto segment count per period: 10 segments per period (e.g. 10 for 1 period, 10+10=20 for 2 periods).
+const SEGS_PER_PERIOD = 10;
 const MIN_PERIOD_FOR_MULTI_SEG = 5;   // 秒
 
 /**
@@ -167,12 +167,12 @@ export default function MultiSegmentConfig() {
     }, [sessionId]);
 
     // 2. Background loading queue for segment detection.
-    // Concurrency pool with up to 4 parallel detections.
+    // Concurrency pool with up to 5 parallel detections.
     // Prioritizes the active segment, then fills remaining slots in order.
     useEffect(() => {
         if (segments.length === 0) return;
         
-        const MAX_CONCURRENT_DETECTIONS = 4;
+        const MAX_CONCURRENT_DETECTIONS = 5;
         const currentlyDetecting = segments.filter(s => s.detecting).length;
         const availableSlots = MAX_CONCURRENT_DETECTIONS - currentlyDetecting;
         if (availableSlots <= 0) return;
