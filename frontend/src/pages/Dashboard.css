@@ -1202,6 +1202,7 @@
 .stat-row__sub { color: #64748b; }
 
 .poss-bar {}
+.poss-bar__labels,
 .poss-bar__header {
     display: flex;
     flex-wrap: wrap;

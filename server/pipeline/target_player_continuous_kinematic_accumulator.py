@@ -252,6 +252,23 @@ class TargetPlayerContinuousKinematicAccumulator:
 
         max_speed = min(self.MAX_VALID_SPEED_KMH, max_speed)
 
+        # Apply PhysiologicallyBoundedSprintPeakFilter to reject non-human optical spikes
+        sprint_count_val = self.sprint_count
+        points = [(pt.frame_idx, pt.timestamp_s, pt.x_m, pt.y_m) for pt in self.history if not pt.is_gap]
+        if len(points) >= 2:
+            try:
+                from server.pipeline.physiologically_bounded_sprint_peak_filter import PhysiologicallyBoundedSprintPeakFilter
+                sprint_filter = PhysiologicallyBoundedSprintPeakFilter(fps=self.fps)
+                s_res = sprint_filter.process_trajectory(points)
+                filt_peak = s_res.get("max_speed_kmh", 0.0)
+                if filt_peak > 0:
+                    max_speed = min(max_speed, filt_peak)
+                filt_sprints = s_res.get("sprint_count", 0)
+                if filt_sprints > 0:
+                    sprint_count_val = max(sprint_count_val, filt_sprints)
+            except Exception:
+                pass
+
         # Reliability score (continuous float [0.0, 1.0])
         total_eval = max(1, total_pts)
         glitch_ratio = (self.velocity_clamped_count + self.gap_count) / total_eval
@@ -264,7 +281,7 @@ class TargetPlayerContinuousKinematicAccumulator:
             "active_moving_avg_speed_kmh": round(active_speed_kmh, 2),
             "max_speed_kmh": round(max_speed, 2),
             "duration_s": round(self.total_duration_s, 2),
-            "sprint_count": self.sprint_count,
+            "sprint_count": sprint_count_val,
             "speed_zones_m": {
                 "walking": round(self.zone_walking_m, 2),
                 "jogging": round(self.zone_jogging_m, 2),

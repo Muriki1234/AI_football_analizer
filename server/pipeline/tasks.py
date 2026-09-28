@@ -1448,6 +1448,29 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
 
             _bench("possession_detection", _t)
 
+            # ── 8a. 控球率时域迟滞平滑 (Possession Temporal Hysteresis & Flight Bridging) ──
+            try:
+                from server.pipeline.possession_temporal_hysteresis_engine import PossessionTemporalHysteresisEngine
+                poss_engine = PossessionTemporalHysteresisEngine(
+                    fps=fps,
+                    pass_grace_period_s=2.5,
+                    turnover_confirm_frames=3,
+                    loose_ball_decay_s=3.0,
+                )
+                filtered_control = poss_engine.filter_control_sequence(team_control)
+                if len(filtered_control) == len(team_control):
+                    raw_neu = team_control.count(0)
+                    filt_neu = filtered_control.count(0)
+                    total_f = max(1, len(team_control))
+                    team_control = filtered_control
+                    print(
+                        f"[INFO] Applied PossessionTemporalHysteresisEngine: Neutral frames reduced from "
+                        f"{raw_neu} ({raw_neu/total_f*100:.1f}%) to {filt_neu} ({filt_neu/total_f*100:.1f}%)"
+                    )
+            except Exception as poss_err:
+                print(f"[WARN] PossessionTemporalHysteresisEngine failed (non-blocking fallback): {poss_err}", flush=True)
+                log.warning("PossessionTemporalHysteresisEngine failed: %s", poss_err)
+
         # ── 8b. 传球事件与传球网络挖掘 (Pass Event Spotting & Passing Networks) ──
         pass_events_list = []
         pass_networks_data = {}
@@ -1700,11 +1723,21 @@ def _speed_fields(speeds: list[float], rejected_count: int) -> dict:
         "speed_reliability": "ok",
     }
     if speeds:
-        fields["max_speed_kmh"] = round(float(max(speeds)), 1)
-        fields["avg_speed_kmh"] = round(float(np.mean(speeds)), 1)
-    if rejected_count > 0 or not speeds:
+        clean_speeds = [float(s) for s in speeds if s is not None and s <= 38.0]
+        if clean_speeds:
+            if len(clean_speeds) >= 15:
+                peak = float(np.percentile(clean_speeds, 99))
+            else:
+                peak = float(max(clean_speeds))
+            fields["max_speed_kmh"] = round(min(38.0, peak), 1)
+            fields["avg_speed_kmh"] = round(float(np.mean(clean_speeds)), 1)
+        else:
+            fields["max_speed_kmh"] = round(float(max(speeds)), 1)
+            fields["avg_speed_kmh"] = round(float(np.mean(speeds)), 1)
+    if rejected_count > max(3, len(speeds) * 0.05) or not speeds:
         fields["speed_reliability"] = "suspect"
     return fields
+
 
 
 def _summary_for_range(tracks: dict, tracked_bboxes: dict, team_control: list,
@@ -1784,6 +1817,7 @@ def _summary_for_range(tracks: dict, tracked_bboxes: dict, team_control: list,
     if has_valid_kinematics:
         res["avg_speed_kmh"] = avg_speed_val
         res["max_speed_kmh"] = max_speed_val
+        res["sprint_count"] = k_summary.get("sprint_count", 0)
         res["speed_telemetry"] = {
             "fifa_avg_speed_kmh": k_summary["fifa_avg_speed_kmh"],
             "active_moving_avg_speed_kmh": k_summary["active_moving_avg_speed_kmh"],
@@ -1890,6 +1924,7 @@ def _compute_player_summary(tracks: dict, tracked_bboxes: dict,
     if has_valid_kinematics:
         overall["avg_speed_kmh"] = avg_speed_val
         overall["max_speed_kmh"] = max_speed_val
+        overall["sprint_count"] = k_summary.get("sprint_count", 0)
         overall["speed_telemetry"] = {
             "fifa_avg_speed_kmh": k_summary["fifa_avg_speed_kmh"],
             "active_moving_avg_speed_kmh": k_summary["active_moving_avg_speed_kmh"],

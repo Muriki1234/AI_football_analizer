@@ -89,12 +89,13 @@ const PossessionBar = ({ team1, team2, neutral, t1Color, t2Color }) => {
         <div className="poss-bar">
             <div className="poss-bar__labels">
                 <span>{t1.toFixed(1)}%</span>
+                {neu > 0 && <span style={{ color: '#94a3b8', fontSize: '0.74rem' }}>Neutral {neu.toFixed(1)}%</span>}
                 <span style={{ textAlign: 'right' }}>{t2.toFixed(1)}%</span>
             </div>
             <div className="poss-bar__track">
                 <div className="poss-bar__fill poss-bar__fill--t1" style={{ width: `${t1}%`, background: t1Color || undefined }} />
-                <div className="poss-bar__fill poss-bar__fill--t2" style={{ width: `${t2}%`, background: t2Color || undefined }} />
                 {neu > 0 && <div className="poss-bar__fill poss-bar__fill--neutral" style={{ width: `${neu}%` }} />}
+                <div className="poss-bar__fill poss-bar__fill--t2" style={{ width: `${t2}%`, background: t2Color || undefined }} />
             </div>
         </div>
     );
@@ -141,6 +142,7 @@ export default function DataAnalysisPanel({ playerSummary }) {
                 <StatRow icon="📏" label="Distance" value={formatMetric(overall.total_distance_m, ' m', 0)} />
                 <StatRow icon="⚽" label="Possession" value={formatMetric(overall.possession_seconds, ' s')} />
                 <StatRow icon="🔄" label="Switches" value={overall.possession_switches ?? '-'} />
+                <StatRow icon="👟" label="Sprints" value={overall.speed_telemetry?.sprint_count ?? overall.sprint_count ?? '-'} />
             </div>
             {speedFlag && (
                 <p className="drawer__note">

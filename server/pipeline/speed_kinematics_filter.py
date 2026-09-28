@@ -135,8 +135,8 @@ class RobustKinematicSpeedEstimator:
             speed_kmh = speed_mps * 3.6
 
             if speed_kmh > self.max_speed_kmh:
-                # Teleport jump (tracking swap): clamp speed and cap distance to max plausible movement
-                speed_kmh = self.max_speed_kmh
+                # Teleport jump (tracking swap / homography jump): do not adopt unphysical 38 km/h ceiling
+                speed_kmh = out[prev_f]["speed"] if i > 0 else 0.0
                 step_dist = 0.0
             elif speed_kmh < self.deadband_kmh:
                 # Stationary deadband: athlete standing still, ignore optical jitter
