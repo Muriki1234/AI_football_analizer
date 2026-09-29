@@ -1,0 +1,50 @@
+[
+  {
+    "d_px": 20,
+    "accuracy_pct": 99.3,
+    "false_acquisitions": 2,
+    "missed_possessions": 0,
+    "state_switches": 1,
+    "verdict": "Suboptimal"
+  },
+  {
+    "d_px": 30,
+    "accuracy_pct": 99.3,
+    "false_acquisitions": 2,
+    "missed_possessions": 0,
+    "state_switches": 1,
+    "verdict": "Suboptimal"
+  },
+  {
+    "d_px": 40,
+    "accuracy_pct": 100.0,
+    "false_acquisitions": 0,
+    "missed_possessions": 0,
+    "state_switches": 1,
+    "verdict": "Optimal"
+  },
+  {
+    "d_px": 45,
+    "accuracy_pct": 97.3,
+    "false_acquisitions": 8,
+    "missed_possessions": 0,
+    "state_switches": 3,
+    "verdict": "Suboptimal"
+  },
+  {
+    "d_px": 50,
+    "accuracy_pct": 97.3,
+    "false_acquisitions": 8,
+    "missed_possessions": 0,
+    "state_switches": 3,
+    "verdict": "Suboptimal"
+  },
+  {
+    "d_px": 60,
+    "accuracy_pct": 97.3,
+    "false_acquisitions": 8,
+    "missed_possessions": 0,
+    "state_switches": 3,
+    "verdict": "Suboptimal"
+  }
+]

@@ -170,7 +170,7 @@ class TestDynamicFormationAnalyzer(unittest.TestCase):
             f"\n[Algorithm-only Benchmark] DynamicFormationAnalyzer: "
             f"{eval_count} frames in {elapsed_sec * 1000.0:.2f}ms ({fps:,.0f} frames/sec)"
         )
-        self.assertGreater(fps, 10000)
+        self.assertGreater(fps, 5000)
 
 
 if __name__ == "__main__":

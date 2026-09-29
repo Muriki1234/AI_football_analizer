@@ -1,0 +1,112 @@
+{
+  "640": {
+    "imgsz": 640,
+    "fps": 32.7,
+    "ms_per_frame": 30.6,
+    "ball": {
+      "tp": 40,
+      "fp": 0,
+      "fn": 64,
+      "precision": 1.0,
+      "recall": 0.3846,
+      "f1": 0.5556,
+      "max_gap": 51
+    },
+    "player": {
+      "tp": 2849,
+      "fp": 103,
+      "fn": 234,
+      "precision": 0.9651,
+      "recall": 0.9241,
+      "f1": 0.9442
+    }
+  },
+  "960": {
+    "imgsz": 960,
+    "fps": 28.7,
+    "ms_per_frame": 34.9,
+    "ball": {
+      "tp": 82,
+      "fp": 0,
+      "fn": 22,
+      "precision": 1.0,
+      "recall": 0.7885,
+      "f1": 0.8817,
+      "max_gap": 46
+    },
+    "player": {
+      "tp": 3005,
+      "fp": 62,
+      "fn": 78,
+      "precision": 0.9798,
+      "recall": 0.9747,
+      "f1": 0.9772
+    }
+  },
+  "1280": {
+    "imgsz": 1280,
+    "fps": 22.6,
+    "ms_per_frame": 44.3,
+    "ball": {
+      "tp": 104,
+      "fp": 6,
+      "fn": 0,
+      "precision": 0.9455,
+      "recall": 1.0,
+      "f1": 0.972,
+      "max_gap": 24
+    },
+    "player": {
+      "tp": 3000,
+      "fp": 13,
+      "fn": 83,
+      "precision": 0.9957,
+      "recall": 0.9731,
+      "f1": 0.9843
+    }
+  },
+  "1536": {
+    "imgsz": 1536,
+    "fps": 24.7,
+    "ms_per_frame": 40.4,
+    "ball": {
+      "tp": 102,
+      "fp": 11,
+      "fn": 2,
+      "precision": 0.9027,
+      "recall": 0.9808,
+      "f1": 0.9401,
+      "max_gap": 24
+    },
+    "player": {
+      "tp": 2975,
+      "fp": 22,
+      "fn": 108,
+      "precision": 0.9927,
+      "recall": 0.965,
+      "f1": 0.9786
+    }
+  },
+  "1920": {
+    "imgsz": 1920,
+    "fps": 18.6,
+    "ms_per_frame": 53.8,
+    "ball": {
+      "tp": 104,
+      "fp": 12,
+      "fn": 0,
+      "precision": 0.8966,
+      "recall": 1.0,
+      "f1": 0.9455,
+      "max_gap": 24
+    },
+    "player": {
+      "tp": 2982,
+      "fp": 43,
+      "fn": 101,
+      "precision": 0.9858,
+      "recall": 0.9672,
+      "f1": 0.9764
+    }
+  }
+}

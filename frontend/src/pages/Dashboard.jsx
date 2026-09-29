@@ -210,7 +210,7 @@ export default function Dashboard() {
                     currentSession = await getSession(sessionId).catch(() => null);
                 }
                 const status = currentSession?.status;
-                if (['queued', 'processing', 'tracking', 'analyzing', 'analysis_done', 'analysis_failed', 'tracking_failed'].includes(status)) {
+                if (['queued', 'processing', 'tracking', 'tracking_done', 'analyzing', 'analysis_done', 'analysis_failed', 'tracking_failed', 'samurai_multi_pending', 'samurai_done'].includes(status)) {
                     const lastUpdated = new Date(currentSession?.updated_at || currentSession?.created_at).getTime();
                     const minsSinceUpdate = (Date.now() - lastUpdated) / 60000;
                     if (minsSinceUpdate <= 20 || status.includes('failed') || status.includes('done')) {

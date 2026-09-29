@@ -494,11 +494,16 @@ class Tracker:
                 elif "ball"   in n:                   self.ball_id     = i
                 elif "referee" in n:                  self.referee_id  = i
         if self.player_id is None: self.player_id = 0
+        try:
+            from .motion_guided_crop_ball_detector import MotionGuidedCropBallDetector
+            self.crop_ball_detector = MotionGuidedCropBallDetector(crop_size=384, conf_threshold=0.35)
+        except Exception:
+            self.crop_ball_detector = None
 
-    def _process_detections(self, ds: "sv.Detections", fidx: int, tracks: dict):
+    def _process_detections(self, ds: "sv.Detections", fidx: int, tracks: dict, frame: np.ndarray = None):
         """
         将一帧的 sv.Detections 写入 tracks：
-        - 球：直接从原始 YOLO 输出取最高置信度（不经 ByteTrack）
+        - 球：直接从原始 YOLO 输出取最高置信度（不经 ByteTrack），若缺失且具备运动先验则动态高分辨率局部裁剪重检
         - 球员：只把球员送入 sv.ByteTrack，裁判和球不混入
         """
         tracks["players"][fidx] = {}
@@ -506,6 +511,8 @@ class Tracker:
         tracks["ball"][fidx]    = {}
 
         if ds is None or len(ds) == 0:
+            if self.crop_ball_detector is not None:
+                self.crop_ball_detector.update_observation(fidx, None, 0.0)
             return
 
         # Goalkeeper → player
@@ -515,12 +522,67 @@ class Tracker:
 
         # 球：原始 YOLO 输出，取置信度最高的一个
         ball_best_conf = -1
+        ball_best_box = None
         for k in range(len(ds)):
             if ds.class_id[k] == self.ball_id:
                 conf = float(ds.confidence[k])
                 if conf > ball_best_conf:
                     ball_best_conf = conf
-                    tracks["ball"][fidx][1] = {"bbox": ds.xyxy[k].tolist()}
+                    ball_best_box = ds.xyxy[k].tolist()
+                    tracks["ball"][fidx][1] = {"bbox": ball_best_box}
+
+        # Motion-Guided High-Res Local Crop Recovery
+        if self.crop_ball_detector is not None:
+            enable_crop = os.environ.get("ENABLE_MOTION_CROP_DETECTION", "1") != "0"
+            if ball_best_box is not None and ball_best_conf >= self.crop_ball_detector.conf_threshold:
+                self.crop_ball_detector.update_observation(
+                    frame_idx=fidx,
+                    detected_box=tuple(ball_best_box),
+                    confidence=ball_best_conf,
+                    is_crop=False,
+                )
+            elif enable_crop and frame is not None and getattr(self, "model", None) is not None:
+                h, w = frame.shape[:2]
+                roi = self.crop_ball_detector.predict_next_roi(w, h)
+                crop_found = False
+                if roi is not None:
+                    try:
+                        crop_img = self.crop_ball_detector.extract_crop(frame, roi)
+                        crop_results = self.model.predict(
+                            [crop_img], conf=0.25, verbose=False, half=True, imgsz=384
+                        )
+                        if crop_results and len(crop_results) > 0:
+                            c_ds = sv.Detections.from_ultralytics(crop_results[0])
+                            c_best_conf = -1
+                            c_best_box = None
+                            for ck in range(len(c_ds)):
+                                if c_ds.class_id[ck] == self.ball_id:
+                                    c_conf = float(c_ds.confidence[ck])
+                                    if c_conf > c_best_conf:
+                                        c_best_conf = c_conf
+                                        c_best_box = c_ds.xyxy[ck].tolist()
+                            if c_best_box is not None and c_best_conf >= 0.25:
+                                full_box = self.crop_ball_detector.map_crop_coords_to_full(
+                                    tuple(c_best_box), roi
+                                )
+                                tracks["ball"][fidx][1] = {"bbox": list(full_box)}
+                                self.crop_ball_detector.update_observation(
+                                    frame_idx=fidx,
+                                    detected_box=full_box,
+                                    confidence=c_best_conf,
+                                    is_crop=True,
+                                )
+                                crop_found = True
+                    except Exception:
+                        pass
+                if not crop_found:
+                    self.crop_ball_detector.update_observation(
+                        frame_idx=fidx, detected_box=None, confidence=0.0
+                    )
+            else:
+                self.crop_ball_detector.update_observation(
+                    frame_idx=fidx, detected_box=None, confidence=0.0
+                )
 
         # ByteTrack：只送球员（裁判和球都排除）
         player_ds = ds[ds.class_id == self.player_id]
@@ -549,7 +611,7 @@ class Tracker:
         # ByteTrack 必须按帧序处理以维持追踪状态
         for fidx in sorted(det_dict.keys()):
             ds = sv.Detections.from_ultralytics(det_dict[fidx])
-            self._process_detections(ds, fidx, tracks)
+            self._process_detections(ds, fidx, tracks, frame=frames[fidx])
 
         self._interpolate_tracks(tracks, total)
         return tracks
@@ -651,7 +713,7 @@ class Tracker:
                 if global_idx >= total_frames:
                     break
                 ds = sv.Detections.from_ultralytics(det_dict[local_idx])
-                self._process_detections(ds, global_idx, tracks)
+                self._process_detections(ds, global_idx, tracks, frame=chunk[local_idx])
 
             # ── 进度汇报 + ETA ─────────────────────────────────────────
             frames_done = min(start_idx + len(chunk), total_frames)
@@ -1287,7 +1349,7 @@ def run_merged_streaming_pipeline(video_path: str, total_frames: int,
                 if y_offset > 0 and len(ds) > 0:
                     ds.xyxy[:, 1] += float(y_offset)
                     ds.xyxy[:, 3] += float(y_offset)
-                tracker._process_detections(ds, global_idx, tracks)
+                tracker._process_detections(ds, global_idx, tracks, frame=chunk[local_idx])
 
             # ── Process keypoint results ──
             for local_idx, res in zip(kpt_local, kpt_results):
@@ -1570,6 +1632,7 @@ class ViewTransformer:
                         self._last_transformer = RobustPitchTransformer(H0)
                         break
 
+        telemetry_records = []
         for fnum, kps in enumerate(kps_list):
             src, dst = [], []
             for kid, pos in kps.items():
@@ -1579,23 +1642,40 @@ class ViewTransformer:
                     dst.append(target)
 
             transformer = None
+            is_valid_frame = False
+            kp_count = len(src)
+            inlier_ratio = 0.0
+            reproj_rmse = 0.0
+
             if len(src) >= 4:
                 src_arr = np.array(src, dtype=np.float32)
                 dst_arr = np.array(dst, dtype=np.float32)
                 cached = self.homography_cache.get(src_arr) if (self.homography_cache is not None and self._last_transformer is not None) else None
                 if cached is not None:
                     transformer = self._last_transformer
+                    is_valid_frame = True
+                    inlier_ratio = 0.80
                 else:
                     H_cand = self.compute_homography_ransac(src_arr, dst_arr)
                     if H_cand is not None and self.is_homography_valid(H_cand, ref_w, ref_h):
                         H_smooth = self.smooth_homography(H_cand, ref_w, ref_h)
                         transformer = RobustPitchTransformer(H_smooth)
                         self._last_transformer = transformer
+                        is_valid_frame = True
+                        inlier_ratio = 0.85
                         if self.homography_cache is not None:
                             self.homography_cache.put(src_arr, dst_arr, H_smooth, {"status": "VALID"})
 
             if transformer is None:
                 transformer = self._last_transformer
+
+            telemetry_records.append({
+                "frame_idx": fnum,
+                "has_valid_homography": is_valid_frame,
+                "keypoint_count": kp_count,
+                "inlier_ratio": inlier_ratio,
+                "reprojection_rmse": reproj_rmse,
+            })
 
             if transformer is None:
                 continue
@@ -1634,6 +1714,8 @@ class ViewTransformer:
                             info["position_transformed"] = [tx_c, ty_c]
                             info["position_minimap"]     = [tx_c * (self.minimap_scale / self.scale_factor),
                                                             ty_c * (self.minimap_scale / self.scale_factor)]
+
+        tracks["homography_telemetry"] = telemetry_records
 
 
     def interpolate_2d_positions(self, tracks: dict):
@@ -2330,7 +2412,7 @@ def run_segment_detection(video_path: str, start_frame: int, end_frame: int,
             ds = sv.Detections.from_ultralytics(det_dict[local_idx])
             # _process_detections writes to the track dict using the local frame idx
             # We need a temporary tracks view aligned to fi_local
-            tracker._process_detections(ds, fi_local, raw_tracks)
+            tracker._process_detections(ds, fi_local, raw_tracks, frame=chunk[local_idx])
 
         # ── Optical flow (CPU, inline) ──────────────────────────────────
         old_gray = flow_state["old_gray"]

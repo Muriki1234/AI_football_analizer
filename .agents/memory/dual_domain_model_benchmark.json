@@ -1,0 +1,72 @@
+{
+  "broadcast_domain": [
+    {
+      "model_name": "Current YOLO11n",
+      "n_frames": 50,
+      "ball_detected_frames": 49,
+      "ball_coverage_pct": 98.0,
+      "mean_ball_conf": 0.712,
+      "max_dropout_gap": 1,
+      "avg_players_detected": 20.7,
+      "latency_ms": 52.22,
+      "fps": 19.1
+    },
+    {
+      "model_name": "Candidate A (YOLOv9-ball)",
+      "n_frames": 50,
+      "ball_detected_frames": 20,
+      "ball_coverage_pct": 40.0,
+      "mean_ball_conf": 0.272,
+      "max_dropout_gap": 5,
+      "avg_players_detected": 0.0,
+      "latency_ms": 51.8,
+      "fps": 19.3
+    },
+    {
+      "model_name": "Candidate B (YOLO11s-COCO)",
+      "n_frames": 50,
+      "ball_detected_frames": 46,
+      "ball_coverage_pct": 92.0,
+      "mean_ball_conf": 0.622,
+      "max_dropout_gap": 1,
+      "avg_players_detected": 25.5,
+      "latency_ms": 62.27,
+      "fps": 16.1
+    }
+  ],
+  "grassroots_domain": [
+    {
+      "model_name": "Current YOLO11n",
+      "n_frames": 50,
+      "ball_detected_frames": 45,
+      "ball_coverage_pct": 90.0,
+      "mean_ball_conf": 0.308,
+      "max_dropout_gap": 3,
+      "avg_players_detected": 19.6,
+      "latency_ms": 63.5,
+      "fps": 15.7
+    },
+    {
+      "model_name": "Candidate A (YOLOv9-ball)",
+      "n_frames": 50,
+      "ball_detected_frames": 0,
+      "ball_coverage_pct": 0.0,
+      "mean_ball_conf": 0.0,
+      "max_dropout_gap": 50,
+      "avg_players_detected": 0.0,
+      "latency_ms": 43.0,
+      "fps": 23.3
+    },
+    {
+      "model_name": "Candidate B (YOLO11s-COCO)",
+      "n_frames": 50,
+      "ball_detected_frames": 0,
+      "ball_coverage_pct": 0.0,
+      "mean_ball_conf": 0.0,
+      "max_dropout_gap": 50,
+      "avg_players_detected": 24.1,
+      "latency_ms": 61.98,
+      "fps": 16.1
+    }
+  ]
+}

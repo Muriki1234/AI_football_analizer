@@ -95,7 +95,7 @@ export default function MultiSegmentConfig() {
         (async () => {
             try {
                 const s = await getSession(sessionId);
-                if (['queued', 'processing', 'tracking', 'analyzing', 'analysis_done'].includes(s?.status)) {
+                if (['queued', 'processing', 'tracking', 'tracking_done', 'analyzing', 'analysis_done', 'samurai_multi_pending', 'samurai_done'].includes(s?.status)) {
                     navigate(`/dashboard?sessionId=${sessionId}`, { replace: true, state: { sessionId, videoId: sessionId } });
                     return;
                 }

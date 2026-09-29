@@ -628,6 +628,7 @@ def _run_yolo_parallel(video_path: str, total_frames: int, n_segs: int,
         "players":  [{} for _ in range(total_frames)],
         "referees": [{} for _ in range(total_frames)],
         "ball":     [{} for _ in range(total_frames)],
+        "homography_telemetry": [None] * total_frames,
     }
     merged_cam_mov = [[0.0, 0.0]] * total_frames
 
@@ -642,6 +643,10 @@ def _run_yolo_parallel(video_path: str, total_frames: int, n_segs: int,
             for i, fd in enumerate(seg_tracks[key]):
                 if start + i < total_frames:
                     merged_tracks[key][start + i] = fd
+        if "homography_telemetry" in seg_tracks:
+            for i, obs in enumerate(seg_tracks["homography_telemetry"]):
+                if start + i < total_frames:
+                    merged_tracks["homography_telemetry"][start + i] = obs
         for i, cm in enumerate(seg_cam):
             if start + i < total_frames:
                 merged_cam_mov[start + i] = cm
@@ -1608,7 +1613,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         _t = _time.perf_counter()
         player_summary = _compute_player_summary(
             tracks, tracked_bboxes, team_control, fps=fps, segments=segments,
-            team_colors=team_assigner.team_colors)
+            team_colors=team_assigner.team_colors, cam_mov=cam_mov)
         _bench("compute_summary", _t)
 
         cache_payload = {
@@ -1621,6 +1626,9 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             "pass_networks":       pass_networks_data,
             "resolved_jerseys":    resolved_jerseys,
             "segments":            segments,
+            "video_confidence":    player_summary.get("video_confidence"),
+            "footage_quality_tier": player_summary.get("footage_quality_tier"),
+            "analytics_contract":  player_summary.get("analytics_contract"),
             # 颜色序列化（numpy array → list）
             "team_colors": {
                 k: v.tolist() for k, v in team_assigner.team_colors.items()
@@ -1677,6 +1685,8 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             minimap_data_url=minimap_url,
             heatmap_data_url=heatmap_url,
             overlay_data_url=overlay_url if 'overlay_url' in locals() else None,
+            video_confidence=player_summary.get("video_confidence"),
+            footage_quality_tier=player_summary.get("footage_quality_tier"),
         )
 
     except Exception as exc:
@@ -1832,7 +1842,8 @@ def _summary_for_range(tracks: dict, tracked_bboxes: dict, team_control: list,
 def _compute_player_summary(tracks: dict, tracked_bboxes: dict,
                             team_control: list, fps: int = 24,
                             segments: list = None,
-                            team_colors: dict = None) -> dict:
+                            team_colors: dict = None,
+                            cam_mov: list = None) -> dict:
     """从 tracks 中提取被追踪球员的关键数字（存入 session，立即可用）
 
     若提供 segments，overall 只统计实际比赛帧（排除 halftime），
@@ -1938,6 +1949,56 @@ def _compute_player_summary(tracks: dict, tracked_bboxes: dict,
             overall["team_colors_hex"] = {str(k): bgr_to_hex(v) for k, v in team_colors.items()}
         except Exception:
             pass
+
+    # ── Evaluate Video Analytics Confidence & Quality Tier ────────────
+    try:
+        from server.pipeline.video_analytics_confidence_assessor import VideoAnalyticsConfidenceAssessor
+        from server.pipeline.grassroots_graceful_degradation_engine import GrassrootsGracefulDegradationEngine
+
+        assessor = VideoAnalyticsConfidenceAssessor(fps=float(fps))
+        h_telemetry = tracks.get("homography_telemetry") or []
+        ball_tracks = tracks.get("ball") or []
+
+        for fi in range(total_frames):
+            if fi < len(h_telemetry) and h_telemetry[fi] is not None:
+                t_item = h_telemetry[fi]
+                has_h = bool(t_item.get("has_valid_homography", False))
+                kps_c = int(t_item.get("keypoint_count", 0))
+                inl = float(t_item.get("inlier_ratio", 0.0))
+                rmse = float(t_item.get("reprojection_rmse", 0.0))
+            else:
+                p_dict = tracks["players"][fi] if fi < len(tracks.get("players", [])) else {}
+                has_h = any("position_transformed" in p for p in p_dict.values())
+                kps_c = 6 if has_h else 0
+                inl = 0.75 if has_h else 0.0
+                rmse = 4.0 if has_h else 0.0
+
+            ball_det = bool(fi < len(ball_tracks) and ball_tracks[fi])
+            cam_speed = 0.0
+            if cam_mov and fi < len(cam_mov) and cam_mov[fi]:
+                cam_speed = float(np.hypot(cam_mov[fi][0], cam_mov[fi][1]))
+
+            assessor.record_frame(
+                frame_idx=fi,
+                has_valid_homography=has_h,
+                keypoint_count=kps_c,
+                inlier_ratio=inl,
+                reprojection_rmse=rmse,
+                ball_detected=ball_det,
+                camera_pan_speed_px=cam_speed,
+            )
+
+        conf_report = assessor.evaluate()
+        conf_dict = conf_report.to_dict()
+
+        overall["video_confidence"] = conf_dict
+        overall["footage_quality_tier"] = conf_report.confidence_tier.value
+
+        # Apply Grassroots Graceful Degradation Engine contract
+        degradation_engine = GrassrootsGracefulDegradationEngine()
+        overall = degradation_engine.apply_degradation_to_summary(overall, conf_dict)
+    except Exception as deg_exc:
+        print(f"[WARN] Video confidence & graceful degradation evaluation failed (non-fatal): {deg_exc}")
 
     # ── 分段统计（跳过 halftime）──────────────────────────────────
     if segments:

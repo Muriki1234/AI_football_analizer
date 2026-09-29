@@ -1,0 +1,31 @@
+{
+  "homography_coupling_trap": {
+    "ball_detected": true,
+    "player_detected": true,
+    "stock_engine_possession_pct": 0,
+    "neutral_lost_pct": 100,
+    "root_cause": "possession_temporal_hysteresis_engine strictly requires metric coordinates (x_m, y_m); lacks screen-space pixel fallback."
+  },
+  "carrier_dropout_sensitivity": [
+    {
+      "player_dropout_rate_pct": 0,
+      "measured_possession_pct": 100.0
+    },
+    {
+      "player_dropout_rate_pct": 20,
+      "measured_possession_pct": 100.0
+    },
+    {
+      "player_dropout_rate_pct": 40,
+      "measured_possession_pct": 99.3
+    },
+    {
+      "player_dropout_rate_pct": 60,
+      "measured_possession_pct": 99.3
+    },
+    {
+      "player_dropout_rate_pct": 80,
+      "measured_possession_pct": 99.3
+    }
+  ]
+}

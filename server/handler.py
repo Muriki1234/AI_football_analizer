@@ -896,7 +896,7 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
         # Protect against duplicate runs BEFORE downloading any video
         if action in ["track", "analyze"]:
             status = s.get("status")
-            if status in ["processing", "tracking", "analyzing", "analysis_done"]:
+            if status in ["processing", "tracking", "tracking_done", "analyzing", "analysis_done", "samurai_multi_pending", "samurai_done"]:
                 import datetime
                 updated_at_str = s.get("updated_at") or s.get("created_at")
                 is_zombie = False

@@ -76,3 +76,7 @@ frontend/test_upload.cjs
 frontend/test_upload.js
 server/query_rest.py
 server/query_session.py
+*.mp4
+*.jpg
+.agents/datasets/
+

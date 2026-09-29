@@ -133,18 +133,46 @@ export default function DataAnalysisPanel({ playerSummary }) {
         max: numberOrNull(seg.max_speed_kmh),
     }));
     const speedFlag = overall.speed_reliability === 'suspect' || Number(overall.max_speed_kmh) >= 37.5;
+    const speedSub = overall.max_speed_kmh === null && overall.max_speed_unavailable_reason
+        ? '已屏蔽'
+        : (speedFlag ? 'verify' : null);
 
     return (
         <div className="drawer__section-body">
+            {overall.video_confidence && (
+                <div style={{
+                    marginBottom: '12px',
+                    padding: '8px 12px',
+                    borderRadius: '6px',
+                    background: overall.footage_quality_tier === 'TIER_5_SEVERELY_DEGRADED' ? 'rgba(239, 68, 68, 0.12)' : 'rgba(59, 130, 246, 0.10)',
+                    border: `1px solid ${overall.footage_quality_tier === 'TIER_5_SEVERELY_DEGRADED' ? 'rgba(239, 68, 68, 0.3)' : 'rgba(59, 130, 246, 0.25)'}`,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    fontSize: '0.8rem',
+                }}>
+                    <span style={{ fontWeight: 600, color: overall.footage_quality_tier === 'TIER_5_SEVERELY_DEGRADED' ? '#f87171' : '#93c5fd' }}>
+                        📹 {overall.video_confidence.tier_label_zh || overall.footage_quality_tier}
+                    </span>
+                    <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
+                        标定置信度: {overall.video_confidence.overall_confidence_score?.toFixed(0)}分
+                    </span>
+                </div>
+            )}
             <div className="stat-grid">
-                <StatRow icon="⚡" label="Max Speed" value={formatMetric(overall.max_speed_kmh, ' km/h')} sub={speedFlag ? 'verify' : null} />
+                <StatRow icon="⚡" label="Max Speed" value={formatMetric(overall.max_speed_kmh, ' km/h')} sub={speedSub} />
                 <StatRow icon="🏃" label="Avg Speed" value={formatMetric(overall.avg_speed_kmh, ' km/h')} />
                 <StatRow icon="📏" label="Distance" value={formatMetric(overall.total_distance_m, ' m', 0)} />
                 <StatRow icon="⚽" label="Possession" value={formatMetric(overall.possession_seconds, ' s')} />
                 <StatRow icon="🔄" label="Switches" value={overall.possession_switches ?? '-'} />
                 <StatRow icon="👟" label="Sprints" value={overall.speed_telemetry?.sprint_count ?? overall.sprint_count ?? '-'} />
             </div>
-            {speedFlag && (
+            {overall.max_speed_unavailable_reason && (
+                <p className="drawer__note" style={{ color: '#f87171', borderLeft: '3px solid #ef4444' }}>
+                    ℹ️ {overall.max_speed_unavailable_reason}
+                </p>
+            )}
+            {speedFlag && !overall.max_speed_unavailable_reason && (
                 <p className="drawer__note">
                     Peak speed is flagged as likely tracking/camera-motion noise.
                 </p>

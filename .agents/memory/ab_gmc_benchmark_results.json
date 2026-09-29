@@ -1,0 +1,31 @@
+{
+  "condition_a_baseline": {
+    "roi_attempts": 109,
+    "roi_hits": 94,
+    "roi_hit_rate_pct": 86.2,
+    "tp": 96,
+    "fp": 11,
+    "fn": 8,
+    "recall": 0.9231,
+    "precision": 0.8972,
+    "f1": 0.91,
+    "max_gap": 8,
+    "ms_per_frame": 35.7,
+    "fps": 28.0
+  },
+  "condition_b_gmc": {
+    "roi_attempts": 109,
+    "roi_hits": 94,
+    "roi_hit_rate_pct": 86.2,
+    "tp": 96,
+    "fp": 11,
+    "fn": 8,
+    "recall": 0.9231,
+    "precision": 0.8972,
+    "f1": 0.91,
+    "max_gap": 8,
+    "ms_per_frame": 51.1,
+    "fps": 19.6,
+    "gmc_overhead_ms": 21.94
+  }
+}

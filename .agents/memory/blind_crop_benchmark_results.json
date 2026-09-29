@@ -1,0 +1,19 @@
+{
+  "total_frames": 150,
+  "gt_ball_frames": 104,
+  "roi_attempts": 109,
+  "roi_hits": 94,
+  "roi_hit_rate_pct": 86.2,
+  "crop_inferences": 109,
+  "global_fallbacks": 45,
+  "tp": 96,
+  "fp": 11,
+  "fn": 8,
+  "precision": 0.8972,
+  "recall": 0.9231,
+  "f1": 0.91,
+  "max_gap_frames": 8,
+  "avg_gap_frames": 8.0,
+  "ms_per_frame": 52.2,
+  "fps": 19.2
+}

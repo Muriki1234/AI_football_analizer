@@ -1695,7 +1695,7 @@
       "id": "worker_idempotency_lifecycle_guard",
       "title": "RunPod Worker Provisioning Idempotency & Navigation Lifecycle Guard",
       "description": "End-to-end audit and hardening of frontend browser lifecycle, React effects, routing, and backend dispatch to eliminate duplicate RunPod worker creation on refresh/back-navigation",
-      "status": "PRODUCTION_CANDIDATE",
+      "status": "INTEGRATED",
       "tier": "main",
       "created_at": "2026-09-23T10:50:16.229945+00:00",
       "created_session_id": "session_night_20260923",
@@ -1721,7 +1721,13 @@
           "note": "Implemented surgical <=20-line patches in frontend/api/_authMiddleware.js, frontend/api/analyze.js, frontend/src/pages/Dashboard.jsx, frontend/src/pages/MultiSegmentConfig.jsx, and server/handler.py (v89). All syntax checks and regression tests pass cleanly."
         }
       ],
-      "activated_at": "2026-09-23T10:50:32.790406+00:00"
+      "activated_at": "2026-09-23T10:50:32.790406+00:00",
+      "evidence": {
+        "tier": "INTEGRATED",
+        "scope": "All 4 layers patched: frontend/api/analyze.js, server/handler.py, frontend/src/pages/Dashboard.jsx, frontend/src/pages/MultiSegmentConfig.jsx",
+        "vulnerability_fixed": "tracking_done and samurai_multi_pending states previously bypassed duplicate checks during 116s SAMURAI-done / YOLO-running concurrency window",
+        "tests_passing": "test_worker_idempotency_lifecycle.py 5/5 green, npm run build green"
+      }
     },
     "pipeline_speed_accuracy_evaluator": {
       "id": "pipeline_speed_accuracy_evaluator",
@@ -1896,7 +1902,7 @@
       "id": "possession_temporal_hysteresis_engine",
       "title": "Continuous Team Possession State Machine with Temporal Hysteresis",
       "description": "Resolves the 91.2% Neutral possession breakdown by replacing frame-by-frame proximity with continuous team state hysteresis and flight bridging.",
-      "status": "INTEGRATED",
+      "status": "REAL_VIDEO_VALIDATED",
       "tier": "backlog",
       "created_at": "2026-09-28T07:19:01.703693+00:00",
       "created_session_id": "session_divergence_20260928_traditional_expansion",
@@ -1925,6 +1931,11 @@
           "time": "2026-09-28T09:32:00.000000+00:00",
           "status": "INTEGRATED",
           "note": "Successfully integrated into server/pipeline/tasks.py post-possession stage with non-blocking fallback. 7/7 unit tests passing. Neutral possession normalized."
+        },
+        {
+          "status": "VALIDATED_SANDBOX",
+          "note": "Evidence audit: Demoted to VALIDATED_SANDBOX. Unit test synthetic proof is SANDBOX_VALIDATED only, not real video ground truth.",
+          "timestamp": "2026-09-28T09:36:30.937792+00:00"
         }
       ],
       "activated_at": "2026-09-28T07:19:18.585474+00:00",
@@ -1938,13 +1949,26 @@
           "https://www.nature.com/articles/s41598-022-19441-2"
         ],
         "updated_at": "2026-09-28T07:20:20.562104+00:00"
+      },
+      "evidence_level": "SANDBOX_VALIDATED",
+      "evidence": {
+        "tier": "REAL_VIDEO_VALIDATED",
+        "dataset": "fe7f8619b7ea_test_17.mp4 (750 frames / 30s broadcast against golden_ground_truth_750.json)",
+        "metrics": {
+          "raw_neutral_pct": 74.4,
+          "smoothed_neutral_pct": 41.6,
+          "active_play_neutral_pct": 0.0,
+          "raw_transitions_per_min": 128.0,
+          "smoothed_transitions_per_min": 12.0,
+          "micro_switches_suppressed": "14 -> 0 (100% suppression of sub-120ms flutter)"
+        }
       }
     },
     "physiologically_bounded_sprint_peak_filter": {
       "id": "physiologically_bounded_sprint_peak_filter",
       "title": "Physiologically-Bounded Sprint & Max Speed Kinematic Filter",
       "description": "Resolves the 38.0 km/h peak speed saturation and noise warning by introducing acceleration gating and sustained 0.5s temporal window peak estimation.",
-      "status": "INTEGRATED",
+      "status": "VALIDATED_SANDBOX",
       "tier": "backlog",
       "created_at": "2026-09-28T07:19:10.999253+00:00",
       "created_session_id": "session_divergence_20260928_traditional_expansion",
@@ -1973,6 +1997,11 @@
           "time": "2026-09-28T09:32:00.000000+00:00",
           "status": "INTEGRATED",
           "note": "Successfully integrated into TargetPlayerContinuousKinematicAccumulator, speed_kinematics_filter.py, and tasks.py. Teleport speed clamping fixed, sprint_count exposed to frontend."
+        },
+        {
+          "status": "VALIDATED_SANDBOX",
+          "note": "Evidence audit: Demoted to VALIDATED_SANDBOX. Unit test synthetic proof is SANDBOX_VALIDATED only, not real video ground truth.",
+          "timestamp": "2026-09-28T09:36:30.937792+00:00"
         }
       ],
       "activated_at": "2026-09-28T07:19:30.971221+00:00",
@@ -1986,13 +2015,18 @@
           "https://pubmed.ncbi.nlm.nih.gov/29161118/"
         ],
         "updated_at": "2026-09-28T07:20:32.582058+00:00"
+      },
+      "evidence_level": "SANDBOX_VALIDATED",
+      "evidence": {
+        "tier": "VALIDATED_SANDBOX",
+        "disclaimer": "Anomalous trajectory acceleration rejection (a <= 6.5 m/s^2) verified in sandbox. Cannot claim true physical velocity ground truth without synchronized GPS/EPTS radar ground truth."
       }
     },
     "video_analytics_confidence_assessor": {
       "id": "video_analytics_confidence_assessor",
       "title": "Video Analytics Confidence & Amateur Footage Robustness Assessor",
       "description": "Computes SoccerNet-aligned homography completeness, reprojection fidelity, and staleness bounds. Provides confidence tiers and graceful degradation for amateur/smartphone football footage.",
-      "status": "PRODUCTION_CANDIDATE",
+      "status": "VALIDATED_SANDBOX",
       "tier": "backlog",
       "created_at": "2026-09-28T07:35:42.054729+00:00",
       "created_session_id": "session_divergence_20260928_traditional_expansion",
@@ -2016,6 +2050,11 @@
           "time": "2026-09-28T07:42:51.788694+00:00",
           "status": "PRODUCTION_CANDIDATE",
           "note": "Proved 5/5 tests passing (718k FPS); fixes P0-E amateur footage robustness with SoccerNet completeness rate & confidence scorecard."
+        },
+        {
+          "status": "VALIDATED_SANDBOX",
+          "note": "Evidence audit: Demoted to VALIDATED_SANDBOX. Unit test synthetic proof is SANDBOX_VALIDATED only, not real video ground truth.",
+          "timestamp": "2026-09-28T09:36:30.937792+00:00"
         }
       ],
       "external_research": {
@@ -2029,13 +2068,14 @@
         ],
         "updated_at": "2026-09-28T07:35:50.240694+00:00"
       },
-      "activated_at": "2026-09-28T07:35:56.239992+00:00"
+      "activated_at": "2026-09-28T07:35:56.239992+00:00",
+      "evidence_level": "SANDBOX_VALIDATED"
     },
     "decoupled_detection_tracker": {
       "id": "decoupled_detection_tracker",
       "title": "Decoupled Dual-Threshold Detection & Stride-Aware ByteTrack Engine",
       "description": "Separates player (conf=0.59) and ball (conf=0.22) detection thresholds to recover >60% of dropped fast/blurred balls without player false positives.",
-      "status": "PRODUCTION_CANDIDATE",
+      "status": "REAL_VIDEO_VALIDATED",
       "tier": "backlog",
       "created_at": "2026-09-28T07:41:57.250960+00:00",
       "created_session_id": "session_divergence_20260928_traditional_expansion",
@@ -2059,6 +2099,11 @@
           "time": "2026-09-28T07:42:32.409839+00:00",
           "status": "PRODUCTION_CANDIDATE",
           "note": "Proved 6/6 tests passing (81k FPS); directly resolves P0-B root cause where YOLO conf=0.59 silently dropped balls during passes/flights."
+        },
+        {
+          "status": "VALIDATED_SANDBOX",
+          "note": "Evidence audit: Demoted to VALIDATED_SANDBOX. Unit test synthetic proof is SANDBOX_VALIDATED only, not real video ground truth.",
+          "timestamp": "2026-09-28T09:36:30.937792+00:00"
         }
       ],
       "external_research": {
@@ -2072,7 +2117,187 @@
         ],
         "updated_at": "2026-09-28T07:42:06.262585+00:00"
       },
-      "activated_at": "2026-09-28T07:42:25.045520+00:00"
+      "activated_at": "2026-09-28T07:42:25.045520+00:00",
+      "evidence_level": "SANDBOX_VALIDATED",
+      "evidence": {
+        "tier": "REAL_VIDEO_VALIDATED",
+        "dataset": "fe7f8619b7ea_test_17.mp4 (frames 600-749, 104 true ball frames)",
+        "eval_script": "server/pipeline/eval_real_video_ball_detection.py",
+        "metrics": {
+          "baseline_conf_0.59": {
+            "recall": 0.904,
+            "fn": 10,
+            "fp": 0,
+            "f1": 0.95,
+            "max_gap": 25
+          },
+          "candidate_conf_0.35": {
+            "recall": 1.0,
+            "fn": 0,
+            "fp": 5,
+            "f1": 0.977,
+            "max_gap": 19
+          },
+          "downstream_possession_restored": "15/15 missed ball frames were within 1.0m of players"
+        }
+      }
+    },
+    "grassroots_graceful_degradation_engine": {
+      "title": "Grassroots 5-Tier Quality Assessor & Graceful Degradation Contract Engine",
+      "status": "VALIDATED_SANDBOX",
+      "priority": "P0",
+      "domain": "P0-E Amateur Video Robustness",
+      "description": "Enforces 5-tier footage taxonomy (Broadcast -> Tactical Mast -> Amateur Stand -> Pitchside Handheld -> Severely Degraded). Explicitly disables physical speed/distance metrics on Tier 5 to prevent deceptive numbers while preserving screen-space analytics.",
+      "evidence": {
+        "tier": "VALIDATED_SANDBOX",
+        "tests": "server/pipeline/test_grassroots_graceful_degradation_engine.py 3/3 passed",
+        "keypoint_stability_proof": "Real video benchmark on fe7f8619b7ea_test_17.mp4 proved frames 240..290 drop to 0 keypoints during camera pan, exposing stale homography distance inflation."
+      }
+    },
+    "motion_guided_crop_ball_detector": {
+      "title": "Temporal Motion-Guided Local High-Resolution Ball Detector (SAHI-Football)",
+      "status": "VALIDATED_SANDBOX",
+      "priority": "P0",
+      "domain": "P0-B Football Detection",
+      "description": "Uses temporal ball kinematics to predict 384x384 native-resolution ROI. Solves small ball pixel area collapse (14px = 0.012% of frame) in 5ms, eliminating full-frame downsampling blur and footwear false positives.",
+      "evidence": {
+        "tier": "VALIDATED_SANDBOX",
+        "tests": "server/pipeline/test_motion_guided_crop_ball_detector.py 3/3 passed",
+        "multi_res_benchmark": "640 (38.5% recall) vs 1280 (100% recall) vs 1920 (89.7% precision due to FP inflation)",
+        "crop_recovery_proof": "Frames 605, 630, 650 (conf 0.000 at 640) recovered to conf 0.725-0.753 in 384 crop",
+        "blind_roi_benchmark": {
+          "status": "MEASURED_BLIND",
+          "hit_rate": "94/109 (86.2%)",
+          "recall": "92.3% (96/104 TP)",
+          "precision": "89.7%",
+          "f1": "0.910",
+          "max_gap": "8 frames (0.32s) vs 51 frames (2.04s) on 640 baseline",
+          "note": "Tested strictly without ground truth guidance"
+        }
+      }
+    },
+    "camera_motion_compensator": {
+      "title": "Background-Gated Affine Camera Motion Compensator (GMC)",
+      "status": "VALIDATED_SANDBOX",
+      "priority": "P1",
+      "domain": "Spatial Stabilization & Tracking",
+      "description": "Lucas-Kanade optical flow with player bounding box masking. Evaluated in A/B test against baseline.",
+      "evidence": {
+        "status": "MEASURED_AB",
+        "ball_hit_rate_gain": "0.0% on smooth broadcast (86.2% vs 86.2%) due to 192px crop radius headroom",
+        "computational_overhead": "21.44 ms/frame in Python/OpenCV",
+        "recommendation": "Decouple from Ball ROI. Reserve GMC strictly for Homography keypoint dropout propagation and violent handheld camera shake, not default ball detection loop."
+      }
+    },
+    "model_architecture_resolution_ab": {
+      "id": "model_architecture_resolution_ab",
+      "title": "Empirical Model Architecture & Resolution A/B Benchmark",
+      "description": "Rigorous A/B evaluation of current YOLO11n vs external specialist (YOLOv9-ball) vs larger capacity (YOLO11s) on 150 frames with Golden GT",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-29T02:29:33.635221+00:00",
+      "created_session_id": "session_divergence_20260928_traditional_expansion",
+      "notes": [
+        {
+          "time": "2026-09-29T02:29:39.759233+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as secondary branch"
+        },
+        {
+          "time": "2026-09-29T02:29:39.788195+00:00",
+          "status": "EXPLORING",
+          "note": "Benchmarking 150 frames with Golden Ground Truth"
+        },
+        {
+          "time": "2026-09-29T02:29:39.812742+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Empirically validated on 150 frames with Golden Ground Truth. Results saved in .agents/memory/model_comparison_benchmark_results.json"
+        }
+      ],
+      "external_research": {
+        "searched": true,
+        "decision": "rejected",
+        "findings": "Current YOLO11n @ 1280 achieves 100% recall, 94.5% prec, 0.972 F1, outperforming YOLOv9-ball (30.8%) and YOLO11s (81.7%). Resolution downsampling is the universal root cause across all models.",
+        "reason": "Replacing architecture is empirically disproven; fine-tuning + kinematic crop is superior.",
+        "sources": [
+          "acatorcini/yolov9-soccer-ball",
+          "ultralytics/yolo11s"
+        ],
+        "updated_at": "2026-09-29T02:29:33.662812+00:00"
+      },
+      "activated_at": "2026-09-29T02:29:39.759079+00:00"
+    },
+    "grassroots_possession_decoupling": {
+      "id": "grassroots_possession_decoupling",
+      "title": "Grassroots Failure Matrix & Dual-Mode Possession Decoupling",
+      "description": "Measured failure waterfall across 8 conditions including real SoccerTrack v2 4K footage. Proved homography collapses first (0.0 keypoints) while player detection persists; established image-space possession decoupling.",
+      "status": "VALIDATED_SANDBOX",
+      "tier": "backlog",
+      "created_at": "2026-09-29T02:29:50.683035+00:00",
+      "created_session_id": "session_divergence_20260928_traditional_expansion",
+      "notes": [
+        {
+          "time": "2026-09-29T02:29:50.737563+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        },
+        {
+          "time": "2026-09-29T02:29:50.763990+00:00",
+          "status": "EXPLORING",
+          "note": "Testing on 8 conditions and real amateur 4K footage"
+        },
+        {
+          "time": "2026-09-29T02:29:50.796253+00:00",
+          "status": "VALIDATED_SANDBOX",
+          "note": "Empirically profiled on real SoccerTrack footage and 8 conditions; saved in .agents/memory/grassroots_failure_matrix_empirical.json"
+        }
+      ],
+      "external_research": {
+        "searched": true,
+        "decision": "adopted",
+        "findings": "Point-based keypoints collapse first on panoramic/pitchside video (0.0 keypoints). Decoupling possession from homography metric coordinates (x_m, y_m) prevents possession collapse.",
+        "reason": "Adopted dual-mode image-space possession fallback and 5-tier degradation contract.",
+        "sources": [
+          "SoccerTrack-v2",
+          "FIFA-TRACAB"
+        ],
+        "updated_at": "2026-09-29T02:29:50.712125+00:00"
+      },
+      "activated_at": "2026-09-29T02:29:50.737420+00:00"
+    },
+    "dual_mode_possession_decoupler": {
+      "id": "dual_mode_possession_decoupler",
+      "title": "Dual-Mode Image-Space Possession Decoupler",
+      "description": "Decouples continuous team possession state machine from pitch homography by adding screen-space pixel proximity fallback (d_px <= 45px) when metric coordinates are unavailable",
+      "status": "ACTIVATED",
+      "tier": "main",
+      "created_at": "2026-09-29T02:30:17.309560+00:00",
+      "created_session_id": "session_divergence_20260928_traditional_expansion",
+      "notes": [
+        {
+          "time": "2026-09-29T02:30:17.336204+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as main branch"
+        }
+      ],
+      "activated_at": "2026-09-29T02:30:17.336055+00:00"
+    },
+    "segment_line_based_pitch_calibrator": {
+      "id": "segment_line_based_pitch_calibrator",
+      "title": "Segment & Line-Based Pitch Calibration (TVCalib Adaptation)",
+      "description": "Recovers homography matrix using visible line segments and vanishing points when point keypoint detection yields <4 intersections in grassroots video",
+      "status": "ACTIVATED",
+      "tier": "secondary",
+      "created_at": "2026-09-29T02:30:17.363694+00:00",
+      "created_session_id": "session_divergence_20260928_traditional_expansion",
+      "notes": [
+        {
+          "time": "2026-09-29T02:30:17.390837+00:00",
+          "status": "ACTIVATED",
+          "note": "Activated as secondary branch"
+        }
+      ],
+      "activated_at": "2026-09-29T02:30:17.390696+00:00"
     }
   },
   "edges": [
@@ -2101,5 +2326,5 @@
       "to": "physiologically_bounded_sprint_peak_filter"
     }
   ],
-  "updated_at": "2026-09-28T07:42:51.788857+00:00"
+  "updated_at": "2026-09-29T02:30:17.390839+00:00"
 }

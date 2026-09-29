@@ -1,0 +1,26 @@
+[
+  {
+    "config": "Crop 384x384 (10% frame width)",
+    "crop_size_px": 384,
+    "roi_attempts": 49,
+    "roi_hits": 45,
+    "roi_hit_rate_pct": 91.8,
+    "ball_recall_pct": 100.0,
+    "ball_precision_pct": 92.0,
+    "crop_path_pct": 86.0,
+    "max_gap": 0,
+    "miss_reasons_sample": []
+  },
+  {
+    "config": "Crop 512x512 (13.3% frame width)",
+    "crop_size_px": 512,
+    "roi_attempts": 49,
+    "roi_hits": 45,
+    "roi_hit_rate_pct": 91.8,
+    "ball_recall_pct": 97.8,
+    "ball_precision_pct": 91.8,
+    "crop_path_pct": 52.0,
+    "max_gap": 1,
+    "miss_reasons_sample": []
+  }
+]

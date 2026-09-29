@@ -28,7 +28,7 @@ export default async function handler(req, res) {
 
   // Idempotency: prevent duplicate RunPod worker provisioning on refresh / back navigation
   if ((input.action === 'track' || input.action === 'analyze') && !input.force_retry) {
-    const ACTIVE = ['queued', 'processing', 'tracking', 'analyzing', 'samurai_multi_pending'];
+    const ACTIVE = ['queued', 'processing', 'tracking', 'tracking_done', 'analyzing', 'samurai_multi_pending', 'samurai_done'];
     if (ACTIVE.includes(session.status)) {
       const lastUpdate = new Date(session.updated_at || Date.now()).getTime();
       if ((Date.now() - lastUpdate) < 20 * 60 * 1000) {

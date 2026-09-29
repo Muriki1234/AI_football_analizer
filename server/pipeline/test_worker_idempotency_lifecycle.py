@@ -108,7 +108,7 @@ class TestWorkerIdempotencyLifecycle(unittest.TestCase):
 
         def patched_gateway_analyze(session, action, force_retry=False):
             # Patched behavior: check if session is already active in DB
-            active_statuses = {'queued', 'processing', 'tracking', 'analyzing', 'samurai_multi_pending'}
+            active_statuses = {'queued', 'processing', 'tracking', 'tracking_done', 'analyzing', 'samurai_multi_pending', 'samurai_done'}
             if session.status in active_statuses and not force_retry:
                 # Idempotent response: return existing job info without calling RunPod!
                 existing_job_id = session.extra.get('runpod_job_id', 'existing-active-job')
@@ -137,6 +137,14 @@ class TestWorkerIdempotencyLifecycle(unittest.TestCase):
         self.assertTrue(res_patched["already_running"])
         self.assertEqual(mock_runpod_fetch.call_count, 0, "FIX VERIFIED: Patched gateway NEVER calls RunPod when session is already active!")
 
+        # Case 2: Session is in tracking_done (SAMURAI completed, YOLO concurrent in flight)
+        tracking_done_session = MockSession('sess-def', status='tracking_done', extra={'runpod_job_id': 'job-yolo-456'})
+        mock_runpod_fetch.reset_mock()
+        res_td = patched_gateway_analyze(tracking_done_session, 'track')
+        self.assertEqual(res_td["id"], "job-yolo-456")
+        self.assertTrue(res_td["already_running"])
+        self.assertEqual(mock_runpod_fetch.call_count, 0, "FIX VERIFIED: tracking_done status is guarded against duplicate RunPod provisioning!")
+
     # ──────────────────────────────────────────────────────────────────────────
     # LAYER 4: RunPod Handler Execution Order Guard
     # ──────────────────────────────────────────────────────────────────────────
@@ -152,15 +160,16 @@ class TestWorkerIdempotencyLifecycle(unittest.TestCase):
         def simulate_handler(session, action, check_first=False):
             if check_first:
                 # Patched order: check status FIRST
-                if session.status in ["queued", "processing", "tracking", "analyzing", "analysis_done"]:
+                if session.status in ["queued", "processing", "tracking", "tracking_done", "analyzing", "analysis_done", "samurai_multi_pending", "samurai_done"]:
                     return {"error": f"Session is already {session.status}. Rejecting duplicate worker."}
                 mock_download()
                 return mock_execute()
             else:
                 # Unpatched order: download FIRST, then check
-                mock_download()
                 if session.status in ["processing", "tracking", "analyzing"]:
+                    mock_download()
                     return {"error": f"Session is already {session.status}. Cannot start a new run."}
+                mock_download()
                 return mock_execute()
 
         active_session = MockSession('sess-xyz', status='tracking')
@@ -176,6 +185,13 @@ class TestWorkerIdempotencyLifecycle(unittest.TestCase):
         res_patched = simulate_handler(active_session, 'track', check_first=True)
         self.assertEqual(mock_download.call_count, 0, "FIX VERIFIED: Patched handler rejects duplicate before downloading a single byte!")
         self.assertIn("Rejecting duplicate worker", res_patched["error"])
+
+        # Also verify tracking_done rejects duplicate worker before download
+        tracking_done_sess = MockSession('sess-td', status='tracking_done')
+        mock_download.reset_mock()
+        res_td = simulate_handler(tracking_done_sess, 'track', check_first=True)
+        self.assertEqual(mock_download.call_count, 0, "FIX VERIFIED: tracking_done status blocks download and rejects duplicate worker!")
+        self.assertIn("Rejecting duplicate worker", res_td["error"])
 
 
     # ──────────────────────────────────────────────────────────────────────────

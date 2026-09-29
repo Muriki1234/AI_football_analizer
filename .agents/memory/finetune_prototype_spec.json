@@ -1,0 +1,19 @@
+{
+  "base_model": "backend/weights/football/best.pt",
+  "output_dir": ".agents/models/finetuned_prototype",
+  "freeze_backbone_layers": 10,
+  "epochs": 15,
+  "imgsz": 1280,
+  "batch_size": 4,
+  "optimizer": "AdamW",
+  "lr0": 0.0005,
+  "lrf": 0.01,
+  "hard_negatives": [
+    "white socks (cleat-grass boundary)",
+    "white cleats during stride",
+    "faded chalk line intersections",
+    "sideline spectators and coaches"
+  ],
+  "sandboxed": true,
+  "production_weights_protected": true
+}
