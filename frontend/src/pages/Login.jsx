@@ -1,23 +1,20 @@
 import { useEffect, useState } from 'react';
 import { Link, Navigate, useLocation } from 'react-router-dom';
-import { HiEnvelope, HiLockClosed, HiEye, HiEyeSlash, HiDevicePhoneMobile } from 'react-icons/hi2';
+import { HiEnvelope, HiLockClosed, HiEye, HiEyeSlash } from 'react-icons/hi2';
 import { IoFootball } from 'react-icons/io5';
 import { supabase } from '../lib/supabase';
-import { authErrorMessage, normalizePhone, safeReturnPath } from '../lib/auth';
+import { authErrorMessage, safeReturnPath } from '../lib/auth';
 import { useAuth } from '../auth/AuthContext';
 import './Login.css';
-
-const COUNTRY_CODES = [['+86', 'China +86'], ['+64', 'New Zealand +64'], ['+61', 'Australia +61'], ['+1', 'US / Canada +1'], ['+44', 'UK +44'], ['+852', 'Hong Kong +852'], ['+853', 'Macao +853'], ['+886', 'Taiwan +886'], ['+65', 'Singapore +65'], ['+81', 'Japan +81'], ['+82', 'South Korea +82'], ['+49', 'Germany +49'], ['+33', 'France +33'], ['+91', 'India +91']];
 
 export default function Login() {
     const { user, loading: restoring, error: restoreError, recovery } = useAuth();
     const location = useLocation();
     const returnTo = safeReturnPath(location.state?.from);
-    const [method, setMethod] = useState('email');
+    const [method, setMethod] = useState('password');
     const [email, setEmail] = useState('');
-    const [phone, setPhone] = useState('');
-    const [prefix, setPrefix] = useState('+86');
     const [password, setPassword] = useState('');
+    const [confirmation, setConfirmation] = useState('');
     const [showPassword, setShowPassword] = useState(false);
     const [challenge, setChallenge] = useState(null);
     const [code, setCode] = useState('');
@@ -49,44 +46,57 @@ export default function Login() {
     }, [retryAt]);
 
     const waitSeconds = Math.max(0, Math.ceil((retryAt - now) / 1000));
-    const otpAvailable = method === 'phone' ? config?.phoneOtp : config?.emailOtp;
+    const otpAvailable = config?.emailOtp === true;
+    const needsEmail = method !== 'password';
     const switchMethod = (next) => {
-        setMethod(next); setChallenge(null); setCode(''); setPassword(''); setError(''); setNotice('');
+        setMethod(next); setChallenge(null); setCode(''); setPassword(''); setConfirmation(''); setShowPassword(false); setError(''); setNotice('');
     };
 
+    const startCooldown = () => {
+        const time = Date.now(); setNow(time); setRetryAt(time + 60000);
+    };
     const sendCode = async () => {
         if (waitSeconds || busy || !otpAvailable) return;
         setBusy(true); setError(''); setNotice('');
         try {
-            const target = challenge?.target || (method === 'phone' ? normalizePhone(phone, prefix) : email.trim().toLowerCase());
-            if (method !== 'phone' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target)) {
+            const target = challenge?.target || email.trim().toLowerCase();
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target)) {
                 setError('Enter a valid email address.'); return;
             }
-            const payload = method === 'phone'
-                ? { phone: target, options: { shouldCreateUser: true, channel: 'sms' } }
-                : { email: target, options: { shouldCreateUser: true, emailRedirectTo: `${window.location.origin}/auth/callback` } };
-            const result = await supabase.auth.signInWithOtp(payload);
+            const options = { emailRedirectTo: `${window.location.origin}/auth/callback` };
+            let result;
+            if (challenge?.signup) {
+                result = await supabase.auth.resend({ type: 'signup', email: target, options });
+            } else if (method === 'signup') {
+                if (password.length < 10) { setError('Use at least 10 characters.'); return; }
+                if (password !== confirmation) { setError('Passwords do not match.'); return; }
+                result = await supabase.auth.signUp({ email: target, password, options });
+            } else {
+                result = await supabase.auth.signInWithOtp({ email: target, options: { ...options, shouldCreateUser: true } });
+            }
             if (result.error) throw result.error;
-            setChallenge({ target, type: method === 'phone' ? 'sms' : 'email' });
-            setCode('');
-            setNotice(method === 'phone' ? 'Code sent. Check your text messages.' : 'Code sent. Check your inbox and spam folder.');
-            const time = Date.now(); setNow(time); setRetryAt(time + 60000);
+            setChallenge({ target, signup: method === 'signup' });
+            setPassword(''); setConfirmation(''); setCode('');
+            // Supabase deliberately hides whether an address already has an account.
+            setNotice(method === 'signup'
+                ? 'Check your inbox and spam folder for a confirmation code. Already registered? Return to password sign-in.'
+                : 'Code sent. Check your inbox and spam folder.');
+            startCooldown();
         } catch (e) {
-            setError(e.message?.startsWith('Enter a valid') ? e.message : authErrorMessage(e));
-            if (e.status === 429) { const time = Date.now(); setNow(time); setRetryAt(time + 60000); }
+            setError(authErrorMessage(e));
+            if (e.status === 429) startCooldown();
         } finally { setBusy(false); }
     };
 
     const submit = async (event) => {
         event.preventDefault();
-        if (busy) return;
-        if (!challenge && ['email', 'phone'].includes(method)) { await sendCode(); return; }
+        if (busy || (!challenge && method === 'forgot' && waitSeconds)) return;
+        if (!challenge && ['email', 'signup'].includes(method)) { await sendCode(); return; }
         setBusy(true); setError(''); setNotice('');
         try {
             if (challenge) {
-                if (!/^\d{6,10}$/.test(code)) { setError('Enter the code from your message.'); return; }
-                const field = challenge.type === 'sms' ? 'phone' : 'email';
-                const { error: verifyError } = await supabase.auth.verifyOtp({ [field]: challenge.target, token: code, type: challenge.type });
+                if (!/^\d{6,10}$/.test(code)) { setError('Enter the code from your email.'); return; }
+                const { error: verifyError } = await supabase.auth.verifyOtp({ email: challenge.target, token: code, type: 'email' });
                 if (verifyError) throw verifyError;
             } else if (method === 'password') {
                 const result = await supabase.auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
@@ -96,9 +106,9 @@ export default function Login() {
                 const result = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase(), { redirectTo: `${window.location.origin}/reset-password` });
                 if (result.error) throw result.error;
                 setNotice('If an account exists for this email, we have sent password reset instructions.');
-                const time = Date.now(); setNow(time); setRetryAt(time + 60000);
+                startCooldown();
             }
-        } catch (e) { setError(authErrorMessage(e)); }
+        } catch (e) { setError(authErrorMessage(e)); if (e.status === 429) startCooldown(); }
         finally { setBusy(false); }
     };
 
@@ -111,29 +121,27 @@ export default function Login() {
         <div className="login-orb login-orb--1" /><div className="login-orb login-orb--2" />
         <section className="login-card" aria-labelledby="login-title">
             <Link className="login-card__logo" to="/"><IoFootball className="login-card__logo-icon" /><span>FootNova AI</span></Link>
-            <h1 className="login-card__title" id="login-title">{method === 'forgot' ? 'Reset your password' : challenge ? 'Enter your code' : 'Welcome to FootNova'}</h1>
-            <p className="login-card__subtitle">{challenge ? `We sent a code to ${challenge.target}` : method === 'password' ? 'Sign in with your existing account' : method === 'forgot' ? 'We will email you reset instructions' : 'Sign in or create an account with a verification code'}</p>
-            {!challenge && method !== 'forgot' && <div className="login-methods" role="group" aria-label="Sign-in method">
+            <h1 className="login-card__title" id="login-title">{method === 'forgot' ? 'Reset your password' : challenge ? 'Verify your email' : method === 'signup' ? 'Create your account' : 'Welcome to FootNova'}</h1>
+            <p className="login-card__subtitle">{challenge ? `Enter the code sent to ${challenge.target}` : method === 'password' ? 'Sign in with your email and password' : method === 'signup' ? 'Verify your email once, then sign in with your password' : method === 'forgot' ? 'We will email you reset instructions' : 'Sign in or create an account with an email code'}</p>
+            {!challenge && ['password', 'email'].includes(method) && <div className="login-methods" role="group" aria-label="Sign-in method">
+                <button type="button" aria-pressed={method === 'password'} disabled={busy} onClick={() => switchMethod('password')}><HiLockClosed /> Password</button>
                 <button type="button" aria-pressed={method === 'email'} disabled={busy} onClick={() => switchMethod('email')}><HiEnvelope /> Email code</button>
-                <button type="button" aria-pressed={method === 'phone'} disabled={busy} onClick={() => switchMethod('phone')}><HiDevicePhoneMobile /> Phone code</button>
             </div>}
             {(error || restoreError) && <p className="auth-message auth-message--error" role="alert">{error || restoreError}</p>}
             {notice && <p className="auth-message" role="status">{notice}</p>}
             {configError && <p className="auth-message auth-message--error" role="alert">Unable to load sign-in methods. <button type="button" className="auth-link" onClick={() => { setConfigError(false); setConfigAttempt((n) => n + 1); }}>Try again</button></p>}
-            {!challenge && ['email', 'phone', 'forgot'].includes(method) && config && !otpAvailable && <p className="auth-message" role="status">{method === 'phone' ? 'Phone sign-in is not available yet. Please use email or contact support.' : 'Email codes are not available yet. Existing customers can use their password. Please contact support for a new account.'}</p>}
+            {!challenge && needsEmail && config && !otpAvailable && <p className="auth-message" role="status">Email verification is not available yet. Existing customers can sign in with their password. Please contact support for a new account.</p>}
             <form className="login-form" onSubmit={submit}>
                 {challenge ? <div className="login-field">
                     <label htmlFor="login-code">Verification code</label>
                     <div className="login-input-wrap"><HiLockClosed className="login-input-icon" /><input id="login-code" inputMode="numeric" autoComplete="one-time-code" autoFocus value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 10))} minLength={6} maxLength={10} required disabled={busy} /></div>
-                </div> : method === 'phone' ? <>
-                    <div className="login-field"><label htmlFor="country-code">Country / region</label><select id="country-code" className="login-country" value={prefix} onChange={(e) => setPrefix(e.target.value)} disabled={busy}>{COUNTRY_CODES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div>
-                    <div className="login-field"><label htmlFor="login-phone">Mobile number</label><div className="login-input-wrap"><HiDevicePhoneMobile className="login-input-icon" /><input id="login-phone" type="tel" autoComplete="tel-national" placeholder="Mobile number" value={phone} onChange={(e) => setPhone(e.target.value)} maxLength={30} required disabled={busy} /></div><p className="login-hint">Other country? Enter the full number starting with +.</p></div>
-                </> : <div className="login-field"><label htmlFor="login-email">Email</label><div className="login-input-wrap"><HiEnvelope className="login-input-icon" /><input id="login-email" type="email" autoComplete="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} maxLength={254} required disabled={busy} /></div></div>}
-                {method === 'password' && <div className="login-field"><label htmlFor="login-password">Password</label><div className="login-input-wrap"><HiLockClosed className="login-input-icon" /><input id="login-password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required disabled={busy} /><button type="button" className="login-pwd-toggle" aria-label={showPassword ? 'Hide password' : 'Show password'} onClick={() => setShowPassword((v) => !v)}>{showPassword ? <HiEyeSlash /> : <HiEye />}</button></div><div className="login-forgot"><button type="button" className="auth-link" onClick={() => switchMethod('forgot')} disabled={busy}>Forgot password?</button></div></div>}
-                <button type="submit" className="btn btn-primary btn-lg login-submit" disabled={busy || (!challenge && method !== 'password' && (!otpAvailable || waitSeconds > 0))}>{busy ? 'Please wait…' : challenge ? 'Verify and sign in' : method === 'password' ? 'Sign in' : waitSeconds ? `Try again in ${waitSeconds}s` : method === 'forgot' ? 'Send reset email' : 'Send verification code'}</button>
+                </div> : <div className="login-field"><label htmlFor="login-email">Email</label><div className="login-input-wrap"><HiEnvelope className="login-input-icon" /><input id="login-email" type="email" autoComplete="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} maxLength={254} required disabled={busy} /></div></div>}
+                {!challenge && ['password', 'signup'].includes(method) && <div className="login-field"><label htmlFor="login-password">Password</label><div className="login-input-wrap"><HiLockClosed className="login-input-icon" /><input id="login-password" type={showPassword ? 'text' : 'password'} autoComplete={method === 'signup' ? 'new-password' : 'current-password'} value={password} onChange={(e) => setPassword(e.target.value)} minLength={method === 'signup' ? 10 : undefined} required disabled={busy} /><button type="button" className="login-pwd-toggle" aria-label={showPassword ? 'Hide password' : 'Show password'} onClick={() => setShowPassword((v) => !v)}>{showPassword ? <HiEyeSlash /> : <HiEye />}</button></div>{method === 'password' ? <div className="login-forgot"><button type="button" className="auth-link" onClick={() => switchMethod('forgot')} disabled={busy}>Forgot password?</button></div> : <p className="login-hint">Use at least 10 characters.</p>}</div>}
+                {!challenge && method === 'signup' && <div className="login-field"><label htmlFor="signup-confirmation">Confirm password</label><div className="login-input-wrap"><HiLockClosed className="login-input-icon" /><input id="signup-confirmation" type={showPassword ? 'text' : 'password'} autoComplete="new-password" value={confirmation} onChange={(e) => setConfirmation(e.target.value)} minLength={10} required disabled={busy} /></div></div>}
+                <button type="submit" className="btn btn-primary btn-lg login-submit" disabled={busy || (!challenge && needsEmail && (!otpAvailable || waitSeconds > 0))}>{busy ? 'Please wait…' : challenge ? 'Verify and sign in' : method === 'password' ? 'Sign in' : waitSeconds ? `Try again in ${waitSeconds}s` : method === 'forgot' ? 'Send reset email' : method === 'signup' ? 'Create account and send code' : 'Send verification code'}</button>
             </form>
-            {challenge ? <div className="login-actions"><button type="button" className="auth-link" disabled={busy || waitSeconds > 0} onClick={sendCode}>{waitSeconds ? `Resend code in ${waitSeconds}s` : 'Resend code'}</button><button type="button" className="auth-link" disabled={busy} onClick={() => { setChallenge(null); setCode(''); setError(''); setNotice(''); }}>Use a different {method === 'phone' ? 'number' : 'email'}</button></div> : <p className="login-toggle"><button type="button" disabled={busy} onClick={() => switchMethod(method === 'password' || method === 'forgot' ? 'email' : 'password')}>{method === 'password' || method === 'forgot' ? 'Sign in with a verification code' : 'Already have a password? Sign in'}</button></p>}
-            <p className="login-hint login-hint--center">Email and phone sign-ins create separate accounts. Use the same method each time to find your analyses.</p>
+            {challenge ? <div className="login-actions"><button type="button" className="auth-link" disabled={busy || !otpAvailable || waitSeconds > 0} onClick={sendCode}>{waitSeconds ? `Resend code in ${waitSeconds}s` : 'Resend code'}</button><button type="button" className="auth-link" disabled={busy} onClick={() => { setChallenge(null); setCode(''); setError(''); setNotice(''); }}>Use a different email</button><button type="button" className="auth-link" disabled={busy} onClick={() => switchMethod('password')}>Return to password sign-in</button></div> : <p className="login-toggle"><button type="button" disabled={busy} onClick={() => switchMethod(method === 'signup' || method === 'forgot' ? 'password' : 'signup')}>{method === 'signup' || method === 'forgot' ? 'Already registered? Sign in' : 'New to FootNova? Create an account'}</button></p>}
+            {!challenge && method === 'email' && <p className="login-hint login-hint--center">Use the same email address to access your analyses. You can set a password from your account after signing in.</p>}
             <p className="login-toggle"><Link to="/">Back to home</Link></p>
         </section>
     </main>;
