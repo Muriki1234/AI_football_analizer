@@ -3,6 +3,7 @@ import {
   requireSessionOwner,
   extractJwt,
 } from './_authMiddleware.js';
+import { createJobTicket } from './_jobTicket.js';
 
 export default async function handler(req, res) {
   // Only allow POST requests
@@ -10,7 +11,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // 1) JWT 校验：必须是登录用户（包含匿名）
+  // 1) Require a verified customer with an active auth session.
   const user = await requireSupabaseUser(req, res);
   if (!user) return;
 
@@ -23,7 +24,7 @@ export default async function handler(req, res) {
   }
 
   const jwt = extractJwt(req);
-  const session = await requireSessionOwner(req, res, sessionId, jwt);
+  const session = await requireSessionOwner(req, res, sessionId, jwt, user.id);
   if (!session) return;
 
   // Idempotency: prevent duplicate RunPod worker provisioning on refresh / back navigation
@@ -113,6 +114,7 @@ export default async function handler(req, res) {
         data.id = `cpu:${data.id}`;
     }
     
+    if (response.ok && data.id) data.status_token = createJobTicket(data.id, user.id, sessionId);
     return res.status(response.status).json(data);
   } catch (error) {
     console.error('RunPod proxy error:', error);

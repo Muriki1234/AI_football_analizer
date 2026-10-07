@@ -7,6 +7,7 @@
 
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { randomUUID } from 'node:crypto';
 import { requireSupabaseUser } from './_authMiddleware.js';
 
 const {
@@ -50,7 +51,7 @@ export default async function handler(req, res) {
     if (!user) return; // 401 already sent
 
     const { sessionId, fileName, contentType } = req.body || {};
-    if (!sessionId || !fileName) {
+    if (typeof sessionId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionId) || typeof fileName !== 'string' || fileName.length > 255 || !/\.(mp4|mov|m4v|mkv|webm|avi)$/i.test(fileName)) {
         return res.status(400).json({ error: 'sessionId and fileName required' });
     }
 
@@ -58,7 +59,7 @@ export default async function handler(req, res) {
     const safeName = (fileName || 'video.mp4')
         .replace(/[^A-Za-z0-9._-]+/g, '_')
         .replace(/^[-.]+/, '');
-    const key = `${sessionId}/${safeName}`;
+    const key = `${user.id}/${sessionId}/${randomUUID()}/${safeName}`;
 
     try {
         const s3 = getS3();
