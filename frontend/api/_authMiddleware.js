@@ -1,137 +1,72 @@
-// Vercel serverless API auth helper.
-//
-// 三个 /api/* endpoint 都代理到 RunPod / Roboflow（花钱的服务），
-// 之前完全没 auth → 任何人 curl 你的 vercel 域名就能烧 GPU 钱。
-//
-// 这里强制 Authorization: Bearer <supabase_jwt> header，校验是
-// Supabase 用户（包括匿名用户）签发的有效 JWT。匿名 session 用户
-// 也能通过，所以正常前端流程不受影响；裸 curl 拿不到 JWT 就 401。
-//
-// 文件名以 _ 开头：Vercel 不把它当 endpoint 路由，纯辅助模块。
-
 import { createClient } from '@supabase/supabase-js';
 
-const SUPABASE_URL = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
-const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+let cachedClient;
+const options = { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } };
 
-// 同一进程内复用 client，省 cold-start
-let _cachedClient = null;
-function getSupabase() {
-    if (!_cachedClient) {
-        if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-            throw new Error(
-                'Auth disabled: SUPABASE_URL / SUPABASE_ANON_KEY missing in Vercel env'
-            );
-        }
-        _cachedClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-            auth: { persistSession: false, autoRefreshToken: false },
-        });
-    }
-    return _cachedClient;
+export function getPublicAuthClient() {
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) throw new Error('Supabase configuration missing');
+    cachedClient ||= createClient(SUPABASE_URL, SUPABASE_ANON_KEY, options);
+    return cachedClient;
 }
 
-/**
- * 校验请求里的 Supabase JWT。验证通过返回 user 对象，否则 res 返回 401 / 500
- * 并返回 null（caller 看到 null 直接 return 即可）。
- */
+export function getUserClient(token) {
+    getPublicAuthClient();
+    return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+        ...options, global: { headers: { Authorization: `Bearer ${token}` } },
+    });
+}
+
+export function extractJwt(req) {
+    const header = req.headers.authorization || req.headers.Authorization;
+    if (typeof header !== 'string') return '';
+    const match = header.match(/^Bearer\s+(\S+)$/i);
+    return match?.[1] || '';
+}
+
+// Supabase validates the token; the database also verifies that its auth session
+// still exists. This rejects anonymous users and access tokens retained after logout.
 export async function requireSupabaseUser(req, res) {
-    const authHeader = req.headers.authorization || req.headers.Authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        res.status(401).json({
-            error: 'Missing or invalid Authorization header. Expected: Bearer <supabase_jwt>',
-        });
-        return null;
-    }
-
-    const token = authHeader.slice('Bearer '.length).trim();
-    if (!token) {
-        res.status(401).json({ error: 'Empty bearer token' });
-        return null;
-    }
-
-    let supabase;
+    res.setHeader('Cache-Control', 'no-store');
+    const token = extractJwt(req);
+    if (!token) { res.status(401).json({ error: 'Please sign in to continue.' }); return null; }
+    let client;
+    try { client = getPublicAuthClient(); }
+    catch { res.status(503).json({ error: 'Sign-in is temporarily unavailable.' }); return null; }
     try {
-        supabase = getSupabase();
-    } catch (e) {
-        // 配置缺失 — 这是服务端配置错误，不是 client 的锅
-        console.error('[auth] Supabase config error:', e.message);
-        res.status(500).json({ error: 'Server auth misconfigured' });
-        return null;
-    }
-
-    try {
-        const { data, error } = await supabase.auth.getUser(token);
+        const { data, error } = await client.auth.getUser(token);
         if (error || !data?.user) {
-            res.status(401).json({ error: 'Invalid or expired session' });
-            return null;
+            res.status(error?.status >= 500 ? 503 : 401).json({ error: 'Your sign-in is invalid or expired.' }); return null;
         }
-        return data.user;
-    } catch (e) {
-        console.error('[auth] getUser failed:', e);
-        res.status(401).json({ error: 'Token verification failed' });
-        return null;
+        const user = data.user;
+        if (user.is_anonymous || !(user.email_confirmed_at || user.phone_confirmed_at)) {
+            res.status(403).json({ error: 'Please sign in with a verified email or phone number.' }); return null;
+        }
+        const active = await getUserClient(token).rpc('customer_session_active');
+        if (active.error) { console.error('[auth] session validation unavailable'); res.status(503).json({ error: 'Unable to verify your sign-in. Please try again.' }); return null; }
+        if (active.data !== true) { res.status(401).json({ error: 'Your sign-in has ended. Please sign in again.' }); return null; }
+        return user;
+    } catch {
+        res.status(503).json({ error: 'Unable to verify your sign-in. Please try again.' }); return null;
     }
 }
 
-
-/**
- * 校验当前 user 拥有 session_id，并从 DB 返回服务端可信的 session（含 video_url）。
- * 三件事一起做：
- *   1. session 必须存在
- *   2. session.user_id 必须等于当前 JWT 的 user.id  (依赖 RLS 也行，但这里多查一次更明确)
- *   3. 用 anon key + 用户 JWT 查 → RLS 自动拦截不属于这个用户的行 → PGRST116 报 row 0
- *
- * 调用方拿到非 null 的 session 后，**必须用 session.video_url 而不是 req.body 的 video_url**，
- * 否则攻击者能让你的 RunPod 去下载任意 URL（SSRF 已在后端拦，但这里直接断绝）。
- *
- * 失败时 res 已经写过响应，caller 直接 return 即可。
- */
-export async function requireSessionOwner(req, res, sessionId, userJwt) {
-    if (!sessionId) {
-        res.status(400).json({ error: 'session_id required' });
-        return null;
+// Always verify ownership explicitly as well as relying on RLS.
+export async function requireSessionOwner(req, res, sessionId, userJwt, expectedUserId) {
+    if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(sessionId)) {
+        res.status(400).json({ error: 'A valid session_id is required.' }); return null;
     }
-    let supabase;
     try {
-        supabase = getSupabase();
-    } catch (e) {
-        console.error('[auth] supabase config error:', e.message);
-        res.status(500).json({ error: 'Server auth misconfigured' });
-        return null;
-    }
-
-    try {
-        // 创建一个带用户 JWT 的临时 client，这样 RLS 用 auth.uid() = user.id 评估
-        const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-            auth: { persistSession: false, autoRefreshToken: false },
-            global: { headers: { Authorization: `Bearer ${userJwt}` } },
-        });
-        const { data, error } = await userClient
-            .from('sessions')
-            .select('id, user_id, video_url, status, extra, updated_at')
-            .eq('id', sessionId)
-            .maybeSingle();
-        if (error) {
-            console.error('[auth] session lookup failed:', error.message);
-            res.status(500).json({ error: 'Session lookup failed' });
-            return null;
-        }
-        if (!data) {
-            // RLS 拦截 = 查不到 = 当前用户不拥有这个 session（或者 session 不存在）
-            res.status(403).json({ error: 'Session not found or not owned by you' });
-            return null;
+        const { data, error } = await getUserClient(userJwt)
+            .from('sessions').select('id, user_id, video_url, status, extra, updated_at')
+            .eq('id', sessionId).maybeSingle();
+        if (error) { res.status(503).json({ error: 'Unable to load this analysis.' }); return null; }
+        if (!data || !expectedUserId || data.user_id !== expectedUserId) {
+            res.status(403).json({ error: 'This analysis is unavailable or belongs to another account.' }); return null;
         }
         return data;
-    } catch (e) {
-        console.error('[auth] session lookup exception:', e);
-        res.status(500).json({ error: 'Session lookup failed' });
-        return null;
+    } catch {
+        res.status(503).json({ error: 'Unable to load this analysis.' }); return null;
     }
-}
-
-
-/** 从 Authorization header 抠出 raw JWT 字符串（caller 已经过 requireSupabaseUser）。 */
-export function extractJwt(req) {
-    const h = req.headers.authorization || req.headers.Authorization || '';
-    return h.startsWith('Bearer ') ? h.slice(7).trim() : '';
 }

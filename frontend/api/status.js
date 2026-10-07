@@ -1,4 +1,5 @@
-import { requireSupabaseUser } from './_authMiddleware.js';
+import { requireSupabaseUser, requireSessionOwner, extractJwt } from './_authMiddleware.js';
+import { verifyJobTicket } from './_jobTicket.js';
 
 export default async function handler(req, res) {
   // We expect a GET request with ?id=xxxx
@@ -11,9 +12,14 @@ export default async function handler(req, res) {
   if (!user) return;
 
   let jobId = req.query.id;
-  if (!jobId) {
+  if (typeof jobId !== 'string' || !/^(cpu:)?[A-Za-z0-9_-]{1,200}$/.test(jobId)) {
     return res.status(400).json({ error: 'Job ID is required' });
   }
+
+  const ticket = verifyJobTicket(req.headers['x-job-token'], jobId, user.id);
+  if (!ticket) return res.status(403).json({ error: 'This job is unavailable or belongs to another account.' });
+  const session = await requireSessionOwner(req, res, ticket.sessionId, extractJwt(req), user.id);
+  if (!session) return;
 
   let runpodUrl = process.env.RUNPOD_ENDPOINT_URL;
   if (jobId.startsWith('cpu:')) {
@@ -29,7 +35,7 @@ export default async function handler(req, res) {
   try {
     // RunPod's status URL is usually: https://api.runpod.ai/v2/{endpoint_id}/status/{job_id}
     // We construct it by replacing "/run" with "/status/{job_id}"
-    const statusUrl = runpodUrl.replace('/run', `/status/${jobId}`);
+    const statusUrl = runpodUrl.replace(/\/run(?:sync)?\/?$/, `/status/${encodeURIComponent(jobId)}`);
 
     const response = await fetch(statusUrl, {
       method: 'GET',

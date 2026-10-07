@@ -1,23 +1,27 @@
 import { supabase } from '../lib/supabase';
+import { isCustomer } from '../lib/auth';
 import { addRecentSession } from '../lib/recentSessions';
 import { captureVideoFrame } from '../lib/captureVideoFrame';
 
-// authFetch: 给 /api/* 请求自动带上当前 Supabase JWT。Vercel 那边的
-// _authMiddleware.js 会校验这个 token，没 token 直接 401。匿名 session
-// 也 OK，所以普通用户流程不受影响。
+// Attach the current customer JWT. Never create anonymous users or retry paid POSTs.
 async function authFetch(url, opts = {}) {
     const { data: { session } } = await supabase.auth.getSession();
     const token = session?.access_token;
-    if (!token) {
-        throw new Error('Not authenticated — please refresh the page');
+    if (!token || !isCustomer(session?.user)) {
+        throw new Error('Please sign in to continue.');
     }
-    return fetch(url, {
+    const response = await fetch(url, {
         ...opts,
         headers: {
             ...(opts.headers || {}),
             Authorization: `Bearer ${token}`,
         },
     });
+    if (response.status === 401) {
+        await supabase.auth.signOut({ scope: 'local' });
+        throw new Error('Your sign-in has expired. Please sign in again.');
+    }
+    return response;
 }
 
 // Poll /api/status with exponential backoff: tight while warming up,
@@ -25,14 +29,15 @@ async function authFetch(url, opts = {}) {
 // 2.5s interval without sacrificing perceived responsiveness.
 //
 // Cadence: 2s × 5  →  5s × 6  →  10s for the rest. Total budget ≈ 2 min.
-const pollJobResult = async (jobId, maxWaitMs = 120000) => {
+const pollJobResult = async (jobId, statusToken, maxWaitMs = 120000) => {
     const deadline = Date.now() + maxWaitMs;
     const intervalFor = (n) => (n < 5 ? 2000 : n < 11 ? 5000 : 10000);
     let n = 0;
     while (Date.now() < deadline) {
         await new Promise(r => setTimeout(r, intervalFor(n++)));
-        const res = await authFetch(`/api/status?id=${jobId}`);
+        const res = await authFetch(`/api/status?id=${encodeURIComponent(jobId)}`, { headers: { 'X-Job-Token': statusToken || '' } });
         const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Unable to load job status');
         if (data.status === 'COMPLETED') return data.output;
         if (data.status === 'FAILED') throw new Error(data.error || 'RunPod job failed');
         // IN_QUEUE / IN_PROGRESS → keep polling
@@ -123,13 +128,8 @@ export const uploadVideo = async (file, onProgress) => {
         );
     }
 
-    // Try to get current user; if not logged in, auto sign-in anonymously
-    let { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-        const { data, error } = await supabase.auth.signInAnonymously();
-        if (error) throw new Error('Failed to create guest session: ' + error.message);
-        user = data.user;
-    }
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    if (userError || !isCustomer(user)) throw new Error('Please sign in before uploading a video.');
 
     const sessionId = crypto.randomUUID();
 
@@ -448,8 +448,9 @@ export const analyzeFrame = async (sessionId, frameIndex = 0) => {
         if (!res.ok) throw new Error(data.error || 'Failed to analyze frame');
 
         let output;
+        if (!res.ok) throw new Error(data.error || 'Unable to load job status');
         if (data.status === 'COMPLETED') output = data.output;
-        else if (data.id) output = await pollJobResult(data.id);
+        else if (data.id) output = await pollJobResult(data.id, data.status_token);
         else output = data.output || data;
 
         return {

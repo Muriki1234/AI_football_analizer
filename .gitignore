@@ -80,3 +80,4 @@ server/query_session.py
 *.jpg
 .agents/datasets/
 
+.vercel

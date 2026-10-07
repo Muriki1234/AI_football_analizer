@@ -209,3 +209,23 @@
 .login-toggle button:hover {
     text-decoration: underline;
 }
+.login-card__logo { text-decoration: none; }
+.login-methods { display: flex; gap: 8px; margin-bottom: var(--space-lg); }
+.login-methods button { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 10px 5px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-bg-input); color: var(--color-text-secondary); cursor: pointer; }
+.login-methods button[aria-pressed="true"] { border-color: var(--color-accent); color: var(--color-accent); }
+.login-country { width: 100%; padding: 12px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-bg-input); color: var(--color-text-primary); font: inherit; }
+.login-input-wrap input { min-width: 0; width: 100%; }
+.login-hint { color: var(--color-text-muted); font-size: .78rem; line-height: 1.5; margin-top: 8px; }
+.login-hint--center { text-align: center; margin-top: 20px; }
+.auth-message { padding: 12px; border: 1px solid var(--color-border); border-radius: var(--radius-md); font-size: .85rem; line-height: 1.5; color: var(--color-text-secondary); margin-bottom: 16px; overflow-wrap: anywhere; }
+.auth-message--error { border-color: #ef444466; color: #fca5a5; }
+.auth-link { background: none; border: 0; padding: 0; color: var(--color-accent); cursor: pointer; font: inherit; }
+.auth-link:hover { text-decoration: underline; }
+.login-actions { display: flex; flex-direction: column; gap: 12px; text-align: center; margin-top: 20px; font-size: .85rem; }
+.login-card button:disabled { opacity: .55; cursor: not-allowed; }
+.login-card :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+.auth-loading { min-height: 65vh; display: grid; place-items: center; color: var(--color-text-secondary); }
+.account-menu { position: relative; z-index: 30; display: flex; justify-content: flex-end; align-items: center; gap: 14px; padding: 12px 24px; min-height: 58px; background: var(--color-bg-card); border-bottom: 1px solid var(--color-border); }
+.account-menu a, .account-menu button { color: var(--color-accent); font: inherit; font-size: .85rem; background: none; border: 0; cursor: pointer; text-decoration: none; }
+.account-menu__identity { max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-secondary); font-size: .8rem; }
+@media (max-width: 480px) { .login-card { padding: 28px 20px; } .account-menu { padding: 10px 14px; gap: 12px; flex-wrap: wrap; } .account-menu__identity { max-width: 160px; } }
