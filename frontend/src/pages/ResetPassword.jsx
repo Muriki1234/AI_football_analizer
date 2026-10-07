@@ -35,6 +35,6 @@ export default function ResetPassword() {
                 <div className="login-field"><label htmlFor="new-password">New password</label><div className="login-input-wrap"><input id="new-password" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} minLength={10} required disabled={busy} /></div></div>
                 <div className="login-field"><label htmlFor="confirm-password">Confirm password</label><div className="login-input-wrap"><input id="confirm-password" type="password" autoComplete="new-password" value={confirmation} onChange={(e) => setConfirmation(e.target.value)} minLength={10} required disabled={busy} /></div></div>
                 <button className="btn btn-primary login-submit" disabled={busy}>{busy ? 'Saving…' : 'Save new password'}</button>
-            </form></> : <><p className="auth-message" role="alert">This reset link is invalid or expired. Request a new link from the sign-in page.</p><Link to="/login" className="btn btn-primary">Return to sign in</Link></>}
+            </form><p className="login-toggle"><Link to="/">Back to home</Link></p></> : <><p className="auth-message" role="alert">This reset link is invalid or expired. Request a new link from the sign-in page.</p><Link to="/login" className="btn btn-primary">Return to sign in</Link></>}
     </section></main>;
 }

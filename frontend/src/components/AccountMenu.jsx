@@ -19,6 +19,7 @@ export default function AccountMenu() {
         {user ? <>
             <span className="account-menu__identity" title={user.email || user.phone}>{user.email || `+${user.phone?.replace(/^\+/, '')}`}</span>
             <Link to="/sessions">My analyses</Link>
+            {user.email && <Link to="/reset-password">Password</Link>}
             <button type="button" disabled={busy} onClick={logout}>{busy ? 'Signing out…' : 'Sign out'}</button>
         </> : <Link className="btn btn-ghost" to="/login">Sign in</Link>}
     </nav>;
