@@ -2,6 +2,7 @@ import { supabase } from '../lib/supabase';
 import { isCustomer } from '../lib/auth';
 import { addRecentSession } from '../lib/recentSessions';
 import { captureVideoFrame } from '../lib/captureVideoFrame';
+import { absUrl } from './config';
 
 // Attach the current customer JWT. Never create anonymous users or retry paid POSTs.
 async function authFetch(url, opts = {}) {
@@ -10,7 +11,7 @@ async function authFetch(url, opts = {}) {
     if (!token || !isCustomer(session?.user)) {
         throw new Error('Please sign in to continue.');
     }
-    const response = await fetch(url, {
+    const response = await fetch(absUrl(url), {
         ...opts,
         headers: {
             ...(opts.headers || {}),
@@ -131,6 +132,11 @@ export const uploadVideo = async (file, onProgress) => {
     const { data: { user }, error: userError } = await supabase.auth.getUser();
     if (userError || !isCustomer(user)) throw new Error('Please sign in before uploading a video.');
 
+    const MAX_ALLOWED_SIZE = 5 * 1024 * 1024 * 1024; // 5 GiB (Cloudflare R2 single-part PUT limit)
+    if (file.size > MAX_ALLOWED_SIZE) {
+        throw new Error('Video file exceeds maximum allowed size of 5 GB.');
+    }
+
     const sessionId = crypto.randomUUID();
 
     // 1. Get presigned R2 upload URL from Vercel API
@@ -141,6 +147,7 @@ export const uploadVideo = async (file, onProgress) => {
             sessionId,
             fileName: file.name,
             contentType: file.type || 'video/mp4',
+            fileSize: file.size,
         }),
     });
     if (!presignRes.ok) {
@@ -481,6 +488,63 @@ export const queueFeature = async (sessionId, feature, { mode } = {}) => {
     return data;
 };
 
+/**
+ * Interactive Tactical Coach Q&A
+ * Queries the deterministic, zero-hallucination TacticalCoachQAEngine.
+ * Returns grounded summary, quantitative metrics, and video playlist.
+ */
+export const askCoachQA = async (sessionId, query, history = []) => {
+    // 1. First try direct FastAPI route if running in local/Pod environment
+    try {
+        const res = await authFetch(`/api/sessions/${sessionId}/coach-qa`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query, history }),
+        });
+        if (res && res.ok) {
+            return await res.json();
+        }
+    } catch {
+        // Fallback to queueFeature via /api/analyze
+    }
+
+    // 2. Serverless fallback: queue feature 'coach_qa' with query parameter
+    const res = await authFetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            input: {
+                action: 'feature',
+                feature: 'coach_qa',
+                session_id: sessionId,
+                query,
+                history,
+            }
+        })
+    });
+    let data;
+    try { data = await res.json(); } catch (e) { if (!res.ok) throw new Error(`HTTP Error ${res.status}`); else throw e; }
+    if (!res.ok) throw new Error(data.error || 'Failed to query coach QA');
+    return data;
+};
+
+
+/**
+ * Tactical Highlights Reel
+ * Fetches the highlights manifest JSON containing rendered clips and thumbnails.
+ */
+export const getHighlightsManifest = async (sessionId) => {
+    try {
+        const res = await authFetch(`/api/sessions/${sessionId}/files/highlights_manifest.json`);
+        if (res && res.ok) {
+            return await res.json();
+        }
+    } catch {
+        return null;
+    }
+    return null;
+};
+
 // ── Feature task helpers used by AIInsights.jsx ────────────────────────────
 //
 // AIInsights expects two functions that didn't actually exist in this file:
@@ -643,9 +707,47 @@ export const subscribeSession = (sessionId, handlers = {}) => {
 };
 
 // ── Compatibility Shims (keeping UI from breaking) ──────────────────────────
-export const getSummary = async (sessionId) => {
-    const { data } = await supabase.from('tasks').select('result').eq('session_id', sessionId).eq('task_type', 'ai_summary').maybeSingle();
-    return data?.result || {};
+export const getSummary = async (sessionId, mode = null) => {
+    try {
+        const { data, error } = await supabase
+            .from('tasks')
+            .select('id, task_type, status, progress, result, created_at')
+            .eq('session_id', sessionId)
+            .in('task_type', ['ai_summary', 'ai_summary_team', 'ai_summary_player'])
+            .order('created_at', { ascending: false });
+
+        if (error || !data || data.length === 0) return {};
+
+        if (mode) {
+            const match = data.find(t => t.result?.analysis_mode === mode || t.task_type === `ai_summary_${mode}`);
+            if (match?.result) return { ...match.result, task_type: match.task_type };
+        }
+
+        const latest = data.find(t => t.result && (t.status === 'completed' || t.result.report_markdown)) || data[0];
+        return latest?.result ? { ...latest.result, task_type: latest.task_type } : {};
+    } catch {
+        return {};
+    }
+};
+
+export const listSummaries = async (sessionId) => {
+    try {
+        const { data, error } = await supabase
+            .from('tasks')
+            .select('id, task_type, status, progress, result, created_at')
+            .eq('session_id', sessionId)
+            .in('task_type', ['ai_summary', 'ai_summary_team', 'ai_summary_player'])
+            .order('created_at', { ascending: false });
+        if (error || !data) return [];
+        return data.map(t => ({
+            ...(t.result || {}),
+            task_type: t.task_type,
+            status: t.status,
+            progress: t.progress,
+        }));
+    } catch {
+        return [];
+    }
 };
 
 export const artifactUrl = (sessionId, relPath) => {
@@ -664,6 +766,8 @@ export default {
     startTrackingMulti,
     analyzeFrame,
     queueFeature,
+    askCoachQA,
+    getHighlightsManifest,
     generateFeature,
     pollTaskStatus,
     listTasks,

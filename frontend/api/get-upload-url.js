@@ -39,6 +39,10 @@ function getS3() {
     return _s3;
 }
 
+// Hard single-part PUT protocol limit on Cloudflare R2 is 5 GiB (5,368,709,120 bytes)
+const MAX_UPLOAD_SIZE = 5 * 1024 * 1024 * 1024;
+const PRESIGNED_EXPIRES_IN = 1800; // 30 minutes
+
 export default async function handler(req, res) {
     // Only POST
     if (req.method !== 'POST') {
@@ -50,9 +54,20 @@ export default async function handler(req, res) {
     const user = await requireSupabaseUser(req, res);
     if (!user) return; // 401 already sent
 
-    const { sessionId, fileName, contentType } = req.body || {};
+    const { sessionId, fileName, contentType, fileSize } = req.body || {};
     if (typeof sessionId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionId) || typeof fileName !== 'string' || fileName.length > 255 || !/\.(mp4|mov|m4v|mkv|webm|avi)$/i.test(fileName)) {
         return res.status(400).json({ error: 'sessionId and fileName required' });
+    }
+
+    if (fileSize !== undefined && fileSize !== null) {
+        if (typeof fileSize !== 'number' || fileSize <= 0 || !Number.isFinite(fileSize)) {
+            return res.status(400).json({ error: 'Invalid fileSize parameter' });
+        }
+        if (fileSize > MAX_UPLOAD_SIZE) {
+            return res.status(400).json({
+                error: `File size exceeds the 5 GB maximum allowed for direct upload (Cloudflare R2 single PUT limit). Got ${(fileSize / (1024 * 1024 * 1024)).toFixed(2)} GB.`,
+            });
+        }
     }
 
     // Sanitise file name — same logic as the frontend's uploadVideo()
@@ -63,13 +78,17 @@ export default async function handler(req, res) {
 
     try {
         const s3 = getS3();
-        const cmd = new PutObjectCommand({
+        const cmdParams = {
             Bucket: R2_BUCKET_NAME,
             Key: key,
             ContentType: contentType || 'video/mp4',
-        });
+        };
+        if (typeof fileSize === 'number' && fileSize > 0) {
+            cmdParams.ContentLength = fileSize;
+        }
+        const cmd = new PutObjectCommand(cmdParams);
         // Presigned PUT URL — browser will PUT the file body directly here
-        const uploadUrl = await getSignedUrl(s3, cmd, { expiresIn: 3600 });
+        const uploadUrl = await getSignedUrl(s3, cmd, { expiresIn: PRESIGNED_EXPIRES_IN });
 
         // The permanent video URL for DB storage / backend download.
         // Prefer the free public URL (no egress cost on R2); fall back to

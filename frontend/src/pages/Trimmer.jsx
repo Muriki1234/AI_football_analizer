@@ -17,6 +17,7 @@ import {
 } from 'react-icons/hi2';
 import { getSession, saveMatchPeriods } from '../services/api';
 import StepNav from '../components/StepNav';
+import { useLanguage } from '../i18n/LanguageContext';
 import './Trimmer.css';
 
 // For real match videos (≥5 min) keep 30s minimum so the backend is happy.
@@ -45,6 +46,7 @@ function parseTimecode(str, max) {
 export default function Trimmer() {
     const navigate = useNavigate();
     const location = useLocation();
+    const { lang, t } = useLanguage();
     const query = new URLSearchParams(location.search);
     const sessionId =
         location.state?.sessionId || location.state?.videoId || query.get('sessionId');
@@ -98,7 +100,7 @@ export default function Trimmer() {
                     v.addEventListener('error', () => done(0), { once: true });
                     setTimeout(() => {
                         if (!settled) {
-                            toast.error('Video metadata took too long to load; check connection');
+                            toast.error(t('trimmer.loadMetadataTimeout'));
                             done(0);
                         }
                     }, 10_000);
@@ -114,13 +116,13 @@ export default function Trimmer() {
                         setBreakStack([]);
                     }
                 } else {
-                    toast.error('Checking video duration... Please wait for video to load.');
+                    toast.error(t('trimmer.checkingDuration'));
                 }
             } catch (e) {
-                toast.error('Failed to load video: ' + e.message);
+                toast.error(e.message);
             }
         })();
-    }, [sessionId]);
+    }, [sessionId, t]);
 
     // Scrub video preview when user drags a handle
     useEffect(() => {
@@ -274,7 +276,7 @@ export default function Trimmer() {
         }
         for (let i = 0; i < periods.length; i++) {
             if (periods[i].end - periods[i].start < minPeriodSec) {
-                toast.error(`Period ${i + 1} is shorter than ${minPeriodSec}s`);
+                toast.error(t('trimmer.periodTooShort', { n: i + 1, min: minPeriodSec }));
                 return;
             }
         }
@@ -298,9 +300,9 @@ export default function Trimmer() {
     if (!sessionId) {
         return (
             <div className="page-container">
-                <p style={{ padding: 24 }}>No session — go back to upload.</p>
+                <p style={{ padding: 24 }}>{t('trimmer.noSession')}</p>
                 <button className="btn btn-primary" onClick={() => navigate('/upload')}>
-                    Go to Upload
+                    {t('common.stepUpload')}
                 </button>
             </div>
         );
@@ -316,7 +318,7 @@ export default function Trimmer() {
                 style={{ padding: '16px 24px' }}
             >
                 <button className="btn btn-ghost" onClick={() => navigate('/upload')}>
-                    <HiArrowLeft /> Back
+                    <HiArrowLeft /> {t('common.back')}
                 </button>
             </motion.div>
 
@@ -327,12 +329,8 @@ export default function Trimmer() {
                 initial={{ opacity: 0, y: -20 }}
                 animate={{ opacity: 1, y: 0 }}
             >
-                <h1>Mark Match Periods</h1>
-                <p>
-                    Drag the handles to skip pre-game intro, halftime,
-                    and post-game cooldown. Click <strong>+ Add break</strong>
-                    {' '}for a halftime split.
-                </p>
+                <h1>{t('trimmer.title')}</h1>
+                <p>{t('trimmer.subtitle')}</p>
             </motion.div>
 
             <div className="trim-page__layout">
@@ -402,20 +400,20 @@ export default function Trimmer() {
                     {periods.map((p, i) => (
                         <div key={i} className="periods-list__row">
                             <span className="periods-list__label">
-                                Period {i + 1}{periods.length > 1 ? ` of ${periods.length}` : ''}
+                                {t('trimmer.periodNofTotal', { n: i + 1, total: periods.length })}
                             </span>
                             <PeriodInput
                                 value={p.start}
                                 onChange={(s) => setEdge(i, 'start', s)}
                                 max={duration}
-                                label="Start"
+                                label={t('trimmer.start')}
                             />
                             <span style={{ color: '#64748b' }}>→</span>
                             <PeriodInput
                                 value={p.end}
                                 onChange={(s) => setEdge(i, 'end', s)}
                                 max={duration}
-                                label="End"
+                                label={t('trimmer.end')}
                             />
                             <span className="periods-list__dur">
                                 = {fmt(p.end - p.start)}
@@ -429,39 +427,39 @@ export default function Trimmer() {
                         className="btn btn-secondary"
                         onClick={addBreak}
                         disabled={periods.length >= MAX_PERIODS}
-                        title="Insert a skip gap inside the longest period"
+                        title={t('trimmer.addBreak')}
                     >
-                        <HiPlus /> Add break
+                        <HiPlus /> {t('trimmer.addBreak')}
                     </button>
                     <button
                         className="btn btn-secondary"
                         onClick={removeBreak}
                         disabled={periods.length <= 1}
-                        title="Remove the last skip gap"
+                        title={t('trimmer.removeBreak')}
                     >
-                        <HiMinus /> Remove break
+                        <HiMinus /> {t('trimmer.removeBreak')}
                     </button>
                     <button
                         className="btn btn-ghost"
                         onClick={reset}
-                        title="Back to one full-length period"
+                        title={t('trimmer.resetFull')}
                     >
-                        <HiArrowPath /> Reset
+                        <HiArrowPath /> {t('trimmer.resetFull')}
                     </button>
                 </div>
 
                 <div className="periods-summary">
                     <span>
-                        ⏱ Match time:{' '}
+                        {lang === 'zh' ? '有效比赛时间: ' : 'Match Duration: '}
                         <strong style={{ color: '#4ade80' }}>{fmt(totalMatchSec)}</strong>
                         {skippedSec > 0.5 && (
                             <span style={{ color: '#94a3b8' }}>
-                                {' '}(skipping {fmt(skippedSec)})
+                                {' '}({lang === 'zh' ? `已剔除 ${fmt(skippedSec)}` : `skipping ${fmt(skippedSec)}`})
                             </span>
                         )}
                         {periods.length > 1 && (
                             <span style={{ color: '#94a3b8' }}>
-                                {' '}— {periods.length}× 4 = {periods.length * 4} player picks coming up
+                                {' '}— {lang === 'zh' ? `${periods.length} 个半场共需框选 ${periods.length * 4} 次球员` : `${periods.length}× 4 = ${periods.length * 4} player picks`}
                             </span>
                         )}
                     </span>
@@ -473,7 +471,7 @@ export default function Trimmer() {
                         onClick={handleContinue}
                         disabled={!duration}
                     >
-                        Continue <HiArrowRight />
+                        {t('trimmer.continueToPick')} <HiArrowRight />
                     </button>
                 </div>
             </div>

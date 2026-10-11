@@ -7,59 +7,85 @@ import {
     HiCheckCircle, HiExclamationTriangle, HiArrowPath, HiTrash,
 } from 'react-icons/hi2';
 import { listMySessions, deleteSession } from '../services/api';
+import { useLanguage } from '../i18n/LanguageContext';
 import './Sessions.css';
 
-const STATUS_META = {
-    uploaded:         { label: 'Uploaded',     icon: HiClock,                color: '#94a3b8' },
-    queued:           { label: 'Queued',       icon: HiClock,                color: '#94a3b8' },
-    tracking:         { label: 'Tracking',     icon: HiArrowPath,            color: '#fbbf24' },
-    tracking_done:    { label: 'Tracking ✓',   icon: HiArrowPath,            color: '#fbbf24' },
-    analyzing:        { label: 'Analyzing',    icon: HiArrowPath,            color: '#60a5fa' },
-    analysis_done:    { label: 'Done',         icon: HiCheckCircle,          color: '#4ade80' },
-    analysis_failed:  { label: 'Failed',       icon: HiExclamationTriangle,  color: '#f87171' },
-    tracking_failed:  { label: 'Failed',       icon: HiExclamationTriangle,  color: '#f87171' },
+const STATUS_ICONS = {
+    uploaded:         { icon: HiClock,                color: '#94a3b8' },
+    queued:           { icon: HiClock,                color: '#94a3b8' },
+    tracking:         { icon: HiArrowPath,            color: '#fbbf24' },
+    tracking_done:    { icon: HiArrowPath,            color: '#fbbf24' },
+    analyzing:        { icon: HiArrowPath,            color: '#60a5fa' },
+    analysis_done:    { icon: HiCheckCircle,          color: '#4ade80' },
+    analysis_failed:  { icon: HiExclamationTriangle,  color: '#f87171' },
+    tracking_failed:  { icon: HiExclamationTriangle,  color: '#f87171' },
 };
 
-// 后端只有一个 'uploaded' 状态，但用户能停在三个不同的页面：
-//   - 没设过半场时间 → "Set periods"   (Trim 页)
-//   - 设了半场没追踪人 → "Pick players" (MultiSegmentConfig 页)
-//   - 其他 / 老数据    → "Uploaded"
-function resolveMeta(s) {
-    let base = STATUS_META[s.status] || STATUS_META.uploaded;
-    
+function resolveMeta(s, t) {
+    const iconMeta = STATUS_ICONS[s.status] || STATUS_ICONS.uploaded;
+    let label = t('sessions.statusUploaded');
+
+    switch (s.status) {
+        case 'queued':
+            label = t('sessions.statusQueued');
+            break;
+        case 'tracking':
+            label = t('sessions.statusTracking');
+            break;
+        case 'tracking_done':
+            label = t('sessions.statusTrackingDone');
+            break;
+        case 'analyzing':
+            label = t('sessions.statusAnalyzing');
+            break;
+        case 'analysis_done':
+            label = t('sessions.statusDone');
+            break;
+        case 'analysis_failed':
+        case 'tracking_failed':
+            label = t('sessions.statusFailed');
+            break;
+        default:
+            label = t('sessions.statusUploaded');
+    }
+
     // Check for zombies (dead workers stuck in running state)
     if (['tracking', 'samurai_multi_pending', 'samurai_done', 'analyzing', 'queued'].includes(s.status)) {
         const lastUpdated = new Date(s.updated_at || s.created_at).getTime();
         const minsSinceUpdate = (Date.now() - lastUpdated) / 60000;
         if (minsSinceUpdate > 20) {
-            base = { ...STATUS_META.analysis_failed, label: 'Failed (Timeout)' };
+            return { icon: HiExclamationTriangle, color: '#f87171', label: t('sessions.statusTimeout') };
         }
     }
 
-    if (s.status !== 'uploaded') return base;
+    if (s.status !== 'uploaded') {
+        return { ...iconMeta, label };
+    }
+
     const periods = Array.isArray(s.match_periods_sec) ? s.match_periods_sec : null;
     if (!periods || periods.length === 0) {
-        return { ...base, label: 'Set periods', color: '#a78bfa' };
+        return { ...iconMeta, label: t('sessions.statusSetPeriods'), color: '#a78bfa' };
     }
-    return { ...base, label: 'Pick players', color: '#22d3ee' };
+    return { ...iconMeta, label: t('sessions.statusPickPlayers'), color: '#22d3ee' };
 }
 
-const formatRelative = (ts) => {
+const formatRelative = (ts, language) => {
     const d = new Date(ts).getTime();
     if (!Number.isFinite(d)) return '';
     const diff = Math.max(0, Date.now() - d);
     const m = Math.floor(diff / 60000);
-    if (m < 1) return 'just now';
-    if (m < 60) return `${m}m ago`;
+    if (m < 1) return language === 'zh' ? '刚刚' : 'just now';
+    if (m < 60) return language === 'zh' ? `${m}分钟前` : `${m}m ago`;
     const h = Math.floor(m / 60);
-    if (h < 24) return `${h}h ago`;
+    if (h < 24) return language === 'zh' ? `${h}小时前` : `${h}h ago`;
     const days = Math.floor(h / 24);
-    if (days < 30) return `${days}d ago`;
+    if (days < 30) return language === 'zh' ? `${days}天前` : `${days}d ago`;
     return new Date(ts).toLocaleDateString();
 };
 
 export default function Sessions() {
     const navigate = useNavigate();
+    const { t, language } = useLanguage();
     const [sessions, setSessions] = useState([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState('');
@@ -78,11 +104,6 @@ export default function Sessions() {
 
     const filtered = useMemo(() => {
         const q = search.trim().toLowerCase();
-        // 'uploaded' 不算 in_progress —— resolveMeta() 已经把它分成
-        // "Set periods" 和 "Pick players" 两种子状态，意义是「等用户操作」
-        // 而不是「服务端在跑」。继续算 in_progress 会让 Running tab 里塞
-        // 一堆等 user 点的 session，跟标签名不符。
-        // 'uploading' 保留 —— 上传中是真在传字节。
         const IN_PROGRESS = new Set([
             'uploading', 'queued',
             'tracking', 'tracking_done', 'samurai_multi_pending', 'samurai_done',
@@ -130,24 +151,23 @@ export default function Sessions() {
         });
     };
 
-    const [deleting, setDeleting] = useState(null);  // session id currently being deleted
+    const [deleting, setDeleting] = useState(null);
 
     const handleDelete = async (e, session) => {
-        e.stopPropagation();   // don't bubble up to the row click
-        const confirmed = window.confirm(
-            `Delete "${session.fileName}"?\n\n` +
-            `This removes the session record and all its tasks. The uploaded ` +
-            `video file stays in storage until the nightly cleanup runs.\n\n` +
-            `This cannot be undone.`
-        );
+        e.stopPropagation();
+        const confirmMsg = language === 'zh'
+            ? `确定删除比赛 "${session.fileName}" 吗？\n\n此操作将删除该比赛的任务档案与分析记录。此操作无法撤销。`
+            : `Delete "${session.fileName}"?\n\nThis removes the session record and all its analysis tasks. This cannot be undone.`;
+        
+        const confirmed = window.confirm(confirmMsg);
         if (!confirmed) return;
         setDeleting(session.id);
         try {
             await deleteSession(session.id);
             setSessions((prev) => prev.filter((s) => s.id !== session.id));
-            toast.success(`Deleted ${session.fileName}`);
+            toast.success(t('sessions.deleteSuccess', { name: session.fileName }));
         } catch (err) {
-            toast.error(`Delete failed: ${err.message}`);
+            toast.error(t('sessions.deleteFailed', { error: err.message }));
         } finally {
             setDeleting(null);
         }
@@ -163,11 +183,11 @@ export default function Sessions() {
                 animate={{ opacity: 1, y: 0 }}
             >
                 <button className="btn btn-ghost" onClick={() => navigate('/')}>
-                    <HiHome /> Home
+                    <HiHome /> {language === 'zh' ? '主页' : 'Home'}
                 </button>
-                <h1 className="sessions-page__title">My Sessions</h1>
+                <h1 className="sessions-page__title">{t('sessions.title')}</h1>
                 <button className="btn btn-primary" onClick={() => navigate('/upload')}>
-                    + New Upload
+                    + {language === 'zh' ? '上传新比赛' : 'New Upload'}
                 </button>
             </motion.div>
 
@@ -181,40 +201,43 @@ export default function Sessions() {
                     <HiMagnifyingGlass />
                     <input
                         type="text"
-                        placeholder="Search by filename or session id…"
+                        placeholder={t('sessions.searchPlaceholder')}
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
                     />
                 </div>
                 <div className="sessions-page__status-tabs">
                     {[
-                        { v: 'all',            label: 'All' },
-                        { v: 'analysis_done',  label: 'Done' },
-                        { v: 'analyzing',      label: 'Running' },
-                        { v: 'failed',         label: 'Failed' },
-                    ].map((t) => (
+                        { v: 'all',            label: t('sessions.tabAll') },
+                        { v: 'analysis_done',  label: t('sessions.tabCompleted') },
+                        { v: 'analyzing',      label: t('sessions.tabInProgress') },
+                        { v: 'failed',         label: t('sessions.tabFailed') },
+                    ].map((tItem) => (
                         <button
-                            key={t.v}
-                            className={`sessions-page__tab ${statusFilter === t.v ? 'is-active' : ''}`}
-                            onClick={() => setStatusFilter(t.v)}
+                            key={tItem.v}
+                            className={`sessions-page__tab ${statusFilter === tItem.v ? 'is-active' : ''}`}
+                            onClick={() => setStatusFilter(tItem.v)}
                         >
-                            {t.label}
+                            {tItem.label}
                         </button>
                     ))}
                 </div>
             </motion.div>
 
             {error && (
-                <p className="sessions-page__error">⚠ {error}</p>
+                <p className="sessions-page__error">
+                    <HiExclamationTriangle style={{ display: 'inline', marginRight: '6px' }} />
+                    {error}
+                </p>
             )}
 
             {loading ? (
-                <p className="sessions-page__empty">Loading…</p>
+                <p className="sessions-page__empty">{t('common.loading')}</p>
             ) : filtered.length === 0 ? (
                 <p className="sessions-page__empty">
                     {search || statusFilter !== 'all'
-                        ? 'No sessions match this filter.'
-                        : 'No sessions yet — upload your first video.'}
+                        ? t('sessions.emptyMatches')
+                        : (language === 'zh' ? '暂无比赛分析记录 — 上传第一场比赛。' : 'No matches yet — upload your first video.')}
                 </p>
             ) : (
                 <motion.div
@@ -224,7 +247,7 @@ export default function Sessions() {
                     transition={{ delay: 0.15 }}
                 >
                     {filtered.map((s, i) => {
-                        const meta = resolveMeta(s);
+                        const meta = resolveMeta(s, t);
                         const Icon = meta.icon;
                         return (
                             <motion.button
@@ -245,7 +268,7 @@ export default function Sessions() {
                                         {s.fileName}
                                     </div>
                                     <div className="sessions-page__row-meta">
-                                        <span>{formatRelative(s.created_at)}</span>
+                                        <span>{formatRelative(s.created_at, language)}</span>
                                         <span className="sessions-page__row-sep">·</span>
                                         <span className="sessions-page__row-id">{s.id.slice(0, 8)}…</span>
                                         {s.status === 'analyzing' && s.progress != null && (
@@ -265,7 +288,7 @@ export default function Sessions() {
                                 <span
                                     role="button"
                                     tabIndex={0}
-                                    aria-label="Delete session"
+                                    aria-label={t('sessions.deleteSession')}
                                     className={`sessions-page__row-delete ${deleting === s.id ? 'is-deleting' : ''}`}
                                     onClick={(e) => handleDelete(e, s)}
                                     onKeyDown={(e) => {
@@ -274,7 +297,7 @@ export default function Sessions() {
                                             handleDelete(e, s);
                                         }
                                     }}
-                                    title="Delete session"
+                                    title={t('sessions.deleteSession')}
                                 >
                                     <HiTrash />
                                 </span>

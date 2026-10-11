@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 import { HiArrowLeft, HiArrowRight, HiArrowPath, HiCheckCircle } from 'react-icons/hi2';
 import { analyzeFrame, getSession } from '../services/api';
 import StepNav from '../components/StepNav';
+import { useLanguage } from '../i18n/LanguageContext';
 import './Configuration.css';
 
 // Auto segment count per period: 8 segments per period (e.g. 8 for 1 period, 8+8=16 for 2 periods).
@@ -59,6 +60,7 @@ function distributeSegments(periodsFr, fps) {
 export default function MultiSegmentConfig() {
     const navigate = useNavigate();
     const location = useLocation();
+    const { lang, t } = useLanguage();
     const query = new URLSearchParams(location.search);
     const sessionId =
         location.state?.sessionId || location.state?.videoId || query.get('sessionId');
@@ -233,7 +235,7 @@ export default function MultiSegmentConfig() {
                                 frameUrl: data.annotated_frame_url,
                                 imgDims: data.image_dimensions,
                                 error: players.length === 0
-                                    ? 'No players detected here — nudge to a different frame'
+                                    ? t('config.noPlayersDetected')
                                     : null,
                               }
                             : s
@@ -243,7 +245,7 @@ export default function MultiSegmentConfig() {
                     detectedSegs.current.delete(detectKey);  // allow retry
                     setSegments((prev) => prev.map((s, i) =>
                         i === targetIdx
-                            ? { ...s, detecting: false, error: e.message || 'Detection failed' }
+                            ? { ...s, detecting: false, error: e.message || t('config.detectionFailed') }
                             : s
                     ));
                 });
@@ -326,9 +328,9 @@ export default function MultiSegmentConfig() {
             <div className="page-container config-page">
                 <div className="bg-grid" />
                 <StepNav />
-                <p style={{ padding: 24 }}>No session — go back to upload.</p>
+                <p style={{ padding: 24 }}>{t('config.noSession')}</p>
                 <button className="btn btn-primary" onClick={() => navigate('/upload')}>
-                    Go to Upload
+                    {t('common.back')}
                 </button>
             </div>
         );
@@ -350,7 +352,7 @@ export default function MultiSegmentConfig() {
                     })}
                     disabled={starting}
                 >
-                    <HiArrowLeft /> Back to Match Periods
+                    <HiArrowLeft /> {t('config.backToPeriods')}
                 </button>
             </motion.div>
 
@@ -362,12 +364,12 @@ export default function MultiSegmentConfig() {
                 animate={{ opacity: 1, y: 0 }}
             >
                 <h1>
-                    {segmentCount === 1 ? 'Pick a Player' : 'Multi-segment Tracking'}
+                    {segmentCount === 1 ? t('config.pickSingle') : t('config.title')}
                 </h1>
                 <p>
                     {segmentCount === 1
-                        ? 'Short clip — one pick is enough.'
-                        : `Pick the same player at ${segmentCount} points across the video. Each segment runs in parallel — much faster for long videos.`}
+                        ? t('config.singleHint')
+                        : t('config.multiHint', { count: segmentCount })}
                 </p>
             </motion.div>
 
@@ -384,7 +386,7 @@ export default function MultiSegmentConfig() {
                             onClick={() => setActiveIdx(i)}
                         >
                             {done ? <HiCheckCircle /> : i + 1}
-                            <span className="mseg__dot-label">Seg {i + 1}</span>
+                            <span className="mseg__dot-label">{t('config.segBadge', { n: i + 1 })}</span>
                         </button>
                     );
                 })}
@@ -398,11 +400,11 @@ export default function MultiSegmentConfig() {
                     key={activeIdx}   // force fresh mount on segment change
                 >
                     {!active ? (
-                        <div className="config-frame-placeholder">Loading…</div>
+                        <div className="config-frame-placeholder">{t('common.loading')}</div>
                     ) : active.detecting ? (
                         <div className="config-frame-placeholder">
                             <div className="config-loading-spinner" />
-                            <span>Detecting players at frame {active.frame}…</span>
+                            <span>{t('config.scanningPlayers', { frame: active.frame })}</span>
                         </div>
                     ) : active.error ? (
                         <div className="config-frame-placeholder">
@@ -415,7 +417,7 @@ export default function MultiSegmentConfig() {
                                     setSegments(prev => prev.map((s, i) => i === activeIdx ? { ...s, error: null } : s));
                                 }}
                             >
-                                <HiArrowPath /> Retry
+                                <HiArrowPath /> {t('config.retryScan')}
                             </button>
                         </div>
                     ) : active.frameUrl ? (
@@ -424,7 +426,7 @@ export default function MultiSegmentConfig() {
                                 src={active.frameUrl}
                                 alt={`Segment ${activeIdx + 1} frame`}
                                 className="config-frame-img"
-                                onError={() => toast.error('Failed to load frame image')}
+                                onError={() => toast.error(t('config.frameLoadError'))}
                             />
                             {active.imgDims && (
                                 <svg
@@ -455,14 +457,14 @@ export default function MultiSegmentConfig() {
                         </div>
                     ) : (
                         <div className="config-frame-placeholder">
-                            <span>No frame data available</span>
+                            <span>{t('config.noFrameData')}</span>
                         </div>
                     )}
                 </motion.div>
 
                 <div className="config-sidebar">
                     <div className="mseg__sidebar-status">
-                        <strong>Segment {activeIdx + 1} of {segmentCount}</strong>
+                        <strong>{t('config.segmentNofTotal', { n: activeIdx + 1, total: segmentCount })}</strong>
 
                         {/* Frame nudge — only meaningful for multi-segment
                             mode where the auto-extracted frame may not show
@@ -471,7 +473,7 @@ export default function MultiSegmentConfig() {
                         {segmentCount > 1 && (
                             <>
                                 <p className="mseg__nudge-hint">
-                                    Player not in this frame? Nudge to a nearby moment:
+                                    {t('config.nudgeHint')}
                                 </p>
                                 <div className="mseg__frame-nudge">
                                     {/* Nudge bounds are the segment's PERIOD (not full video),
@@ -481,45 +483,45 @@ export default function MultiSegmentConfig() {
                                         className="mseg__nudge-btn"
                                         onClick={() => nudgeFrame(activeIdx, -150)}
                                         disabled={!active || active.frame - 150 < (active.periodStartFrame ?? 0)}
-                                        title="−150 frames (≈5 seconds back)"
+                                        title={t('config.nudgeBack150')}
                                     >−150</button>
                                     <button
                                         type="button"
                                         className="mseg__nudge-btn"
                                         onClick={() => nudgeFrame(activeIdx, -30)}
                                         disabled={!active || active.frame - 30 < (active.periodStartFrame ?? 0)}
-                                        title="−30 frames (≈1 second back)"
+                                        title={t('config.nudgeBack30')}
                                     >−30</button>
                                     <button
                                         type="button"
                                         className="mseg__nudge-btn"
                                         onClick={() => nudgeFrame(activeIdx, -5)}
                                         disabled={!active || active.frame - 5 < (active.periodStartFrame ?? 0)}
-                                        title="−5 frames"
+                                        title={t('config.nudgeBack5')}
                                     >−5</button>
                                     <span className="mseg__frame-display" style={{ padding: '0 0.5rem' }}>
-                                        Frame {active?.frame ?? 0}
+                                        {active?.frame ?? 0}
                                     </span>
                                     <button
                                         type="button"
                                         className="mseg__nudge-btn"
                                         onClick={() => nudgeFrame(activeIdx, 5)}
                                         disabled={!active || active.frame + 5 >= (active.periodEndFrame ?? totalFrames)}
-                                        title="+5 frames"
+                                        title={t('config.nudgeFwd5')}
                                     >+5</button>
                                     <button
                                         type="button"
                                         className="mseg__nudge-btn"
                                         onClick={() => nudgeFrame(activeIdx, 30)}
                                         disabled={!active || active.frame + 30 >= (active.periodEndFrame ?? totalFrames)}
-                                        title="+30 frames (≈1 second forward)"
+                                        title={t('config.nudgeFwd30')}
                                     >+30</button>
                                     <button
                                         type="button"
                                         className="mseg__nudge-btn"
                                         onClick={() => nudgeFrame(activeIdx, 150)}
                                         disabled={!active || active.frame + 150 >= (active.periodEndFrame ?? totalFrames)}
-                                        title="+150 frames (≈5 seconds forward)"
+                                        title={t('config.nudgeFwd150')}
                                     >+150</button>
                                 </div>
                             </>
@@ -527,8 +529,8 @@ export default function MultiSegmentConfig() {
 
                         <p style={{ color: '#94a3b8', margin: '0.4rem 0 1rem', fontSize: '0.85rem' }}>
                             {active?.selectedBbox
-                                ? '✓ Player chosen'
-                                : 'Click the player on the left.'}
+                                ? t('config.playerChosen')
+                                : t('config.clickPlayerPrompt')}
                         </p>
                     </div>
 
@@ -538,14 +540,14 @@ export default function MultiSegmentConfig() {
                             disabled={activeIdx === 0}
                             onClick={() => setActiveIdx(activeIdx - 1)}
                         >
-                            <HiArrowLeft /> Prev
+                            <HiArrowLeft /> {t('config.prevSeg')}
                         </button>
                         <button
                             className="btn btn-secondary"
                             disabled={activeIdx === segmentCount - 1}
                             onClick={() => setActiveIdx(activeIdx + 1)}
                         >
-                            Next <HiArrowRight />
+                            {t('config.nextSeg')} <HiArrowRight />
                         </button>
                     </div>
 
@@ -561,15 +563,18 @@ export default function MultiSegmentConfig() {
                             disabled={!allPicked || starting}
                         >
                             {starting ? (
-                                <><span className="config-spinner" />Starting…</>
+                                <><span className="config-spinner" />{t('config.starting')}</>
                             ) : (
-                                <>Start Analysis<HiArrowRight /></>
+                                <>{t('config.startAnalysis')}<HiArrowRight /></>
                             )}
                         </button>
                         <p className="config-cta__hint">
                             {allPicked
-                                ? `All ${segmentCount} segments picked — ready`
-                                : `${segments.filter((s) => s.selectedBbox).length}/${segmentCount} segments picked`}
+                                ? t('config.allPickedReady', { total: segmentCount })
+                                : t('config.pickedProgress', {
+                                    count: segments.filter((s) => s.selectedBbox).length,
+                                    total: segmentCount,
+                                  })}
                         </p>
                     </motion.div>
                 </div>

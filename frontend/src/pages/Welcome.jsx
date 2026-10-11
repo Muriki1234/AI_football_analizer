@@ -7,45 +7,43 @@ import { getRecentSessions, removeRecentSession, addRecentSession } from '../lib
 import { getSession, listMySessions } from '../services/api';
 import './Welcome.css';
 import { useAuth } from '../auth/AuthContext';
-
-const formatRelative = (ts) => {
-    const diff = Math.max(0, Date.now() - ts);
-    const m = Math.floor(diff / 60000);
-    if (m < 1) return 'just now';
-    if (m < 60) return `${m}m ago`;
-    const h = Math.floor(m / 60);
-    if (h < 24) return `${h}h ago`;
-    return `${Math.floor(h / 24)}d ago`;
-};
-
-// Map raw session status → a friendly badge label + colour class.
-// Three tiers matter for routing: 'needs-trim' | 'needs-pick' | 'in-progress' | 'done'
-function sessionStage(s) {
-    if (!s) return null;
-    const st = s.status || 'uploaded';
-    if (['analysis_done'].includes(st))
-        return { label: 'Done', cls: 'badge--done', tier: 'done' };
-    if (['tracking', 'samurai_multi_pending', 'samurai_done', 'analyzing', 'queued'].includes(st)) {
-        const lastUpdated = new Date(s.updated_at || s.created_at).getTime();
-        const minsSinceUpdate = (Date.now() - lastUpdated) / 60000;
-        if (minsSinceUpdate > 20) {
-            // It's a zombie. Mark it as failed so the user can restart it.
-            return { label: 'Failed (Timeout)', cls: 'badge--failed', tier: 'needs-pick' };
-        }
-        return { label: 'Analyzing…', cls: 'badge--progress', tier: 'in-progress' };
-    }
-    if (['tracking_failed', 'analysis_failed', 'failed'].includes(st))
-        return { label: 'Failed', cls: 'badge--failed', tier: 'needs-pick' };
-    // status === 'uploaded'
-    const hasPeriods = Array.isArray(s.match_periods_sec) && s.match_periods_sec.length > 0;
-    if (hasPeriods)
-        return { label: 'Pick player', cls: 'badge--pick', tier: 'needs-pick' };
-    return { label: 'Continue setup', cls: 'badge--setup', tier: 'needs-trim' };
-}
+import { useLanguage } from '../i18n/LanguageContext';
 
 export default function Welcome() {
     const navigate = useNavigate();
     const { user } = useAuth();
+    const { lang, t } = useLanguage();
+
+    const formatRelative = (ts) => {
+        const diff = Math.max(0, Date.now() - ts);
+        const m = Math.floor(diff / 60000);
+        if (m < 1) return t('common.justNow');
+        if (m < 60) return t('common.minutesAgo', { m });
+        const h = Math.floor(m / 60);
+        if (h < 24) return t('common.hoursAgo', { h });
+        return t('common.daysAgo', { d: Math.floor(h / 24) });
+    };
+
+    function sessionStage(s) {
+        if (!s) return null;
+        const st = s.status || 'uploaded';
+        if (['analysis_done'].includes(st))
+            return { label: t('welcome.statusDone'), cls: 'badge--done', tier: 'done' };
+        if (['tracking', 'samurai_multi_pending', 'samurai_done', 'analyzing', 'queued'].includes(st)) {
+            const lastUpdated = new Date(s.updated_at || s.created_at).getTime();
+            const minsSinceUpdate = (Date.now() - lastUpdated) / 60000;
+            if (minsSinceUpdate > 20) {
+                return { label: t('welcome.statusTimeout'), cls: 'badge--failed', tier: 'needs-pick' };
+            }
+            return { label: t('welcome.statusAnalyzing'), cls: 'badge--progress', tier: 'in-progress' };
+        }
+        if (['tracking_failed', 'analysis_failed', 'failed'].includes(st))
+            return { label: t('welcome.statusFailed'), cls: 'badge--failed', tier: 'needs-pick' };
+        const hasPeriods = Array.isArray(s.match_periods_sec) && s.match_periods_sec.length > 0;
+        if (hasPeriods)
+            return { label: t('welcome.statusPickPlayer'), cls: 'badge--pick', tier: 'needs-pick' };
+        return { label: t('welcome.statusContinueSetup'), cls: 'badge--setup', tier: 'needs-trim' };
+    }
 
     const [recents, setRecents] = useState(() => getRecentSessions());
     // Live status fetched once per recent session (keyed by id)
@@ -200,7 +198,7 @@ export default function Welcome() {
                     animate={{ opacity: 1 }}
                     transition={{ delay: 0.6 }}
                 >
-                    AI-powered football performance analysis. Upload match footage, get instant tactical insights.
+                    {t('welcome.subtitle')}
                 </Motion.p>
 
                 {/* CTA Button */}
@@ -216,7 +214,7 @@ export default function Welcome() {
                         className="btn btn-primary btn-lg welcome__cta"
                         onClick={() => navigate('/upload')}
                     >
-                        Start Football Analysis
+                        {t('welcome.startAnalysis')}
                         <HiArrowRight />
                     </button>
                 </Motion.div>
@@ -228,7 +226,10 @@ export default function Welcome() {
                     animate={{ opacity: 1 }}
                     transition={{ delay: 1.1 }}
                 >
-                    {['AI Skeleton Tracking', 'Heatmap Generation', 'Tactical Reports'].map((f, i) => (
+                    {(lang === 'zh'
+                        ? ['AI 姿态骨骼追踪', '多维热图引擎', '深度战术分析报告']
+                        : ['AI Pose Tracking', 'Spatial Heatmaps', 'Tactical Dossier']
+                    ).map((f, i) => (
                         <Motion.span
                             key={f}
                             className="welcome__feature-pill"
@@ -251,12 +252,12 @@ export default function Welcome() {
                             transition={{ delay: 1.5 }}
                         >
                             <div className="welcome__recents-header">
-                                <span><HiClock /> Recent uploads</span>
+                                <span><HiClock /> {t('welcome.recentMatches')}</span>
                                 <button
                                     className="welcome__recents-view-all"
                                     onClick={() => navigate('/sessions')}
                                 >
-                                    View all →
+                                    {lang === 'zh' ? '查看全部 →' : 'View all →'}
                                 </button>
                             </div>
                             <ul className="welcome__recents-list">
@@ -287,7 +288,8 @@ export default function Welcome() {
                                             <button
                                                 className="welcome__recent-remove"
                                                 onClick={(e) => handleRemoveRecent(e, r.id)}
-                                                aria-label="Remove from recent"
+                                                aria-label={t('welcome.removeFromRecent')}
+                                                title={t('welcome.removeFromRecent')}
                                             >
                                                 <HiXMark />
                                             </button>

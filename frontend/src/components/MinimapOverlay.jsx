@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import PropTypes from 'prop-types';
+import { HiExclamationTriangle, HiArrowsPointingOut } from 'react-icons/hi2';
+import { authHeaders } from '../services/config';
+import { useLanguage } from '../i18n/LanguageContext';
 
 /**
  * Canvas overlay drawn on top of the main video, synced to currentTime.
@@ -12,6 +15,7 @@ import PropTypes from 'prop-types';
 const STORAGE_KEY = 'pitchlogic.minimapPos';
 
 export default function MinimapOverlay({ dataUrl, videoRef, visible, onExpand }) {
+    const { language } = useLanguage();
     const canvasRef = useRef(null);
     const wrapperRef = useRef(null);
     const dragRef = useRef(null);
@@ -21,7 +25,7 @@ export default function MinimapOverlay({ dataUrl, videoRef, visible, onExpand })
     useEffect(() => {
         if (!dataUrl) return;
         let cancelled = false;
-        fetch(dataUrl)
+        fetch(dataUrl, { headers: authHeaders() })
             .then((r) => r.json())
             .then((d) => { if (!cancelled) setData(d); })
             .catch(() => { });
@@ -338,6 +342,33 @@ export default function MinimapOverlay({ dataUrl, videoRef, visible, onExpand })
                 ref={canvasRef}
                 style={{ display: 'block' }}
             />
+            {data && !data.frames?.some(f => f && f.length > 0) && (
+                <div style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    background: 'rgba(15, 23, 42, 0.78)',
+                    backdropFilter: 'blur(3px)',
+                    color: '#94a3b8',
+                    fontSize: '0.75rem',
+                    textAlign: 'center',
+                    padding: '8px',
+                    pointerEvents: 'none',
+                    borderRadius: '6px',
+                }}>
+                    <HiExclamationTriangle style={{ fontSize: '1.4rem', marginBottom: '2px', color: '#f87171' }} />
+                    <strong style={{ color: '#f87171' }}>{language === 'zh' ? '球场标线不可辨识' : 'Pitch Markings Degraded'}</strong>
+                    <span style={{ fontSize: '0.68rem', marginTop: '2px', color: '#cbd5e1' }}>
+                        {language === 'zh' ? '俯视小地图已自动停用以防坐标漂移' : 'Minimap disabled to prevent coordinate drift'}
+                    </span>
+                </div>
+            )}
             {onExpand && (
                 <button
                     className="minimap-expand-btn"
@@ -345,8 +376,10 @@ export default function MinimapOverlay({ dataUrl, videoRef, visible, onExpand })
                         e.stopPropagation();
                         onExpand();
                     }}
-                    title="放大战术板"
-                >⛶</button>
+                    title={language === 'zh' ? '放大战术板' : 'Expand Tactical Board'}
+                >
+                    <HiArrowsPointingOut />
+                </button>
             )}
         </div>
     );

@@ -58,74 +58,46 @@ export default function VideoTimelineMarkers({ segments, matchPeriods, fps, tota
         };
     }, [videoRef]);
 
-    const items = useMemo(() => {
-        // Map original frame to stitched frame
-        const mapToStitchedFrame = (origFrame) => {
-            if (!matchPeriods || matchPeriods.length === 0) return origFrame;
-            let curStitched = 0;
-            for (const [ps, pe] of matchPeriods) {
-                if (origFrame >= ps && origFrame < pe) {
-                    return curStitched + (origFrame - ps);
-                }
-                if (origFrame >= pe) {
-                    curStitched += (pe - ps);
-                }
-            }
-            return curStitched;
-        };
+    const activeDuration = useMemo(() => {
+        return duration || (fps && totalFrames ? totalFrames / fps : 0) || 0;
+    }, [duration, fps, totalFrames]);
 
+    const items = useMemo(() => {
+        const totalDur = activeDuration || 1;
         const source = segments?.length
             ? segments
             : [{
                 type: 'full_match',
                 start_frame: 0,
-                end_frame: totalFrames || Math.round((duration || 1) * (fps || 1)),
+                end_frame: totalFrames || Math.round(totalDur * (fps || 1)),
                 start_sec: 0,
-                end_sec: duration || 1,
+                end_sec: totalDur,
             }];
 
-        // Stitched total frames is the sum of all match periods, or just totalFrames
-        let stitchedTotalFrames = totalFrames;
-        if (matchPeriods && matchPeriods.length > 0) {
-            stitchedTotalFrames = matchPeriods.reduce((acc, [ps, pe]) => acc + (pe - ps), 0);
-        }
-        
-        const stitchedTotalSec = fps && stitchedTotalFrames ? stitchedTotalFrames / fps : duration;
-        if (!stitchedTotalSec) return [];
-
-        // Non-match segment types that get stripped from the video
-        const NON_MATCH_TYPES = new Set(['halftime', 'pre_match', 'post_match']);
-
         return source.map((seg) => {
-            const isNonMatch = NON_MATCH_TYPES.has(seg.type);
-            const stitchedStartFrame = mapToStitchedFrame(seg.start_frame);
-            const stitchedEndFrame = mapToStitchedFrame(seg.end_frame);
-            
-            const startSec = stitchedStartFrame / fps;
-            const endSec = stitchedEndFrame / fps;
-            
-            const fallbackStart = Number(seg.start_sec ?? 0);
-            const fallbackEnd = Number(seg.end_sec ?? stitchedTotalSec);
-            
-            const safeStart = Number.isFinite(startSec) ? startSec : fallbackStart;
-            const safeEnd = Number.isFinite(endSec) ? endSec : fallbackEnd;
-            
-            // Bug 3 fix: Non-match segments (halftime etc.) get a thin separator
-            // instead of being filtered out, so users can still see the label
-            const rawWidth = (safeEnd - safeStart) / stitchedTotalSec * 100;
-            const widthPct = isNonMatch && rawWidth <= 0 ? 0.5 : Math.max(0, rawWidth);
-            
+            const startSec = Number.isFinite(seg.start_frame) && fps
+                ? seg.start_frame / fps
+                : Number(seg.start_sec ?? 0);
+            const endSec = Number.isFinite(seg.end_frame) && fps
+                ? seg.end_frame / fps
+                : Number(seg.end_sec ?? totalDur);
+
+            const safeStart = Math.max(0, Math.min(startSec, totalDur));
+            const safeEnd = Math.max(safeStart, Math.min(endSec, totalDur));
+            const rawWidth = ((safeEnd - safeStart) / totalDur) * 100;
+            const widthPct = Math.max(0.5, rawWidth);
+
             return {
                 ...seg,
                 style: SEGMENT_STYLES[seg.type] || { color: '#64748b', label: seg.type },
                 startSec: safeStart,
                 endSec: safeEnd,
                 widthPct,
-                leftPct: Math.max(0, (safeStart / stitchedTotalSec) * 100),
-                isSeparator: isNonMatch && rawWidth <= 0,
+                leftPct: Math.max(0, (safeStart / totalDur) * 100),
+                isSeparator: rawWidth <= 0.1,
             };
         });
-    }, [segments, matchPeriods, fps, totalFrames, duration]);
+    }, [segments, fps, totalFrames, activeDuration]);
 
     const globalMaxSpeed = useMemo(() => {
         let m = 20; // fallback scale
@@ -171,16 +143,6 @@ export default function VideoTimelineMarkers({ segments, matchPeriods, fps, tota
         v.muted = !v.muted;
     };
 
-    const computedDuration = useMemo(() => {
-        if (!fps) return duration;
-        let stitchedTotalFrames = totalFrames;
-        if (matchPeriods && matchPeriods.length > 0) {
-            stitchedTotalFrames = matchPeriods.reduce((acc, [ps, pe]) => acc + (pe - ps), 0);
-        }
-        return stitchedTotalFrames ? stitchedTotalFrames / fps : duration;
-    }, [fps, totalFrames, matchPeriods, duration]);
-
-    const activeDuration = computedDuration || duration;
     const progressPct = activeDuration ? Math.max(0, Math.min(100, (currentTime / activeDuration) * 100)) : 0;
 
     const [isScrubbing, setIsScrubbing] = useState(false);
@@ -344,7 +306,7 @@ export default function VideoTimelineMarkers({ segments, matchPeriods, fps, tota
                     
                     {/* Highlight Dots */}
                     {highlights && highlights.map((hl, i) => {
-                        const pct = duration ? (hl.time / duration) * 100 : 0;
+                        const pct = activeDuration ? (hl.time / activeDuration) * 100 : 0;
                         if (pct < 0 || pct > 100) return null;
                         return (
                             <div
@@ -362,7 +324,7 @@ export default function VideoTimelineMarkers({ segments, matchPeriods, fps, tota
                     
                     {/* Tactical Drawing Dots */}
                     {tacticalDrawings && tacticalDrawings.map((d, i) => {
-                        const pct = duration ? (d.time / duration) * 100 : 0;
+                        const pct = activeDuration ? (d.time / activeDuration) * 100 : 0;
                         if (pct < 0 || pct > 100) return null;
                         return (
                             <div

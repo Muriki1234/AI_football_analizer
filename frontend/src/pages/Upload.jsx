@@ -8,9 +8,11 @@ import { uploadVideo } from '../services/api';
 import { compressVideoIfNeeded, abortCompression } from '../utils/compressVideo';
 import { useProgress } from '../components/ProgressBar';
 import StepNav from '../components/StepNav';
+import { useLanguage } from '../i18n/LanguageContext';
 import './Upload.css';
 
 export default function Upload() {
+    const { lang, t } = useLanguage();
     const [file, setFile] = useState(null);
     const [preview, setPreview] = useState(null);
     const [uploadPct, setUploadPct] = useState(0);
@@ -62,38 +64,31 @@ export default function Upload() {
         
         if (isOver2_5GB || (isOver1GB && !isAlreadyCompressed)) {
             setIsCompressing(true);
-            const compressToastId = toast.loading('正在为您进行 AI 预处理...');
+            const compressToastId = toast.loading(t('upload.localOptimizing'));
             try {
                 finalFile = await compressVideoIfNeeded(f, (pct) => {
                     if (abortRef.current) abortCompression();
                     setCompressPct(pct);
-                    toast.loading(`正在为您进行 AI 预处理... ${pct}%`, { id: compressToastId });
+                    toast.loading(`${t('upload.localOptimizing')} ${pct}%`, { id: compressToastId });
                 });
                 if (abortRef.current) return;
-                toast.success('预处理完成，体积大幅缩减！', { id: compressToastId });
+                toast.success(t('upload.localOptimized'), { id: compressToastId });
             } catch (err) {
-                console.error('AI Pre-processing failed:', err);
-                const errMsg = err?.message || (typeof err === 'string' ? err : '未知错误');
-                toast.error(`🚨 本地加速暂不可用 (${errMsg})。为了保证分析速度与质量，请您下载剪映或 Handbrake，将视频导出为 1080p 后再次上传。`, { id: compressToastId, duration: 10000 });
-                
-                // 必须拦截上传，绝不原图上传！
-                setIsCompressing(false);
-                done();
-                setFile(null);
-                setPreview(null);
-                return;
+                console.warn('AI Pre-processing skipped or failed, uploading original file:', err);
+                toast(t('upload.skipLocalOptimizing'), { id: compressToastId, duration: 4000 });
+                finalFile = f;
             }
             setIsCompressing(false);
         }
 
         // 2. 上传处理
         const tStart = Date.now();
-        const toastId = toast.loading('Uploading video…');
+        const toastId = toast.loading(t('upload.uploadingWithTime', { time: '00:00' }));
         const tickHandle = setInterval(() => {
             const sec = Math.floor((Date.now() - tStart) / 1000);
             const mm = String(Math.floor(sec / 60)).padStart(2, '0');
             const ss = String(sec % 60).padStart(2, '0');
-            toast.loading(`Uploading video… ${mm}:${ss} elapsed`, { id: toastId });
+            toast.loading(t('upload.uploadingWithTime', { time: `${mm}:${ss}` }), { id: toastId });
         }, 1000);
         try {
             const data = await uploadVideo(finalFile, (pct) => {
@@ -103,7 +98,7 @@ export default function Upload() {
             done();
             setUploadSuccess(true);
             setUploadedVideoId(data.session_id || data.video_id);
-            toast.success('Upload complete', { id: toastId });
+            toast.success(t('upload.uploadComplete'), { id: toastId });
         } catch (err) {
             clearInterval(tickHandle);
             console.error('Upload failed', err);
@@ -113,11 +108,11 @@ export default function Upload() {
             toast.error(
                 err?.response?.data?.detail ||
                     err?.message ||
-                    'Upload failed. Check the server connection and try again.',
+                    t('upload.uploadFailed'),
                 { id: toastId }
             );
         }
-    }, [start, done]);
+    }, [start, done, t]);
 
     const { getRootProps, getInputProps, isDragActive } = useDropzone({
         onDrop,
@@ -144,8 +139,8 @@ export default function Upload() {
                 initial={{ opacity: 0, y: -20 }}
                 animate={{ opacity: 1, y: 0 }}
             >
-                <h1>Upload Match Footage</h1>
-                <p>Drag &amp; drop your video or click to browse</p>
+                <h1>{t('upload.title')}</h1>
+                <p>{t('upload.subtitle')}</p>
             </motion.div>
 
             <AnimatePresence mode="wait">
@@ -167,10 +162,12 @@ export default function Upload() {
                             <HiCloudArrowUp className="upload-zone__icon" />
                         </motion.div>
                         <p className="upload-zone__text">
-                            {isDragActive ? 'Drop your video here…' : 'Drag video file here'}
+                            {isDragActive
+                                ? (lang === 'zh' ? '松开以开始上传…' : 'Drop video here…')
+                                : (lang === 'zh' ? '拖拽视频文件至此处，或点击浏览' : 'Drag video file here, or click to browse')}
                         </p>
                         <span className="upload-zone__hint">
-                            Supports MP4, MOV, AVI, MKV — chunked upload, up to 2 GB
+                            {t('upload.supportedFormats')}
                         </span>
                     </motion.div>
                 ) : (
@@ -186,7 +183,8 @@ export default function Upload() {
                             <button
                                 className="upload-preview__clear"
                                 onClick={handleCancel}
-                                title="Cancel and Remove"
+                                title={t('upload.cancelRemove')}
+                                aria-label={t('upload.cancelRemove')}
                             >
                                 <HiXMark />
                             </button>
@@ -200,7 +198,9 @@ export default function Upload() {
                                     <p className="upload-preview__filesize">
                                         {(file.size / (1024 * 1024)).toFixed(1)} MB
                                         {!uploadSuccess && (
-                                            isCompressing ? ` · AI pre-processing: ${compressPct}%` : ' · uploading…'
+                                            isCompressing
+                                                ? (lang === 'zh' ? ` · 预处理: ${compressPct}%` : ` · Optimizing: ${compressPct}%`)
+                                                : (lang === 'zh' ? ` · 上传中 (${uploadPct}%)` : ` · Uploading (${uploadPct}%)`)
                                         )}
                                     </p>
                                 </div>
@@ -210,7 +210,11 @@ export default function Upload() {
                                 onClick={goToTrim}
                                 disabled={!uploadSuccess || isCompressing}
                             >
-                                {uploadSuccess ? 'Continue' : (isCompressing ? 'Pre-processing...' : 'Uploading…')}
+                                {uploadSuccess
+                                    ? t('upload.continueToTrim')
+                                    : (isCompressing
+                                        ? (lang === 'zh' ? '正在预处理…' : 'Optimizing…')
+                                        : (lang === 'zh' ? '正在上传…' : 'Uploading…'))}
                                 <HiArrowRight />
                             </button>
                         </div>

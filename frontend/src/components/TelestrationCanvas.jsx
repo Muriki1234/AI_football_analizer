@@ -2,6 +2,7 @@ import { useRef, useState, useCallback, useEffect, useImperativeHandle } from 'r
 import PropTypes from 'prop-types';
 import { HiPencil, HiArrowUpRight, HiArrowUturnLeft, HiTrash, HiCamera, HiMinus } from 'react-icons/hi2';
 import { FiCircle } from 'react-icons/fi';
+import { useLanguage } from '../i18n/LanguageContext';
 
 /**
  * TelestrationCanvas — freehand + arrow drawing overlay for video or minimap.
@@ -17,6 +18,7 @@ const COLORS = ['#ef4444', '#f59e0b', '#22c55e', '#3b82f6', '#f8fafc'];
 const DEFAULT_STROKES = [];
 
 export default function TelestrationCanvas({ active, parentRef, videoRef, width, height, onInteractionStart, initialStrokes = DEFAULT_STROKES }) {
+    const { t } = useLanguage();
     const canvasRef = useRef(null);
     const [color, setColor] = useState(COLORS[0]);
     const [tool, setTool] = useState('pen'); // 'pen' | 'arrow'
@@ -208,17 +210,17 @@ export default function TelestrationCanvas({ active, parentRef, videoRef, width,
                 <button
                     className={`draw-toolbar__btn ${tool === 'pen' ? 'is-active' : ''}`}
                     onClick={() => setTool('pen')}
-                    title="画笔"
+                    title={t('telestration.pen')}
                 ><HiPencil /></button>
                 <button
                     className={`draw-toolbar__btn ${tool === 'arrow' ? 'is-active' : ''}`}
                     onClick={() => setTool('arrow')}
-                    title="箭头"
+                    title={t('telestration.arrow')}
                 ><HiArrowUpRight /></button>
                 <button
                     className={`draw-toolbar__btn ${tool === 'circle' ? 'is-active' : ''}`}
                     onClick={() => setTool('circle')}
-                    title="圆圈"
+                    title={t('telestration.circle')}
                 ><FiCircle /></button>
                 <div className="draw-toolbar__sep" />
                 
@@ -226,7 +228,7 @@ export default function TelestrationCanvas({ active, parentRef, videoRef, width,
                 <button
                     className={`draw-toolbar__btn ${isDashed ? 'is-active' : ''}`}
                     onClick={() => setIsDashed(!isDashed)}
-                    title="切换虚线"
+                    title={t('telestration.dashToggle')}
                     style={{ position: 'relative', width: '32px' }}
                 >
                     <div style={{ position: 'absolute', top: '50%', left: 4, right: 4, height: 0, borderBottom: '2px dashed currentColor' }} />
@@ -235,17 +237,17 @@ export default function TelestrationCanvas({ active, parentRef, videoRef, width,
                 <button
                     className={`draw-toolbar__btn ${lineWidth === 2 ? 'is-active' : ''}`}
                     onClick={() => setLineWidth(2)}
-                    title="细线条"
+                    title={t('telestration.lineThin')}
                 ><HiMinus style={{ transform: 'scaleY(0.5)' }} /></button>
                 <button
                     className={`draw-toolbar__btn ${lineWidth === 4 ? 'is-active' : ''}`}
                     onClick={() => setLineWidth(4)}
-                    title="中等线条"
+                    title={t('telestration.lineMedium')}
                 ><HiMinus /></button>
                 <button
                     className={`draw-toolbar__btn ${lineWidth === 8 ? 'is-active' : ''}`}
                     onClick={() => setLineWidth(8)}
-                    title="粗线条"
+                    title={t('telestration.lineThick')}
                 ><HiMinus style={{ transform: 'scaleY(2)' }} /></button>
 
                 <div className="draw-toolbar__sep" />
@@ -261,9 +263,9 @@ export default function TelestrationCanvas({ active, parentRef, videoRef, width,
                 
                 <div className="draw-toolbar__sep" />
                 
-                <button className="draw-toolbar__btn" onClick={handleUndo} title="撤销 (Ctrl+Z)"><HiArrowUturnLeft /></button>
-                <button className="draw-toolbar__btn" onClick={handleClear} title="全部清除"><HiTrash /></button>
-                <button className="draw-toolbar__btn" onClick={handleScreenshot} title="截图保存"><HiCamera /></button>
+                <button className="draw-toolbar__btn" onClick={handleUndo} title={t('telestration.undo')}><HiArrowUturnLeft /></button>
+                <button className="draw-toolbar__btn" onClick={handleClear} title={t('telestration.clear')}><HiTrash /></button>
+                <button className="draw-toolbar__btn" onClick={handleScreenshot} title={t('telestration.snapshot')}><HiCamera /></button>
             </div>
         </>
     );

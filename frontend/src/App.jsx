@@ -17,6 +17,7 @@ import AuthCallback from './pages/AuthCallback';
 import ResetPassword from './pages/ResetPassword';
 import AccountMenu from './components/AccountMenu';
 import { useAuth } from './auth/AuthContext';
+import { LanguageProvider } from './i18n/LanguageContext';
 import './index.css';
 
 const pageVariants = {
@@ -64,6 +65,7 @@ function PageWrap({ children }) {
 export default function App() {
     return (
         <AuthProvider>
+        <LanguageProvider>
         <Router>
             <ProgressProvider>
                 <AccountMenu />
@@ -72,6 +74,7 @@ export default function App() {
                 </Suspense>
             </ProgressProvider>
         </Router>
+        </LanguageProvider>
         </AuthProvider>
     );
 }

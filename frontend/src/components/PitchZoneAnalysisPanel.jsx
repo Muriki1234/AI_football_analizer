@@ -74,9 +74,9 @@ export default function PitchZoneAnalysisPanel({ onSeekTimestamp, zoneStats }) {
     }
   };
 
-  // Metrics (computed or fallbacks)
-  const halfSpacePct = zoneStats?.halfSpaceOccupancyPct ?? 48.4;
-  const zone14Entries = zoneStats?.zone14EntriesCount ?? 14;
+  // Metrics (computed from backend or fallbacks)
+  const halfSpacePct = zoneStats?.halfspace_pct ?? zoneStats?.halfSpaceOccupancyPct ?? 48.4;
+  const zone14Entries = zoneStats?.zone_14_samples ?? zoneStats?.zone14EntriesCount ?? 14;
   const restDefenseStructure = zoneStats?.restDefenseStructure ?? '3+2 稳固';
   const teamDepth = zoneStats?.teamDepthM ?? '23.6m';
 

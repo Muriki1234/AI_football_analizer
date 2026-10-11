@@ -2,6 +2,19 @@ import React from 'react';
 import {
     BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, PieChart, Pie
 } from 'recharts';
+import {
+    HiBolt,
+    HiArrowTrendingUp,
+    HiArrowsUpDown,
+    HiGlobeAlt,
+    HiArrowPath,
+    HiForward,
+    HiVideoCamera,
+    HiIdentification,
+    HiExclamationTriangle,
+    HiInformationCircle
+} from 'react-icons/hi2';
+import { useLanguage } from '../i18n/LanguageContext';
 
 const StatRow = ({ icon, label, value, sub }) => (
     <div className="stat-row">
@@ -22,10 +35,12 @@ const StatRow = ({ icon, label, value, sub }) => (
                             borderRadius: '4px',
                             fontWeight: 600,
                             verticalAlign: 'middle',
-                            display: 'inline-block'
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px'
                         }}
                     >
-                        ⚠️ {sub}
+                        <HiExclamationTriangle style={{ fontSize: '0.8rem' }} /> {sub}
                     </span>
                 )}
             </div>
@@ -80,7 +95,7 @@ const PossessionTooltip = ({ active, payload }) => {
     );
 };
 
-const PossessionBar = ({ team1, team2, neutral, t1Color, t2Color }) => {
+const PossessionBar = ({ team1, team2, neutral, t1Color, t2Color, neutralLabel }) => {
     const t1 = Math.max(0, Math.min(100, team1 ?? 0));
     const t2 = Math.max(0, Math.min(100, team2 ?? 0));
     const neu = Math.max(0, Math.min(100, neutral ?? Math.max(0, 100 - t1 - t2)));
@@ -89,20 +104,23 @@ const PossessionBar = ({ team1, team2, neutral, t1Color, t2Color }) => {
         <div className="poss-bar">
             <div className="poss-bar__labels">
                 <span>{t1.toFixed(1)}%</span>
+                {neu > 0 && <span style={{ color: '#94a3b8', fontSize: '0.74rem' }}>{neutralLabel || 'Neutral'} {neu.toFixed(1)}%</span>}
                 <span style={{ textAlign: 'right' }}>{t2.toFixed(1)}%</span>
             </div>
             <div className="poss-bar__track">
                 <div className="poss-bar__fill poss-bar__fill--t1" style={{ width: `${t1}%`, background: t1Color || undefined }} />
-                <div className="poss-bar__fill poss-bar__fill--t2" style={{ width: `${t2}%`, background: t2Color || undefined }} />
                 {neu > 0 && <div className="poss-bar__fill poss-bar__fill--neutral" style={{ width: `${neu}%` }} />}
+                <div className="poss-bar__fill poss-bar__fill--t2" style={{ width: `${t2}%`, background: t2Color || undefined }} />
             </div>
         </div>
     );
 };
 
 export default function DataAnalysisPanel({ playerSummary }) {
+    const { t, language } = useLanguage();
+
     if (!playerSummary) {
-        return <p className="drawer__empty">Stats will appear once analysis finishes.</p>;
+        return <p className="drawer__empty">{t('analytics.waitingStats')}</p>;
     }
     const overall = playerSummary.overall || playerSummary;
     const segments = playerSummary.by_segment || [];
@@ -115,40 +133,126 @@ export default function DataAnalysisPanel({ playerSummary }) {
     const t2Color = teamColors['2'] || '#e74c3c';
 
     const possessionData = [
-        { name: 'Team 1', value: t1, fill: t1Color },
-        { name: 'Team 2', value: t2, fill: t2Color },
-        ...(neutral > 0 ? [{ name: 'Neutral', value: neutral, fill: '#94a3b8' }] : []),
+        { name: t('analytics.team1'), value: t1, fill: t1Color },
+        { name: t('analytics.team2'), value: t2, fill: t2Color },
+        ...(neutral > 0 ? [{ name: t('analytics.neutral'), value: neutral, fill: '#94a3b8' }] : []),
     ].filter((item) => item.value > 0);
 
     const speedData = [
-        { name: 'Avg', value: numberOrNull(overall.avg_speed_kmh) ?? 0, fill: '#60a5fa' },
-        { name: 'Max', value: numberOrNull(overall.max_speed_kmh) ?? 0, fill: '#f59e0b' },
+        { name: language === 'zh' ? '平均速度' : 'Avg', value: numberOrNull(overall.avg_speed_kmh) ?? 0, fill: '#60a5fa' },
+        { name: language === 'zh' ? '最高速度' : 'Max', value: numberOrNull(overall.max_speed_kmh) ?? 0, fill: '#f59e0b' },
     ];
 
     const periodData = segments.map((seg, i) => ({
-        name: (seg.segment_type || `Seg ${i + 1}`).replace('_', ' '),
+        name: (seg.segment_type || `${language === 'zh' ? '片段' : 'Seg'} ${i + 1}`).replace('_', ' '),
         distance: numberOrNull(seg.total_distance_m) ?? 0,
         avg: numberOrNull(seg.avg_speed_kmh),
         max: numberOrNull(seg.max_speed_kmh),
     }));
+    const isSprintsBlocked = overall.sprint_count === null || overall.analytics_contract?.sprints_count === 'EXPLICITLY_UNAVAILABLE';
+    const isDistanceBlocked = overall.total_distance_m === null || overall.analytics_contract?.total_distance_m === 'EXPLICITLY_UNAVAILABLE';
     const speedFlag = overall.speed_reliability === 'suspect' || Number(overall.max_speed_kmh) >= 37.5;
+    const speedSub = overall.max_speed_kmh === null && overall.max_speed_unavailable_reason
+        ? (language === 'zh' ? '已屏蔽' : 'Disabled')
+        : (speedFlag ? (language === 'zh' ? '待校验' : 'Verify') : null);
+    const sprintsSub = isSprintsBlocked && overall.sprints_unavailable_reason ? (language === 'zh' ? '已停用' : 'Disabled') : null;
+
+    // Detect truncated tracking / distance anomaly
+    const durationSec = Number(overall.duration_s || (segments[0]?.end_sec ? (segments[segments.length - 1].end_sec - segments[0].start_sec) : 0));
+    const totalDist = Number(overall.total_distance_m ?? 0);
+    const trackingCov = overall.tracking_coverage_pct !== undefined ? Number(overall.tracking_coverage_pct) : null;
+    const distanceRate = durationSec > 0 ? (totalDist / (durationSec / 60.0)) : 999;
+    const isDistanceTruncated = !isDistanceBlocked && (
+        Boolean(overall.distance_unavailable_reason) ||
+        (durationSec >= 180 && totalDist > 0 && totalDist < 200 && (distanceRate < 20.0 || durationSec >= 600))
+    );
+    const distanceSub = isDistanceBlocked && overall.distance_unavailable_reason
+        ? (language === 'zh' ? '已停用' : 'Disabled')
+        : (isDistanceTruncated ? (trackingCov !== null && trackingCov < 25 ? (language === 'zh' ? '片段不完整' : 'Partial') : (language === 'zh' ? '数值偏低' : 'Low')) : null);
+
+    // Detect sparse ball possession sample (< 5% of duration, or neutral >= 90% with low sample)
+    const possSec = Number(overall.possession_seconds ?? 0);
+    const isPossessionSparse = Boolean(overall.possession_unavailable_reason) ||
+        (durationSec >= 10 && possSec > 0 && (possSec / durationSec) < 0.05) ||
+        (neutral >= 90.0 && possSec < 15.0 && durationSec >= 10);
 
     return (
         <div className="drawer__section-body">
+            {overall.video_confidence && (
+                <div style={{
+                    marginBottom: '12px',
+                    padding: '8px 12px',
+                    borderRadius: '6px',
+                    background: overall.footage_quality_tier === 'TIER_5_SEVERELY_DEGRADED' ? 'rgba(239, 68, 68, 0.12)' : 'rgba(59, 130, 246, 0.10)',
+                    border: `1px solid ${overall.footage_quality_tier === 'TIER_5_SEVERELY_DEGRADED' ? 'rgba(239, 68, 68, 0.3)' : 'rgba(59, 130, 246, 0.25)'}`,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    fontSize: '0.8rem',
+                }}>
+                    <span style={{ fontWeight: 600, color: overall.footage_quality_tier === 'TIER_5_SEVERELY_DEGRADED' ? '#f87171' : '#93c5fd', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <HiVideoCamera /> {language === 'zh' ? (overall.video_confidence.tier_label_zh || overall.footage_quality_tier) : (overall.video_confidence.tier_label_en || overall.footage_quality_tier)}
+                    </span>
+                    <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
+                        {t('analytics.calibConfidence')}: {overall.video_confidence.overall_confidence_score?.toFixed(0)}{t('analytics.points')}
+                    </span>
+                </div>
+            )}
+            {overall.jersey_number !== undefined && overall.jersey_number !== null && (
+                <div style={{
+                    marginBottom: '12px',
+                    padding: '8px 12px',
+                    borderRadius: '6px',
+                    background: 'rgba(16, 185, 129, 0.12)',
+                    border: '1px solid rgba(16, 185, 129, 0.3)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    fontSize: '0.8rem',
+                }}>
+                    <span style={{ fontWeight: 600, color: '#34d399', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <HiIdentification /> {t('analytics.jerseyNumber')}: #{overall.jersey_number}
+                    </span>
+                    <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
+                        {t('analytics.confidence')}: {overall.jersey_confidence ? `${Math.round(overall.jersey_confidence * 100)}%` : t('analytics.confirmed')}
+                    </span>
+                </div>
+            )}
             <div className="stat-grid">
-                <StatRow icon="⚡" label="Max Speed" value={formatMetric(overall.max_speed_kmh, ' km/h')} sub={speedFlag ? 'verify' : null} />
-                <StatRow icon="🏃" label="Avg Speed" value={formatMetric(overall.avg_speed_kmh, ' km/h')} />
-                <StatRow icon="📏" label="Distance" value={formatMetric(overall.total_distance_m, ' m', 0)} />
-                <StatRow icon="⚽" label="Possession" value={formatMetric(overall.possession_seconds, ' s')} />
-                <StatRow icon="🔄" label="Switches" value={overall.possession_switches ?? '-'} />
+                <StatRow icon={<HiBolt />} label={t('analytics.maxSpeed')} value={formatMetric(overall.max_speed_kmh, ' km/h')} sub={speedSub} />
+                <StatRow icon={<HiArrowTrendingUp />} label={t('analytics.avgSpeed')} value={formatMetric(overall.avg_speed_kmh, ' km/h')} />
+                <StatRow icon={<HiArrowsUpDown />} label={t('analytics.distance')} value={isDistanceBlocked ? '-' : formatMetric(overall.total_distance_m, ' m', 0)} sub={distanceSub} />
+                <StatRow icon={<HiGlobeAlt />} label={t('analytics.possessionSec')} value={formatMetric(overall.possession_seconds, ' s')} />
+                <StatRow icon={<HiArrowPath />} label={t('analytics.switches')} value={overall.possession_switches ?? '-'} />
+                <StatRow icon={<HiForward />} label={t('analytics.sprints')} value={isSprintsBlocked ? '-' : (overall.sprint_count ?? overall.speed_telemetry?.sprint_count ?? '-')} sub={sprintsSub} />
             </div>
-            {speedFlag && (
-                <p className="drawer__note">
-                    Peak speed is flagged as likely tracking/camera-motion noise.
+            {overall.max_speed_unavailable_reason && (
+                <p className="drawer__note" style={{ color: '#f87171', borderLeft: '3px solid #ef4444', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <HiInformationCircle /> {overall.max_speed_unavailable_reason}
+                </p>
+            )}
+            {overall.sprints_unavailable_reason && (
+                <p className="drawer__note" style={{ color: '#f87171', borderLeft: '3px solid #ef4444', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <HiInformationCircle /> {overall.sprints_unavailable_reason}
+                </p>
+            )}
+            {overall.distance_unavailable_reason && (
+                <p className="drawer__note" style={{ color: '#f87171', borderLeft: '3px solid #ef4444', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <HiInformationCircle /> {overall.distance_unavailable_reason}
+                </p>
+            )}
+            {isDistanceTruncated && !overall.distance_unavailable_reason && (
+                <p className="drawer__note" style={{ color: '#fbbf24', borderLeft: '3px solid #f59e0b', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <HiInformationCircle /> {language === 'zh' ? `全场跑动数值偏低（当前仅记录到 ${totalDist}m），可能受低活动量或局部中断影响，已降级标注。` : `Low recorded distance (${totalDist}m), potentially due to low activity or occlusions.`}
+                </p>
+            )}
+            {speedFlag && !overall.max_speed_unavailable_reason && (
+                <p className="drawer__note" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <HiInformationCircle /> {language === 'zh' ? `峰值速度 (${overall.max_speed_kmh} km/h) 可能受镜头位移或追踪噪点影响，可靠度已降级标注。` : `Peak speed (${overall.max_speed_kmh} km/h) is flagged as likely tracking/camera noise.`}
                 </p>
             )}
 
-            <h4 className="drawer__subhead">Speed (km/h)</h4>
+            <h4 className="drawer__subhead">{t('analytics.speedKmh')}</h4>
             <div className="chart-wrap" style={{ height: 140 }}>
                 <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={speedData} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
@@ -164,7 +268,17 @@ export default function DataAnalysisPanel({ playerSummary }) {
                 </ResponsiveContainer>
             </div>
 
-            <h4 className="drawer__subhead">Team Possession</h4>
+            <h4 className="drawer__subhead">{t('analytics.teamPossession')}</h4>
+            {isPossessionSparse && (
+                <p className="drawer__note" style={{ color: '#fbbf24', borderLeft: '3px solid #f59e0b', margin: '4px 0 10px 0', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <HiExclamationTriangle /> {overall.possession_unavailable_reason || (language === 'zh' ? `有效控球样本偏低（记录时长仅 ${possSec.toFixed(1)}s，占比赛 ${durationSec > 0 ? ((possSec / durationSec) * 100).toFixed(1) : '<1'}%），控球比例已降级提示，仅反映局部有效片段。` : `Low possession samples recorded (${possSec.toFixed(1)}s, ${durationSec > 0 ? ((possSec / durationSec) * 100).toFixed(1) : '<1'}% of match duration).`)}
+                </p>
+            )}
+            {overall.pass_events_unavailable_reason && (
+                <p className="drawer__note" style={{ color: '#fbbf24', borderLeft: '3px solid #f59e0b', margin: '4px 0 10px 0', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <HiInformationCircle /> {overall.pass_events_unavailable_reason}
+                </p>
+            )}
             <div className="poss-row">
                 <div className="chart-wrap chart-wrap--donut">
                     <ResponsiveContainer width="100%" height="100%">
@@ -186,16 +300,16 @@ export default function DataAnalysisPanel({ playerSummary }) {
                     </ResponsiveContainer>
                 </div>
                 <div className="poss-row__legend">
-                    <div><span className="poss-dot poss-dot--t1" style={t1Color ? { background: t1Color } : {}} /> Team 1 <strong>{t1.toFixed(1)}%</strong></div>
-                    <div><span className="poss-dot poss-dot--t2" style={t2Color ? { background: t2Color } : {}} /> Team 2 <strong>{t2.toFixed(1)}%</strong></div>
-                    {neutral > 0 && <div><span className="poss-dot poss-dot--neutral" /> Neutral <strong>{neutral.toFixed(1)}%</strong></div>}
+                    <div><span className="poss-dot poss-dot--t1" style={t1Color ? { background: t1Color } : {}} /> {t('analytics.team1')} <strong>{t1.toFixed(1)}%</strong></div>
+                    <div><span className="poss-dot poss-dot--t2" style={t2Color ? { background: t2Color } : {}} /> {t('analytics.team2')} <strong>{t2.toFixed(1)}%</strong></div>
+                    {neutral > 0 && <div><span className="poss-dot poss-dot--neutral" /> {t('analytics.neutral')} <strong>{neutral.toFixed(1)}%</strong></div>}
                 </div>
             </div>
-            <PossessionBar team1={t1} team2={t2} neutral={neutral} t1Color={t1Color} t2Color={t2Color} />
+            <PossessionBar team1={t1} team2={t2} neutral={neutral} t1Color={t1Color} t2Color={t2Color} neutralLabel={t('analytics.neutral')} />
 
             {periodData.length > 0 && (
                 <>
-                    <h4 className="drawer__subhead">By Period — Distance (m)</h4>
+                    <h4 className="drawer__subhead">{t('analytics.byPeriodDistance')}</h4>
                     <div className="chart-wrap" style={{ height: 140 }}>
                         <ResponsiveContainer width="100%" height="100%">
                             <BarChart data={periodData} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
@@ -208,7 +322,7 @@ export default function DataAnalysisPanel({ playerSummary }) {
                     </div>
                     <table className="seg-table">
                         <thead>
-                            <tr><th>Period</th><th>Dist</th><th>Avg</th><th>Max</th></tr>
+                            <tr><th>{t('analytics.period')}</th><th>{t('analytics.distance')}</th><th>{t('analytics.avgSpeed')}</th><th>{t('analytics.maxSpeed')}</th></tr>
                         </thead>
                         <tbody>
                             {periodData.map((seg, i) => (

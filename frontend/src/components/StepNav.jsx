@@ -1,16 +1,18 @@
 import { useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
+import { useLanguage } from '../i18n/LanguageContext';
 import './StepNav.css';
-
-const STEPS = [
-    { path: '/upload', label: 'Upload', num: 1 },
-    { path: '/configure', label: 'Configure', num: 2 },
-    { path: '/dashboard', label: 'Dashboard', num: 3 },
-];
 
 export default function StepNav() {
     const { pathname } = useLocation();
     const navigate = useNavigate();
+    const { t } = useLanguage();
+
+    const STEPS = [
+        { path: '/upload', label: t('common.stepUpload'), num: 1 },
+        { path: '/configure', label: t('common.stepConfigure'), num: 2 },
+        { path: '/dashboard', label: t('common.stepDashboard'), num: 3 },
+    ];
     // /configure-multi and /trim are both part of step 2 ("Configure"),
     // so the breadcrumb dot lights up consistently across the picker pages.
     const normalizedPath =

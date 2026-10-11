@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { authHeaders } from '../services/config';
 
 const CanvasOverlay = ({ dataUrl, videoRef, visible }) => {
     const canvasRef = useRef(null);
@@ -7,7 +8,7 @@ const CanvasOverlay = ({ dataUrl, videoRef, visible }) => {
     // Fetch the overlay tracking JSON
     useEffect(() => {
         if (!dataUrl) return;
-        fetch(dataUrl)
+        fetch(dataUrl, { headers: authHeaders() })
             .then(r => r.json())
             .then(data => setOverlayData(data))
             .catch(err => console.error("Failed to load overlay data", err));
