@@ -1,7 +1,7 @@
 export const translations = {
     zh: {
         common: {
-            appName: 'PitchLogic AI',
+            appName: 'FootNova AI',
             home: '首页',
             analysis: '战术大屏',
             myAnalyses: '比赛记录',
@@ -351,7 +351,7 @@ export const translations = {
     },
     en: {
         common: {
-            appName: 'PitchLogic AI',
+            appName: 'FootNova AI',
             home: 'Home',
             analysis: 'Tactical Analysis',
             myAnalyses: 'Match Archive',

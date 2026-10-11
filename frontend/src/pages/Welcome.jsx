@@ -189,7 +189,7 @@ export default function Welcome() {
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.4 }}
                 >
-                    Pitch<span className="text-gradient">Logic</span> AI
+                    Foot<span className="text-gradient">Nova</span> AI
                 </Motion.h1>
 
                 <Motion.p
