@@ -225,7 +225,14 @@
 .login-card button:disabled { opacity: .55; cursor: not-allowed; }
 .login-card :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
 .auth-loading { min-height: 65vh; display: grid; place-items: center; color: var(--color-text-secondary); }
-.account-menu { position: relative; z-index: 30; display: flex; justify-content: flex-end; align-items: center; gap: 14px; padding: 12px 24px; min-height: 58px; background: var(--color-bg-card); border-bottom: 1px solid var(--color-border); }
+.account-menu { position: relative; z-index: 30; display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 10px 24px; min-height: 58px; background: var(--color-bg-card); border-bottom: 1px solid var(--color-border); }
+.account-menu__left { display: flex; align-items: center; gap: 14px; }
+.account-menu__right { display: flex; align-items: center; gap: 14px; }
+.account-menu__brand { display: inline-flex; align-items: center; gap: 8px; color: #f8fafc !important; font-weight: 700; font-size: 1rem; text-decoration: none; letter-spacing: -0.02em; }
+.account-menu__brand:hover { opacity: 0.9; }
+.account-menu__logo-icon { font-size: 1.25rem; color: var(--color-accent); }
+.account-menu__home-link { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 6px; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.08); color: var(--color-text-secondary) !important; font-size: 0.82rem; font-weight: 500; text-decoration: none; transition: all 0.15s ease; }
+.account-menu__home-link:hover { background: rgba(255, 255, 255, 0.1); color: #ffffff !important; border-color: rgba(255, 255, 255, 0.18); }
 .account-menu a, .account-menu button { color: var(--color-accent); font: inherit; font-size: .85rem; background: none; border: 0; cursor: pointer; text-decoration: none; }
 .account-menu__identity { max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-secondary); font-size: .8rem; }
-@media (max-width: 480px) { .login-card { padding: 28px 20px; } .account-menu { padding: 10px 14px; gap: 12px; flex-wrap: wrap; } .account-menu__identity { max-width: 160px; } }
+@media (max-width: 640px) { .account-menu { padding: 10px 14px; gap: 10px; flex-wrap: wrap; } .account-menu__identity { display: none; } }

@@ -2,6 +2,8 @@ export const translations = {
     zh: {
         common: {
             appName: 'PitchLogic AI',
+            home: '首页',
+            analysis: '战术大屏',
             myAnalyses: '比赛记录',
             password: '修改密码',
             signIn: '登录',
@@ -350,6 +352,8 @@ export const translations = {
     en: {
         common: {
             appName: 'PitchLogic AI',
+            home: 'Home',
+            analysis: 'Tactical Analysis',
             myAnalyses: 'Match Archive',
             password: 'Security',
             signIn: 'Sign In',

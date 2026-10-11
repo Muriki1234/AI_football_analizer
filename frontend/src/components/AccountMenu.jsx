@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { IoFootball } from 'react-icons/io5';
+import { HiHome } from 'react-icons/hi2';
 import toast from 'react-hot-toast';
 import { useAuth } from '../auth/AuthContext';
 import { useLanguage } from '../i18n/LanguageContext';
@@ -62,28 +64,48 @@ export default function AccountMenu() {
     if (isAuthRoute) {
         return (
             <nav className="account-menu" aria-label="Language">
-                {LangSwitch}
+                <div className="account-menu__left">
+                    <Link to="/" className="account-menu__brand">
+                        <IoFootball className="account-menu__logo-icon" />
+                        <span>FootNova AI</span>
+                    </Link>
+                </div>
+                <div className="account-menu__right">
+                    {LangSwitch}
+                </div>
             </nav>
         );
     }
 
     return (
         <nav className="account-menu" aria-label="Account">
-            {user ? (
-                <>
-                    <span className="account-menu__identity" title={user.email || user.phone}>
-                        {user.email || `+${user.phone?.replace(/^\+/, '')}`}
-                    </span>
-                    <Link to="/sessions">{t('common.myAnalyses')}</Link>
-                    {user.email && <Link to="/reset-password">{t('common.password')}</Link>}
-                    <button type="button" disabled={busy} onClick={logout}>
-                        {busy ? t('common.signingOut') : t('common.signOut')}
-                    </button>
-                </>
-            ) : (
-                <Link className="btn btn-ghost" to="/login">{t('common.signIn')}</Link>
-            )}
-            {LangSwitch}
+            <div className="account-menu__left">
+                <Link to="/" className="account-menu__brand">
+                    <IoFootball className="account-menu__logo-icon" />
+                    <span>FootNova AI</span>
+                </Link>
+                <Link to="/" className="account-menu__home-link" title={t('common.home')}>
+                    <HiHome />
+                    <span>{t('common.home')}</span>
+                </Link>
+            </div>
+            <div className="account-menu__right">
+                {user ? (
+                    <>
+                        <span className="account-menu__identity" title={user.email || user.phone}>
+                            {user.email || `+${user.phone?.replace(/^\+/, '')}`}
+                        </span>
+                        <Link to="/sessions">{t('common.myAnalyses')}</Link>
+                        {user.email && <Link to="/reset-password">{t('common.password')}</Link>}
+                        <button type="button" disabled={busy} onClick={logout}>
+                            {busy ? t('common.signingOut') : t('common.signOut')}
+                        </button>
+                    </>
+                ) : (
+                    <Link className="btn btn-ghost" to="/login">{t('common.signIn')}</Link>
+                )}
+                {LangSwitch}
+            </div>
         </nav>
     );
 }
