@@ -826,11 +826,16 @@ def _action_feature(session_id: str, s: dict, payload: dict, sm: SessionManager)
 
 # Adding a new action = one entry here, no main-handler changes needed.
 def _action_repair_motion(session_id: str, s: dict, payload: dict, sm: SessionManager) -> dict:
-    return pipeline_tasks.repair_samurai_motion(session_id, s, sm)
+    return pipeline_tasks.repair_samurai_motion(
+        session_id, s, sm, diagnostics_only=payload.get("diagnostics_only") is True)
+
+def _action_diagnose_motion(session_id: str, s: dict, payload: dict, sm: SessionManager) -> dict:
+    return pipeline_tasks.repair_samurai_motion(session_id, s, sm, diagnostics_only=True)
 
 ACTIONS = {
     "detect_frame": _action_detect_frame,
     "repair_motion": _action_repair_motion,
+    "diagnose_motion": _action_diagnose_motion,
     "track":        _action_track,
     "analyze":      _action_analyze,
     "feature":      _action_feature,

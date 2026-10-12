@@ -1721,7 +1721,8 @@ def _speed_fields(speeds: list[float], rejected_count: int) -> dict:
     return fields
 
 
-def repair_samurai_motion(session_id: str, session: dict, sm: SessionManager) -> dict:
+def repair_samurai_motion(session_id: str, session: dict, sm: SessionManager,
+                         diagnostics_only: bool = False) -> dict:
     """Repair a completed record using cached target boxes and fresh calibration.
 
     Invoked through the authenticated worker control plane. No SAMURAI rerun,
@@ -1747,6 +1748,41 @@ def repair_samurai_motion(session_id: str, session: dict, sm: SessionManager) ->
     kp = KeypointDetector(get_keypoint_model_path())
     keypoints = kp.predict_streamed(video_path, total)
     transformer = ViewTransformer()
+    if diagnostics_only:
+        # Diagnose missing measurements without replacing any session artifacts.
+        checked = enough = candidates = accepted = bounded = 0
+        max_keypoints = 0
+        examples = []
+        for frame in sorted(bboxes)[::max(1, len(bboxes) // 50)][:50]:
+            if not 0 <= frame < len(keypoints):
+                continue
+            kps = keypoints[frame]
+            pairs = [(pos, transformer.SOCCANA_PITCH_COORDS[kid])
+                     for kid, pos in kps.items() if kid in transformer.SOCCANA_PITCH_COORDS]
+            checked += 1
+            max_keypoints = max(max_keypoints, len(pairs))
+            if len(pairs) < 4:
+                continue
+            enough += 1
+            matrix = transformer.compute_homography_ransac(
+                [p[0] for p in pairs], [p[1] for p in pairs])
+            if matrix is None:
+                continue
+            candidates += 1
+            valid = transformer.is_homography_valid(matrix, width, height)
+            accepted += int(valid)
+            point = project_target_positions({frame: bboxes[frame]},
+                [matrix] * (frame + 1)).get(frame)
+            bounded += int(point is not None)
+            if len(examples) < 3:
+                examples.append({"frame": frame, "keypoints": len(pairs),
+                                 "image_geometry_valid": bool(valid),
+                                 "candidate_target_m": point})
+        return {"session_id": session_id, "diagnostics_only": True,
+                "sampled_target_frames": checked, "max_keypoints": max_keypoints,
+                "frames_with_four_keypoints": enough,
+                "ransac_candidates": candidates, "geometry_accepted": accepted,
+                "candidate_target_in_pitch_bounds": bounded, "examples": examples}
     transformer.add_transformed_position_to_tracks(
         {"players": [{} for _ in range(total)]}, keypoints, image_size=(width, height))
     points = project_target_positions(bboxes, transformer.frame_homographies)
@@ -1766,6 +1802,8 @@ def repair_samurai_motion(session_id: str, session: dict, sm: SessionManager) ->
     from ..storage.r2 import upload_to_r2
     if not upload_to_r2(cache_path, f"{session_id}/tracks.pkl"):
         raise RuntimeError("Could not persist repaired motion cache")
+    with _TRACKS_CACHE_LOCK:
+        _TRACKS_CACHE.pop(str(cache_path), None)
     fields = {"player_summary": summary, "tracks_cache_path": str(cache_path),
               "motion_repair_version": "samurai-pitch-v1", "ai_summary_stale": True}
     if minimap_url: fields["minimap_data_url"] = minimap_url
@@ -5429,4 +5467,3 @@ def _finish_task(sm: SessionManager, session_id: str, task_id: str,
 def _log_error(name: str, session_id: str, exc: Exception):
     print(f"[ERROR] {name} | session={session_id}")
     print(traceback.format_exc())
-
