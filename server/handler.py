@@ -810,10 +810,14 @@ def _action_feature(session_id: str, s: dict, payload: dict, sm: SessionManager)
     if not fn:
         return {"error": f"unknown feature {feature!r}"}
     # Pass AI summary mode (team/player) into session for run_ai_summary to read
+    real_task_type = canon_feature
     if canon_feature == "ai_summary":
         ai_mode = payload.get("mode", "team")
         s["ai_summary_mode"] = ai_mode
-    task_id = sm.create_task(session_id, canon_feature)
+        real_task_type = f"ai_summary_{ai_mode}"
+    if canon_feature == "coach_qa":
+        s["coach_qa_query"] = payload.get("query", "")
+    task_id = sm.create_task(session_id, real_task_type)
     fn(session_id, s, task_id, sm)
     return {"ok": True, "task": sm.get_task(session_id, task_id)}
 

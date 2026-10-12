@@ -8,7 +8,7 @@ import {
     HiHome, HiArrowPath, HiBars3, HiXMark, HiExclamationCircle,
     HiUserGroup, HiSparkles, HiChartBar, HiMapPin, HiFire,
     HiPlayCircle, HiArrowDownTray, HiArrowsPointingOut,
-    HiMagnifyingGlass, HiPlay, HiBolt,
+    HiMagnifyingGlass, HiPlay, HiBolt, HiLockClosed,
 } from 'react-icons/hi2';
 import {
     startAnalysis,
@@ -143,6 +143,7 @@ export default function Dashboard() {
     const [minimapOn, setMinimapOn] = useState(false);
     const [overlayOn, setOverlayOn] = useState(true);
     const [aiGenerating, setAiGenerating] = useState(false);
+    const [aiGeneratingMode, setAiGeneratingMode] = useState(null); // 'team' | 'player' | null
     const [viewMode, setViewMode] = useState('team'); // 'team' = tactical review, 'player' = player dossier
     const [drawMode, setDrawMode] = useState(false);
     const [tacticalDrawings, setTacticalDrawings] = useState([]);
@@ -484,13 +485,17 @@ export default function Dashboard() {
                 if (isPlayer) setAiSummaryPlayer(t.result);
                 else setAiSummaryTeam(t.result);
             }
-            if (t.status === 'completed') {
+            if (t.status === 'completed' || t.status === 'done') {
                 setAiGenerating(false);
+                setAiGeneratingMode(null);
                 setAiProgress(100);
             } else if (t.status === 'running') {
+                setAiGenerating(true);
+                setAiGeneratingMode(isPlayer ? 'player' : 'team');
                 setAiProgress(Math.max(0, Math.min(100, Number(t.progress) || 0)));
             } else if (t.status === 'failed') {
                 setAiGenerating(false);
+                setAiGeneratingMode(null);
             }
         };
 
@@ -543,12 +548,21 @@ export default function Dashboard() {
         summaryFetched.current = true;
         listSummaries(sessionId).then((summaries) => {
             if (summaries && summaries.length > 0) {
+                let foundPlayer = null;
+                let foundTeam = null;
                 for (const s of summaries) {
                     if (s.analysis_mode === 'player' || s.task_type === 'ai_summary_player') {
+                        foundPlayer = s;
                         setAiSummaryPlayer((prev) => prev || s);
                     } else {
+                        foundTeam = s;
                         setAiSummaryTeam((prev) => prev || s);
                     }
+                }
+                if (foundPlayer && !foundTeam) {
+                    setViewMode('player');
+                } else if (foundTeam && !foundPlayer) {
+                    setViewMode('team');
                 }
             }
         }).catch(() => { });
@@ -586,6 +600,27 @@ export default function Dashboard() {
 
     const playerSummaryJson = session?.player_summary || null;
     
+    const hasTeamSummary = Boolean(aiSummaryTeam && (aiSummaryTeam.report_markdown || aiSummaryTeam.summary));
+    const hasPlayerSummary = Boolean(aiSummaryPlayer && (aiSummaryPlayer.report_markdown || aiSummaryPlayer.summary));
+
+    // Mutex locking logic:
+    // If Player summary exists and Team summary does not, Team is locked.
+    // If Team summary exists and Player summary does not, Player is locked.
+    // While generating one mode, the other mode is also locked.
+    // (If both exist, allow viewing both without locking).
+    const isTeamLocked = (hasPlayerSummary && !hasTeamSummary) || (aiGenerating && aiGeneratingMode === 'player');
+    const isPlayerLocked = (hasTeamSummary && !hasPlayerSummary) || (aiGenerating && aiGeneratingMode === 'team');
+    const isCurrentModeLocked = (viewMode === 'team' && isTeamLocked) || (viewMode === 'player' && isPlayerLocked);
+
+    // If only one summary is available, sync viewMode to it
+    useEffect(() => {
+        if (hasPlayerSummary && !hasTeamSummary && viewMode !== 'player') {
+            setViewMode('player');
+        } else if (hasTeamSummary && !hasPlayerSummary && viewMode !== 'team') {
+            setViewMode('team');
+        }
+    }, [hasPlayerSummary, hasTeamSummary, viewMode]);
+
     const currentSummary = viewMode === 'player' ? aiSummaryPlayer : aiSummaryTeam;
 
     const aiMarkdown = useMemo(() => {
@@ -628,7 +663,10 @@ export default function Dashboard() {
 
     const handleGenerateAI = async () => {
         if (aiGenerating || !sessionId) return;
+        if (viewMode === 'player' && isPlayerLocked) return;
+        if (viewMode === 'team' && isTeamLocked) return;
         setAiGenerating(true);
+        setAiGeneratingMode(viewMode);
         try {
             await queueFeature(sessionId, 'ai_summary', { mode: viewMode });
             toast.success(
@@ -639,6 +677,7 @@ export default function Dashboard() {
         } catch (e) {
             toast.error(e?.message || t('common.error'));
             setAiGenerating(false);
+            setAiGeneratingMode(null);
         }
     };
 
@@ -1146,16 +1185,24 @@ export default function Dashboard() {
                                     {/* Mode toggle */}
                                     <div className="ai-mode-toggle">
                                         <button
-                                            className={`ai-mode-toggle__btn ${viewMode === 'team' ? 'is-active' : ''}`}
-                                            onClick={() => setViewMode('team')}
+                                            type="button"
+                                            className={`ai-mode-toggle__btn ${viewMode === 'team' ? 'is-active' : ''} ${isTeamLocked ? 'is-locked' : ''}`}
+                                            onClick={() => !isTeamLocked && setViewMode('team')}
+                                            disabled={isTeamLocked}
+                                            title={isTeamLocked ? (hasPlayerSummary ? t('dashboard.playerActiveLockedTeam') : t('dashboard.generatingOtherMode')) : ''}
                                         >
-                                            {t('dashboard.modeTeam')}
+                                            {isTeamLocked && <HiLockClosed className="ai-mode-toggle__lock-icon" />}
+                                            <span>{t('dashboard.modeTeam')}</span>
                                         </button>
                                         <button
-                                            className={`ai-mode-toggle__btn ${viewMode === 'player' ? 'is-active' : ''}`}
-                                            onClick={() => setViewMode('player')}
+                                            type="button"
+                                            className={`ai-mode-toggle__btn ${viewMode === 'player' ? 'is-active' : ''} ${isPlayerLocked ? 'is-locked' : ''}`}
+                                            onClick={() => !isPlayerLocked && setViewMode('player')}
+                                            disabled={isPlayerLocked}
+                                            title={isPlayerLocked ? (hasTeamSummary ? t('dashboard.teamActiveLockedPlayer') : t('dashboard.generatingOtherMode')) : ''}
                                         >
-                                            {t('dashboard.modePlayer')}
+                                            {isPlayerLocked && <HiLockClosed className="ai-mode-toggle__lock-icon" />}
+                                            <span>{t('dashboard.modePlayer')}</span>
                                         </button>
                                     </div>
 
@@ -1345,12 +1392,29 @@ export default function Dashboard() {
                                             </div>
                                         </div>
                                     ) : isDone ? (
-                                        <div className="drawer__empty-cta">
-                                            <p>{viewMode === 'player' ? t('dashboard.generatePersonalReport') : t('dashboard.generateTeamReport')}</p>
-                                            <button className="btn btn-primary" onClick={handleGenerateAI}>
-                                                <HiSparkles /> {viewMode === 'player' ? t('dashboard.startPersonalAnalysis') : t('dashboard.startTeamAnalysis')}
-                                            </button>
-                                        </div>
+                                        isCurrentModeLocked ? (
+                                            <div className="drawer__empty-cta">
+                                                <div className="ai-mode-locked-badge">
+                                                    <HiLockClosed />
+                                                    <span>{viewMode === 'player' ? t('dashboard.playerLockedNotice') : t('dashboard.teamLockedNotice')}</span>
+                                                </div>
+                                                <p>{viewMode === 'player' ? t('dashboard.playerLockedDesc') : t('dashboard.teamLockedDesc')}</p>
+                                                <button className="btn btn-secondary" disabled>
+                                                    <HiLockClosed /> {t('dashboard.modeLockedBtn')}
+                                                </button>
+                                            </div>
+                                        ) : (
+                                            <div className="drawer__empty-cta">
+                                                <p>{viewMode === 'player' ? t('dashboard.generatePersonalReport') : t('dashboard.generateTeamReport')}</p>
+                                                <button
+                                                    className="btn btn-primary"
+                                                    onClick={handleGenerateAI}
+                                                    disabled={aiGenerating || (viewMode === 'player' ? isPlayerLocked : isTeamLocked)}
+                                                >
+                                                    <HiSparkles /> {viewMode === 'player' ? t('dashboard.startPersonalAnalysis') : t('dashboard.startTeamAnalysis')}
+                                                </button>
+                                            </div>
+                                        )
                                     ) : (
                                         <p className="drawer__empty">{t('dashboard.waitingAnalysis')}</p>
                                     )}
