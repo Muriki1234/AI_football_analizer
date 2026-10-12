@@ -1206,6 +1206,16 @@ export default function Dashboard() {
                                     <span>{t('dashboard.copilotTitle')}</span>
                                 </div>
                                 <div className="drawer__section-body">
+                                    {session?.ai_summary_stale && (
+                                        <div className="drawer__note">
+                                            <p>{lang === 'zh'
+                                                ? '跑动数据已重新计算，下方报告使用的是旧数据。请重新生成报告。'
+                                                : 'Motion data was recalculated. This report uses older data; regenerate it.'}</p>
+                                            <button className="btn btn-secondary" onClick={handleGenerateAI} disabled={aiGenerating}>
+                                                {lang === 'zh' ? '重新生成报告' : 'Regenerate report'}
+                                            </button>
+                                        </div>
+                                    )}
                                     {/* Mode toggle */}
                                     <div className="ai-mode-toggle">
                                         <button

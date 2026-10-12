@@ -55,9 +55,10 @@ class TargetPlayerContinuousKinematicAccumulator:
     ZONE_HSR_MAX: float = 25.2             # 19.8 - 25.2 km/h (High-speed running)
     # Zone 5 Sprinting: >= 25.2 km/h
 
-    def __init__(self, fps: float = 30.0, smoothing_window: int = 5) -> None:
+    def __init__(self, fps: float = 30.0, smoothing_window: int = 5, reject_outliers: bool = False) -> None:
         self.fps = fps
         self.smoothing_window = smoothing_window
+        self.reject_outliers = reject_outliers
 
         self.history: List[KinematicPoint] = []
         self.total_distance_m: float = 0.0
@@ -145,6 +146,13 @@ class TargetPlayerContinuousKinematicAccumulator:
         if raw_speed_kmh > self.MAX_VALID_SPEED_KMH:
             self.velocity_clamped_count += 1
             is_clamped = True
+            if self.reject_outliers:
+                pt = KinematicPoint(frame_idx, timestamp_s, x_m, y_m,
+                                    track_id=track_id, confidence=confidence,
+                                    is_gap=True, is_clamped=True)
+                self.history.append(pt)
+                self.total_duration_s += dt
+                return pt
             disp = (self.MAX_VALID_SPEED_KMH / 3.6) * dt
             raw_speed_kmh = self.MAX_VALID_SPEED_KMH
 

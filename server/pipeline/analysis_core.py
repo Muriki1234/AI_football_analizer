@@ -1401,6 +1401,7 @@ class ViewTransformer:
         self.minimap_scale = 1.0
         self._last_H = None
         self._last_transformer = None
+        self.frame_homographies = []
         try:
             from server.pipeline.keypoint_gating import HomographyCache
             self.homography_cache = HomographyCache(tolerance_px=1.0)
@@ -1541,7 +1542,8 @@ class ViewTransformer:
         self._last_H = H_smoothed
         return H_smoothed
 
-    def add_transformed_position_to_tracks(self, tracks: dict, kps_list: list):
+    def add_transformed_position_to_tracks(self, tracks: dict, kps_list: list, image_size=None):
+        self.frame_homographies = [None] * len(kps_list or [])
         if not kps_list:
             return
 
@@ -1553,6 +1555,8 @@ class ViewTransformer:
                 if pt[1] > max_px_y: max_px_y = pt[1]
         ref_w = 1920.0 if max_px_x > 1400.0 else 1280.0
         ref_h = 1080.0 if max_px_y > 800.0 else 720.0
+        if image_size is not None:
+            ref_w, ref_h = map(float, image_size)
 
         # Warmup: find first frame with a geometrically valid homography
         if self._last_transformer is None:
@@ -1579,18 +1583,21 @@ class ViewTransformer:
                     dst.append(target)
 
             transformer = None
+            calibrated_this_frame = False
             if len(src) >= 4:
                 src_arr = np.array(src, dtype=np.float32)
                 dst_arr = np.array(dst, dtype=np.float32)
                 cached = self.homography_cache.get(src_arr) if (self.homography_cache is not None and self._last_transformer is not None) else None
                 if cached is not None:
                     transformer = self._last_transformer
+                    calibrated_this_frame = True
                 else:
                     H_cand = self.compute_homography_ransac(src_arr, dst_arr)
                     if H_cand is not None and self.is_homography_valid(H_cand, ref_w, ref_h):
                         H_smooth = self.smooth_homography(H_cand, ref_w, ref_h)
                         transformer = RobustPitchTransformer(H_smooth)
                         self._last_transformer = transformer
+                        calibrated_this_frame = True
                         if self.homography_cache is not None:
                             self.homography_cache.put(src_arr, dst_arr, H_smooth, {"status": "VALID"})
 
@@ -1599,6 +1606,10 @@ class ViewTransformer:
 
             if transformer is None:
                 continue
+
+            # Target motion must not reuse an unvalidated transform after a pan/cut.
+            if calibrated_this_frame:
+                self.frame_homographies[fnum] = transformer.m.copy()
 
             # Batch points transformation across all tracked players/objects in this frame
             pos_targets = []

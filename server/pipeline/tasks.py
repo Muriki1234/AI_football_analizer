@@ -550,7 +550,7 @@ def _yolo_parallel_worker(args: dict) -> str:
     cam_obj = RobustCameraMovementEstimator.from_video_path(video_path)
     cam_obj.add_adjust_positions_to_tracks(raw_tracks, cam_mov)
     vt = ViewTransformer()
-    vt.add_transformed_position_to_tracks(raw_tracks, kps)
+    vt.add_transformed_position_to_tracks(raw_tracks, kps, image_size=args.get("image_size"))
     # Interpolate ball within segment (cross-segment gaps handled after merge)
     raw_tracks["ball"] = tracker_obj.interpolate_ball_positions(raw_tracks["ball"])
 
@@ -562,6 +562,7 @@ def _yolo_parallel_worker(args: dict) -> str:
             "end_frame": seg_end,
             "tracks": raw_tracks,
             "cam_mov": cam_mov,
+            "homographies": vt.frame_homographies,
         }, f, protocol=4)
 
     print(f"[YOLO-PAR] seg {seg_idx} done: frames {seg_start}–{seg_end}, "
@@ -572,11 +573,11 @@ def _yolo_parallel_worker(args: dict) -> str:
 def _run_yolo_parallel(video_path: str, total_frames: int, n_segs: int,
                         yolo_path: str, kpt_path: str, output_dir: Path,
                         fps: float,
-                        progress_callback=None) -> tuple:
+                        progress_callback=None, image_size=None) -> tuple:
     """
     Split video into n_segs equal segments, run YOLO+KPT+flow on each in
     parallel subprocesses (spawn context to avoid CUDA fork issues).
-    Returns (merged_tracks, merged_cam_mov) ready for speed/team/possession.
+    Returns (merged_tracks, merged_cam_mov, homographies) ready for target projection.
     """
     import multiprocessing as mp
     import pickle
@@ -600,6 +601,7 @@ def _run_yolo_parallel(video_path: str, total_frames: int, n_segs: int,
             "kpt_path":    kpt_path,
             "output_dir":  str(output_dir),
             "batch_size":  batch_size,
+            "image_size":  image_size,
         })
 
     print(f"[YOLO-PAR] {n_segs} segments, "
@@ -632,6 +634,7 @@ def _run_yolo_parallel(video_path: str, total_frames: int, n_segs: int,
         "ball":     [{} for _ in range(total_frames)],
     }
     merged_cam_mov = [[0.0, 0.0]] * total_frames
+    merged_homographies = [None] * total_frames
 
     for seg_idx in sorted(pkl_paths):
         pkl_path = pkl_paths[seg_idx]
@@ -640,6 +643,9 @@ def _run_yolo_parallel(video_path: str, total_frames: int, n_segs: int,
         start = data["start_frame"]
         seg_tracks = data["tracks"]
         seg_cam    = data["cam_mov"]
+        for local_idx, matrix in enumerate(data.get("homographies", [])):
+            if start + local_idx < total_frames:
+                merged_homographies[start + local_idx] = matrix
         for key in ("players", "referees", "ball"):
             for i, fd in enumerate(seg_tracks[key]):
                 if start + i < total_frames:
@@ -652,7 +658,7 @@ def _run_yolo_parallel(video_path: str, total_frames: int, n_segs: int,
         except OSError:
             pass
 
-    return merged_tracks, merged_cam_mov
+    return merged_tracks, merged_cam_mov, merged_homographies
 
 
 def run_samurai_tracking(session_id: str, session: dict,
@@ -1033,16 +1039,17 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                   flush=True)
         else:
             print(f"[YOLO-PAR] res={_vid_w}x{_vid_h}, segs={n_yolo_segs}", flush=True)
+        target_homographies = [None] * total
         parallel_ok = False
         if n_yolo_segs > 1:
             print(f"[INFO] Parallel YOLO: {n_yolo_segs} segments")
             sm.update_status(session_id, "analyzing", progress=12,
                              stage=f"parallel_yolo ({n_yolo_segs} segments)")
             try:
-                tracks, cam_mov = _run_yolo_parallel(
+                tracks, cam_mov, target_homographies = _run_yolo_parallel(
                     video_path, total, n_yolo_segs,
                     yolo_path, kpt_path, output_dir, fps,
-                    progress_callback=_merge_progress,
+                    progress_callback=_merge_progress, image_size=(_vid_w, _vid_h),
                 )
                 # Ball interpolation across segment boundaries
                 tracks["ball"] = tracker.interpolate_ball_positions(tracks["ball"])
@@ -1105,7 +1112,8 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
                 if cam and enable_opt_flow:
                     cam.add_adjust_positions_to_tracks(tracks, cam_mov)
                 vt = ViewTransformer()
-                vt.add_transformed_position_to_tracks(tracks, kps)
+                vt.add_transformed_position_to_tracks(tracks, kps, image_size=(_vid_w, _vid_h))
+                target_homographies = vt.frame_homographies
                 vt.interpolate_2d_positions(tracks)
                 _bench("merged_streaming", _t)
                 print(f"[INFO] Captured {len(team_sample_frames)}/{len(team_sample_indices)} "
@@ -1152,7 +1160,8 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             kp  = KeypointDetector(kpt_path)
             vt  = ViewTransformer()
             kps = kp.predict_streamed(video_path, total, cam_movement=cam_mov)
-            vt.add_transformed_position_to_tracks(tracks, kps)
+            vt.add_transformed_position_to_tracks(tracks, kps, image_size=(_vid_w, _vid_h))
+            target_homographies = vt.frame_homographies
             vt.interpolate_2d_positions(tracks)
             _bench("keypoint_detection", _t)
         _check_memory_and_gc()
@@ -1585,14 +1594,17 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
         sm.update_status(session_id, "analyzing", progress=92, stage="computing_summary")
         print(f"[INFO] Computing summary for session {session_id}…")
         _t = _time.perf_counter()
+        from .samurai_kinematics import project_target_positions
+        target_positions = project_target_positions(tracked_bboxes, target_homographies)
         player_summary = _compute_player_summary(
             tracks, tracked_bboxes, team_control, fps=fps, segments=segments,
-            team_colors=team_assigner.team_colors)
+            team_colors=team_assigner.team_colors, target_positions=target_positions)
         _bench("compute_summary", _t)
 
         cache_payload = {
             "tracks":              tracks,
             "tracked_bboxes":      tracked_bboxes,
+            "target_positions":     target_positions,
             "team_control":        team_control,
             "possession_switches": player_summary.get("possession_switches", 0),
             "total_passes":        len(pass_events_list),
@@ -1638,7 +1650,7 @@ def run_global_analysis(session_id: str, session: dict, sm: SessionManager):
             minimap_url, heatmap_url = _export_position_jsons(
                 session_id, tracks, tracked_bboxes, team_control,
                 team_assigner.team_colors, fps, total, output_dir,
-                match_periods=_periods_for_export,
+                match_periods=_periods_for_export, target_positions=target_positions,
             )
             overlay_url = _export_overlay_json(
                 session_id, tracks, tracked_bboxes, fps, total, output_dir, _vid_w, _vid_h, team_assigner.team_colors
@@ -1709,8 +1721,63 @@ def _speed_fields(speeds: list[float], rejected_count: int) -> dict:
     return fields
 
 
+def repair_samurai_motion(session_id: str, session: dict, sm: SessionManager) -> dict:
+    """Repair a completed record using cached target boxes and fresh calibration.
+
+    Invoked through the authenticated worker control plane. No SAMURAI rerun,
+    no invented pixel-to-meter conversion, and no regeneration of AI reports.
+    """
+    from .samurai_kinematics import project_target_positions
+    if session.get("status") != "analysis_done":
+        raise ValueError("Motion repair requires a completed analysis")
+    data = _load_cache(session)
+    bboxes = data.get("tracked_bboxes") or {}
+    if not bboxes:
+        raise ValueError("No cached SAMURAI target trajectory")
+    video_path = session["video_path"]
+    with _video_capture(video_path) as cap:
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = float(cap.get(cv2.CAP_PROP_FPS))
+    if (width, height) != (int(session.get("video_width", width)), int(session.get("video_height", height))):
+        raise ValueError("Cached target boxes and downloaded video resolutions differ")
+    if not 1 < fps <= 240:
+        raise ValueError("Video frame rate unavailable")
+    total = len(data["tracks"]["players"])
+    kp = KeypointDetector(get_keypoint_model_path())
+    keypoints = kp.predict_streamed(video_path, total)
+    transformer = ViewTransformer()
+    transformer.add_transformed_position_to_tracks(
+        {"players": [{} for _ in range(total)]}, keypoints, image_size=(width, height))
+    points = project_target_positions(bboxes, transformer.frame_homographies)
+    summary = _compute_player_summary(
+        data["tracks"], bboxes, data.get("team_control", []), fps,
+        segments=data.get("segments"), team_colors=data.get("team_colors"),
+        target_positions=points)
+    output_dir = sm.session_output_dir(session_id)
+    periods = session.get("match_periods_frames")
+    minimap_url, heatmap_url = _export_position_jsons(
+        session_id, data["tracks"], bboxes, data.get("team_control", []),
+        data.get("team_colors", {}), fps, total, output_dir,
+        match_periods=periods, target_positions=points)
+    data = dict(data, target_positions=points)
+    cache_path = output_dir / "tracks.pkl"
+    _atomic_pickle_dump(data, cache_path)
+    from ..storage.r2 import upload_to_r2
+    if not upload_to_r2(cache_path, f"{session_id}/tracks.pkl"):
+        raise RuntimeError("Could not persist repaired motion cache")
+    fields = {"player_summary": summary, "tracks_cache_path": str(cache_path),
+              "motion_repair_version": "samurai-pitch-v1", "ai_summary_stale": True}
+    if minimap_url: fields["minimap_data_url"] = minimap_url
+    if heatmap_url: fields["heatmap_data_url"] = heatmap_url
+    sm.update_status(session_id, "analysis_done", **fields)
+    return {"session_id": session_id, "player_summary": summary,
+            "calibrated_frames": len(points), "tracked_frames": len(bboxes),
+            "ai_summary_stale": True}
+
+
 def _summary_for_range(tracks: dict, tracked_bboxes: dict, team_control: list,
-                        start: int, end: int, fps: int) -> dict:
+                        start: int, end: int, fps: int, target_positions=None) -> dict:
     """对 [start, end) 帧区间计算一份 summary（不含全局字段）"""
     from server.pipeline.target_player_continuous_kinematic_accumulator import TargetPlayerContinuousKinematicAccumulator
     from server.pipeline.canonical_pitch_coordinate_normalizer import CanonicalPitchCoordinateNormalizer
@@ -1794,13 +1861,16 @@ def _summary_for_range(tracks: dict, tracked_bboxes: dict, team_control: list,
             "sprint_count": k_summary["sprint_count"],
             "reliability_score": k_summary["reliability_score"],
         }
+    if target_positions is not None:
+        from .samurai_kinematics import target_motion_summary
+        res.update(target_motion_summary(tracked_bboxes, target_positions, [(start, end)], fps))
     return res
 
 
 def _compute_player_summary(tracks: dict, tracked_bboxes: dict,
                             team_control: list, fps: int = 24,
                             segments: list = None,
-                            team_colors: dict = None) -> dict:
+                            team_colors: dict = None, target_positions=None) -> dict:
     """从 tracks 中提取被追踪球员的关键数字（存入 session，立即可用）
 
     若提供 segments，overall 只统计实际比赛帧（排除 halftime），
@@ -1900,6 +1970,9 @@ def _compute_player_summary(tracks: dict, tracked_bboxes: dict,
             "sprint_count": k_summary["sprint_count"],
             "reliability_score": k_summary["reliability_score"],
         }
+    if target_positions is not None:
+        from .samurai_kinematics import target_motion_summary
+        overall.update(target_motion_summary(tracked_bboxes, target_positions, match_ranges, fps))
     if team_colors:
         try:
             overall["team_colors_hex"] = {str(k): bgr_to_hex(v) for k, v in team_colors.items()}
@@ -1914,7 +1987,7 @@ def _compute_player_summary(tracks: dict, tracked_bboxes: dict,
                 continue
             seg_stats = _summary_for_range(
                 tracks, tracked_bboxes, team_control,
-                seg["start_frame"], seg["end_frame"], fps)
+                seg["start_frame"], seg["end_frame"], fps, target_positions=target_positions)
             seg_stats["segment_type"] = seg["type"]
             seg_stats["start_sec"]    = seg["start_sec"]
             seg_stats["end_sec"]      = seg["end_sec"]
@@ -1933,7 +2006,7 @@ def _compute_player_summary(tracks: dict, tracked_bboxes: dict,
 def _export_position_jsons(session_id: str, tracks: dict, tracked_bboxes: dict,
                             team_control: list, team_colors: dict, fps: float,
                             total: int, output_dir: Path,
-                            match_periods: list | None = None) -> tuple[str | None, str | None]:
+                            match_periods: list | None = None, target_positions=None) -> tuple[str | None, str | None]:
     """
     Export two compact JSON files for the frontend canvas overlays:
 
@@ -2005,7 +2078,7 @@ def _export_position_jsons(session_id: str, tracks: dict, tracked_bboxes: dict,
             players_this_frame.append(entry)
 
         # Tracked player position (for heatmap) — only on heatmap-stride frames
-        if emit_heatmap and i in tracked_bboxes:
+        if target_positions is None and emit_heatmap and i in tracked_bboxes:
             sx, sy, sw, sh = tracked_bboxes[i]
             matched = _find_matched_player(frame_players or {}, (sx, sy, sw, sh))
             if matched:
@@ -2019,6 +2092,16 @@ def _export_position_jsons(session_id: str, tracks: dict, tracked_bboxes: dict,
                         ty = (norm_res.y_m + 1.0) * 100.0
                         tracked_positions.append([round(tx, 1), round(ty, 1)])
 
+        if target_positions is not None:
+            point = target_positions.get(i)
+            if point is not None:
+                tx, ty = (point[0] + 7.5) * 100.0, (point[1] + 1.0) * 100.0
+                if emit_heatmap:
+                    tracked_positions.append([round(tx, 1), round(ty, 1)])
+                if emit_minimap:
+                    players_this_frame.append({'id': -1, 'x': round(tx, 1),
+                                               'y': round(ty, 1), 't': 0, 'tr': 1})
+
         # Per-minimap-sample bookkeeping
         if emit_minimap:
             # Mark ONLY the tracked player so the frontend can highlight it.
@@ -2026,7 +2109,7 @@ def _export_position_jsons(session_id: str, tracks: dict, tracked_bboxes: dict,
             # was true for EVERY player (all ids are keys of frame_players),
             # so all dots got tr=1 and the frontend's "if p.tr → continue"
             # loop skipped all of them, leaving only the last one visible.
-            if i in tracked_bboxes:
+            if target_positions is None and i in tracked_bboxes:
                 sx, sy, sw, sh = tracked_bboxes[i]
                 matched = _find_matched_player(
                     frame_players or {}, (sx, sy, sw, sh)
@@ -4664,6 +4747,16 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
         except Exception as _e:
             print(f"[AI_SUMMARY] speed telemetry stats failed (non-fatal): {_e!r}")
             speed_telemetry_stats = {"max_speed_kmh": 0.0, "avg_speed_kmh": 0.0, "total_distance_m": 0.0, "zone_breakdown": {}}
+        # Personal motion and AI context must use the same calibrated target source.
+        if player_summary.get("kinematics_source") == "samurai_pitch_projection":
+            speed_telemetry_stats = {
+                key: player_summary.get(key)
+                for key in ("max_speed_kmh", "avg_speed_kmh", "total_distance_m",
+                            "speed_samples", "speed_reliability", "distance_unavailable_reason",
+                            "pitch_coordinate_coverage_pct")
+            }
+            sprint_stats = {"count": player_summary.get("sprint_count"), "events": [],
+                            "unavailable_reason": player_summary.get("sprints_unavailable_reason")}
         try:
             shot_xg_stats = _compute_shot_xg_for_ai(
                 data, tracks_for_ai, tracked_bboxes_for_ai, fps)
@@ -5217,6 +5310,8 @@ def run_ai_summary(session_id: str, session: dict, task_id: str, sm: SessionMana
             "analysis_mode":   analysis_mode,
         }
         _finish_task(sm, session_id, task_id, report_path, result=result_data)
+        if session.get("ai_summary_stale"):
+            sm.update_status(session_id, session.get("status", "analysis_done"), ai_summary_stale=False)
 
     except Exception as exc:
         sm.update_task(session_id, task_id, status="failed", error=str(exc))

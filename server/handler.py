@@ -825,8 +825,12 @@ def _action_feature(session_id: str, s: dict, payload: dict, sm: SessionManager)
 
 
 # Adding a new action = one entry here, no main-handler changes needed.
+def _action_repair_motion(session_id: str, s: dict, payload: dict, sm: SessionManager) -> dict:
+    return pipeline_tasks.repair_samurai_motion(session_id, s, sm)
+
 ACTIONS = {
     "detect_frame": _action_detect_frame,
+    "repair_motion": _action_repair_motion,
     "track":        _action_track,
     "analyze":      _action_analyze,
     "feature":      _action_feature,
@@ -942,7 +946,7 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
 
 # 打印版本 + worker mode：方便从 RunPod 日志确认部署的是哪个 commit。
 # 每次 git push 都会改这个常量 → 看到老值就知道 image 没 rebuild。
-HANDLER_VERSION = "v89"
+HANDLER_VERSION = "v91-samurai-motion"
 
 # Print worker mode on import so RunPod logs make it obvious which pool we're on.
 print(f"[HANDLER] WORKER_MODE={WORKER_MODE} version={HANDLER_VERSION} "
