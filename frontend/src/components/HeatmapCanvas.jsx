@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import PropTypes from 'prop-types';
+import { useLanguage } from '../i18n/LanguageContext';
 
 /**
  * Canvas heatmap of the tracked player's pitch positions.
@@ -12,6 +13,7 @@ import PropTypes from 'prop-types';
  * (narrow) drawer. Height is derived from the pitch aspect ratio.
  */
 export default function HeatmapCanvas({ dataUrl }) {
+    const { t } = useLanguage();
     const wrapRef = useRef(null);
     const canvasRef = useRef(null);
     const [data, setData] = useState(null);
@@ -21,10 +23,17 @@ export default function HeatmapCanvas({ dataUrl }) {
     useEffect(() => {
         if (!dataUrl) return;
         let cancelled = false;
+        setErr(null);
+        setData(null);
         fetch(dataUrl)
-            .then((r) => r.json())
-            .then((d) => { if (!cancelled) setData(d); })
-            .catch((e) => { if (!cancelled) setErr(String(e)); });
+            .then((response) => {
+                if (!response.ok) {
+                    throw new Error('Heatmap data unavailable');
+                }
+                return response.json();
+            })
+            .then((result) => { if (!cancelled) setData(result); })
+            .catch(() => { if (!cancelled) setErr(true); });
         return () => { cancelled = true; };
     }, [dataUrl]);
 
@@ -151,8 +160,8 @@ export default function HeatmapCanvas({ dataUrl }) {
         ctx.drawImage(off, 0, 0, width, height);
     }, [data, size]);
 
-    if (err) return <div className="heatmap-error">Failed to load heatmap: {err}</div>;
-    if (!dataUrl) return <div className="heatmap-error">Heatmap data not yet available.</div>;
+    if (err) return <div className="heatmap-error">{t('dashboard.heatmapNotExported')}</div>;
+    if (!dataUrl) return <div className="heatmap-error">{t('dashboard.heatmapNotExported')}</div>;
     return (
         <div ref={wrapRef} className="heatmap-wrap">
             <canvas ref={canvasRef} className="heatmap-canvas" />
