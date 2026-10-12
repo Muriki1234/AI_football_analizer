@@ -144,20 +144,22 @@ export default function Dashboard() {
 
     const [drawerOpen, setDrawerOpen] = useState(false);
     const topbarRef = useRef(null);
-    const [topbarHeight, setTopbarHeight] = useState(72);
+    const [topbarBottom, setTopbarBottom] = useState(72);
     useEffect(() => {
         const topbar = topbarRef.current;
         if (!topbar) return;
-        const updateHeight = () => setTopbarHeight(Math.ceil(topbar.getBoundingClientRect().height));
-        updateHeight();
-        if (typeof ResizeObserver !== 'undefined') {
-            const observer = new ResizeObserver(updateHeight);
-            observer.observe(topbar);
-            return () => observer.disconnect();
-        }
-        window.addEventListener('resize', updateHeight);
-        return () => window.removeEventListener('resize', updateHeight);
-    }, [sessionId]);
+        const updateBottom = () => setTopbarBottom(Math.max(0, Math.ceil(topbar.getBoundingClientRect().bottom)));
+        updateBottom();
+        const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateBottom) : null;
+        observer?.observe(topbar);
+        window.addEventListener('resize', updateBottom);
+        window.addEventListener('scroll', updateBottom, { passive: true });
+        return () => {
+            observer?.disconnect();
+            window.removeEventListener('resize', updateBottom);
+            window.removeEventListener('scroll', updateBottom);
+        };
+    }, [sessionId, drawerOpen]);
     const [minimapOn, setMinimapOn] = useState(false);
     const [overlayOn, setOverlayOn] = useState(true);
     const [aiGenerating, setAiGenerating] = useState(false);
@@ -1046,7 +1048,7 @@ export default function Dashboard() {
             <aside
                 className={`dashboard-v2__drawer ${drawerOpen ? 'is-open' : ''}`}
                 aria-hidden={!drawerOpen}
-                style={{ top: topbarHeight, height: `calc(100dvh - ${topbarHeight}px)` }}
+                style={{ top: topbarBottom, height: `calc(100dvh - ${topbarBottom}px)` }}
             >
                         <div className="drawer__list">
                             {/* Minimap toggle (stays as on/off switch) */}
