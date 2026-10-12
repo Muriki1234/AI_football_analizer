@@ -78,3 +78,4 @@ server/query_rest.py
 server/query_session.py
 
 .vercel
+.env*

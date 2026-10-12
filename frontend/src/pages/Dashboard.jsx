@@ -51,6 +51,9 @@ const TACTICAL_CHARTS_CONFIG = [
     { id: 'tactical_dossier', filename: 'tactical_dossier.png', feature: 'tactical_dossier', labelKey: 'dashboard.charts.tacticalDossier', descKey: 'dashboard.charts.tacticalDossierDesc' },
 ];
 
+// Keep experimental controls in code until their results are validated with users.
+const SHOW_EXPERIMENTAL_FEATURES = false;
+
 const PHASE_LABELS = {
     uploaded: 'Ready to analyze.',
     uploading: 'Waiting for upload to finish…',
@@ -140,6 +143,21 @@ export default function Dashboard() {
     const [videoSize, setVideoSize] = useState({ width: 1280, height: 720 });
 
     const [drawerOpen, setDrawerOpen] = useState(false);
+    const topbarRef = useRef(null);
+    const [topbarHeight, setTopbarHeight] = useState(72);
+    useEffect(() => {
+        const topbar = topbarRef.current;
+        if (!topbar) return;
+        const updateHeight = () => setTopbarHeight(Math.ceil(topbar.getBoundingClientRect().height));
+        updateHeight();
+        if (typeof ResizeObserver !== 'undefined') {
+            const observer = new ResizeObserver(updateHeight);
+            observer.observe(topbar);
+            return () => observer.disconnect();
+        }
+        window.addEventListener('resize', updateHeight);
+        return () => window.removeEventListener('resize', updateHeight);
+    }, [sessionId]);
     const [minimapOn, setMinimapOn] = useState(false);
     const [overlayOn, setOverlayOn] = useState(true);
     const [aiGenerating, setAiGenerating] = useState(false);
@@ -258,7 +276,7 @@ export default function Dashboard() {
     }, [sessionId]);
 
     useEffect(() => {
-        if (sessionId && session?.status === 'analysis_done') {
+        if (SHOW_EXPERIMENTAL_FEATURES && sessionId && session?.status === 'analysis_done') {
             loadHighlights();
         }
     }, [sessionId, session?.status, loadHighlights]);
@@ -583,7 +601,7 @@ export default function Dashboard() {
     const [spatialRadarData, setSpatialRadarData] = useState(null);
 
     useEffect(() => {
-        if (!spatialRadarUrl) return;
+        if (!SHOW_EXPERIMENTAL_FEATURES || !spatialRadarUrl) return;
         let cancelled = false;
         fetch(spatialRadarUrl)
             .then((res) => (res.ok ? res.json() : null))
@@ -851,7 +869,7 @@ export default function Dashboard() {
             <div className="bg-grid" />
 
             {/* Top bar */}
-            <div className="dashboard-v2__topbar">
+            <div className="dashboard-v2__topbar" ref={topbarRef}>
                 <button className="btn btn-ghost" onClick={() => navigate('/')}>
                     <HiHome /> {t('common.home')}
                 </button>
@@ -911,7 +929,7 @@ export default function Dashboard() {
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                             <HiPlayCircle /> <span>{t('dashboard.annotatedReplay')}</span>
                         </div>
-                        {session?.status === 'analysis_done' && (
+                        {SHOW_EXPERIMENTAL_FEATURES && session?.status === 'analysis_done' && (
                             <button
                                 className="hero-video-card__download"
                                 onClick={handleDownloadBundle}
@@ -1028,6 +1046,7 @@ export default function Dashboard() {
             <aside
                 className={`dashboard-v2__drawer ${drawerOpen ? 'is-open' : ''}`}
                 aria-hidden={!drawerOpen}
+                style={{ top: topbarHeight, height: `calc(100dvh - ${topbarHeight}px)` }}
             >
                         <div className="drawer__list">
                             {/* Minimap toggle (stays as on/off switch) */}
@@ -1067,6 +1086,7 @@ export default function Dashboard() {
                                 <DataAnalysisPanel playerSummary={playerSummaryJson} />
                             </div>
 
+                            {SHOW_EXPERIMENTAL_FEATURES && (<>
                             {/* Tactical Visual Dossier — Gallery */}
                             <div className="drawer__item is-static">
                                 <div className="drawer__item-head drawer__item-head--static" style={{ justifyContent: 'space-between' }}>
@@ -1175,6 +1195,8 @@ export default function Dashboard() {
                                 />
                             </div>
 
+                            </>)}
+
                             {/* AI Analysis — generate-on-demand */}
                             <div className="drawer__item is-static">
                                 <div className="drawer__item-head drawer__item-head--static">
@@ -1206,6 +1228,7 @@ export default function Dashboard() {
                                         </button>
                                     </div>
 
+                            {SHOW_EXPERIMENTAL_FEATURES && (<>
                                     {/* Interactive Tactical Coach Q&A Box */}
                                     <div className="coach-qa-box">
                                         {/* Header with question counter */}
@@ -1340,6 +1363,8 @@ export default function Dashboard() {
                                             </div>
                                         )}
                                     </div>
+                            </>)}
+
                                     {aiMarkdown ? (
                                         <div
                                             className="markdown-body"
@@ -1421,6 +1446,7 @@ export default function Dashboard() {
                                 </div>
                             </div>
 
+                            {SHOW_EXPERIMENTAL_FEATURES && (<>
                             {/* Broadcast HUD Highlights Reel */}
                             <div className="drawer__item is-static">
                                 <div className="drawer__item-head drawer__item-head--static" style={{ justifyContent: 'space-between' }}>
@@ -1554,6 +1580,8 @@ export default function Dashboard() {
                                 </div>
                             </div>
 
+                            </>)}
+
                             {/* Heatmap */}
                             <div className="drawer__item is-static">
                                 <div className="drawer__item-head drawer__item-head--static">
@@ -1617,7 +1645,7 @@ export default function Dashboard() {
             )}
 
             {/* Tactical chart lightbox modal */}
-            {tacticalModalChart && (
+            {SHOW_EXPERIMENTAL_FEATURES && tacticalModalChart && (
                 <div className="minimap-board-overlay" onClick={() => setTacticalModalChart(null)}>
                     <div
                         className="tactical-modal-card"
@@ -1672,7 +1700,7 @@ export default function Dashboard() {
             )}
 
             {/* Tactical Highlight Video Lightbox Modal */}
-            {activeHighlightModal && (
+            {SHOW_EXPERIMENTAL_FEATURES && activeHighlightModal && (
                 <div className="minimap-board-overlay" onClick={() => setActiveHighlightModal(null)}>
                     <div
                         className="tactical-modal-card highlight-modal-card"

@@ -117,10 +117,10 @@ const PossessionBar = ({ team1, team2, neutral, t1Color, t2Color, neutralLabel }
 };
 
 export default function DataAnalysisPanel({ playerSummary }) {
-    const { t, language } = useLanguage();
+    const { t, lang: language } = useLanguage();
 
     if (!playerSummary) {
-        return <p className="drawer__empty">{t('analytics.waitingStats')}</p>;
+        return <p className="drawer__empty">{t('dashboard.analytics.waitingStats')}</p>;
     }
     const overall = playerSummary.overall || playerSummary;
     const segments = playerSummary.by_segment || [];
@@ -133,9 +133,9 @@ export default function DataAnalysisPanel({ playerSummary }) {
     const t2Color = teamColors['2'] || '#e74c3c';
 
     const possessionData = [
-        { name: t('analytics.team1'), value: t1, fill: t1Color },
-        { name: t('analytics.team2'), value: t2, fill: t2Color },
-        ...(neutral > 0 ? [{ name: t('analytics.neutral'), value: neutral, fill: '#94a3b8' }] : []),
+        { name: t('dashboard.analytics.team1'), value: t1, fill: t1Color },
+        { name: t('dashboard.analytics.team2'), value: t2, fill: t2Color },
+        ...(neutral > 0 ? [{ name: t('dashboard.analytics.neutral'), value: neutral, fill: '#94a3b8' }] : []),
     ].filter((item) => item.value > 0);
 
     const speedData = [
@@ -194,7 +194,7 @@ export default function DataAnalysisPanel({ playerSummary }) {
                         <HiVideoCamera /> {language === 'zh' ? (overall.video_confidence.tier_label_zh || overall.footage_quality_tier) : (overall.video_confidence.tier_label_en || overall.footage_quality_tier)}
                     </span>
                     <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
-                        {t('analytics.calibConfidence')}: {overall.video_confidence.overall_confidence_score?.toFixed(0)}{t('analytics.points')}
+                        {t('dashboard.analytics.calibConfidence')}: {overall.video_confidence.overall_confidence_score?.toFixed(0)}{t('dashboard.analytics.points')}
                     </span>
                 </div>
             )}
@@ -211,20 +211,20 @@ export default function DataAnalysisPanel({ playerSummary }) {
                     fontSize: '0.8rem',
                 }}>
                     <span style={{ fontWeight: 600, color: '#34d399', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <HiIdentification /> {t('analytics.jerseyNumber')}: #{overall.jersey_number}
+                        <HiIdentification /> {t('dashboard.analytics.jerseyNumber')}: #{overall.jersey_number}
                     </span>
                     <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
-                        {t('analytics.confidence')}: {overall.jersey_confidence ? `${Math.round(overall.jersey_confidence * 100)}%` : t('analytics.confirmed')}
+                        {t('dashboard.analytics.confidence')}: {overall.jersey_confidence ? `${Math.round(overall.jersey_confidence * 100)}%` : t('dashboard.analytics.confirmed')}
                     </span>
                 </div>
             )}
             <div className="stat-grid">
-                <StatRow icon={<HiBolt />} label={t('analytics.maxSpeed')} value={formatMetric(overall.max_speed_kmh, ' km/h')} sub={speedSub} />
-                <StatRow icon={<HiArrowTrendingUp />} label={t('analytics.avgSpeed')} value={formatMetric(overall.avg_speed_kmh, ' km/h')} />
-                <StatRow icon={<HiArrowsUpDown />} label={t('analytics.distance')} value={isDistanceBlocked ? '-' : formatMetric(overall.total_distance_m, ' m', 0)} sub={distanceSub} />
-                <StatRow icon={<HiGlobeAlt />} label={t('analytics.possessionSec')} value={formatMetric(overall.possession_seconds, ' s')} />
-                <StatRow icon={<HiArrowPath />} label={t('analytics.switches')} value={overall.possession_switches ?? '-'} />
-                <StatRow icon={<HiForward />} label={t('analytics.sprints')} value={isSprintsBlocked ? '-' : (overall.sprint_count ?? overall.speed_telemetry?.sprint_count ?? '-')} sub={sprintsSub} />
+                <StatRow icon={<HiBolt />} label={t('dashboard.analytics.maxSpeed')} value={formatMetric(overall.max_speed_kmh, ' km/h')} sub={speedSub} />
+                <StatRow icon={<HiArrowTrendingUp />} label={t('dashboard.analytics.avgSpeed')} value={formatMetric(overall.avg_speed_kmh, ' km/h')} />
+                <StatRow icon={<HiArrowsUpDown />} label={t('dashboard.analytics.distance')} value={isDistanceBlocked ? '-' : formatMetric(overall.total_distance_m, ' m', 0)} sub={distanceSub} />
+                <StatRow icon={<HiGlobeAlt />} label={t('dashboard.analytics.possessionSec')} value={formatMetric(overall.possession_seconds, ' s')} />
+                <StatRow icon={<HiArrowPath />} label={t('dashboard.analytics.switches')} value={overall.possession_switches ?? '-'} />
+                <StatRow icon={<HiForward />} label={t('dashboard.analytics.sprints')} value={isSprintsBlocked ? '-' : (overall.sprint_count ?? overall.speed_telemetry?.sprint_count ?? '-')} sub={sprintsSub} />
             </div>
             {overall.max_speed_unavailable_reason && (
                 <p className="drawer__note" style={{ color: '#f87171', borderLeft: '3px solid #ef4444', display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -252,7 +252,7 @@ export default function DataAnalysisPanel({ playerSummary }) {
                 </p>
             )}
 
-            <h4 className="drawer__subhead">{t('analytics.speedKmh')}</h4>
+            <h4 className="drawer__subhead">{t('dashboard.analytics.speedKmh')}</h4>
             <div className="chart-wrap" style={{ height: 140 }}>
                 <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={speedData} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
@@ -268,7 +268,7 @@ export default function DataAnalysisPanel({ playerSummary }) {
                 </ResponsiveContainer>
             </div>
 
-            <h4 className="drawer__subhead">{t('analytics.teamPossession')}</h4>
+            <h4 className="drawer__subhead">{t('dashboard.analytics.teamPossession')}</h4>
             {isPossessionSparse && (
                 <p className="drawer__note" style={{ color: '#fbbf24', borderLeft: '3px solid #f59e0b', margin: '4px 0 10px 0', display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <HiExclamationTriangle /> {overall.possession_unavailable_reason || (language === 'zh' ? `有效控球样本偏低（记录时长仅 ${possSec.toFixed(1)}s，占比赛 ${durationSec > 0 ? ((possSec / durationSec) * 100).toFixed(1) : '<1'}%），控球比例已降级提示，仅反映局部有效片段。` : `Low possession samples recorded (${possSec.toFixed(1)}s, ${durationSec > 0 ? ((possSec / durationSec) * 100).toFixed(1) : '<1'}% of match duration).`)}
@@ -300,16 +300,16 @@ export default function DataAnalysisPanel({ playerSummary }) {
                     </ResponsiveContainer>
                 </div>
                 <div className="poss-row__legend">
-                    <div><span className="poss-dot poss-dot--t1" style={t1Color ? { background: t1Color } : {}} /> {t('analytics.team1')} <strong>{t1.toFixed(1)}%</strong></div>
-                    <div><span className="poss-dot poss-dot--t2" style={t2Color ? { background: t2Color } : {}} /> {t('analytics.team2')} <strong>{t2.toFixed(1)}%</strong></div>
-                    {neutral > 0 && <div><span className="poss-dot poss-dot--neutral" /> {t('analytics.neutral')} <strong>{neutral.toFixed(1)}%</strong></div>}
+                    <div><span className="poss-dot poss-dot--t1" style={t1Color ? { background: t1Color } : {}} /> {t('dashboard.analytics.team1')} <strong>{t1.toFixed(1)}%</strong></div>
+                    <div><span className="poss-dot poss-dot--t2" style={t2Color ? { background: t2Color } : {}} /> {t('dashboard.analytics.team2')} <strong>{t2.toFixed(1)}%</strong></div>
+                    {neutral > 0 && <div><span className="poss-dot poss-dot--neutral" /> {t('dashboard.analytics.neutral')} <strong>{neutral.toFixed(1)}%</strong></div>}
                 </div>
             </div>
-            <PossessionBar team1={t1} team2={t2} neutral={neutral} t1Color={t1Color} t2Color={t2Color} neutralLabel={t('analytics.neutral')} />
+            <PossessionBar team1={t1} team2={t2} neutral={neutral} t1Color={t1Color} t2Color={t2Color} neutralLabel={t('dashboard.analytics.neutral')} />
 
             {periodData.length > 0 && (
                 <>
-                    <h4 className="drawer__subhead">{t('analytics.byPeriodDistance')}</h4>
+                    <h4 className="drawer__subhead">{t('dashboard.analytics.byPeriodDistance')}</h4>
                     <div className="chart-wrap" style={{ height: 140 }}>
                         <ResponsiveContainer width="100%" height="100%">
                             <BarChart data={periodData} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
@@ -322,7 +322,7 @@ export default function DataAnalysisPanel({ playerSummary }) {
                     </div>
                     <table className="seg-table">
                         <thead>
-                            <tr><th>{t('analytics.period')}</th><th>{t('analytics.distance')}</th><th>{t('analytics.avgSpeed')}</th><th>{t('analytics.maxSpeed')}</th></tr>
+                            <tr><th>{t('dashboard.analytics.period')}</th><th>{t('dashboard.analytics.distance')}</th><th>{t('dashboard.analytics.avgSpeed')}</th><th>{t('dashboard.analytics.maxSpeed')}</th></tr>
                         </thead>
                         <tbody>
                             {periodData.map((seg, i) => (
