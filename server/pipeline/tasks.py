@@ -256,7 +256,7 @@ def detect_frame_players(session_id: str, session: dict, frame_idx: int,
     Returns:
         {
           "players": [{"id": 1, "bbox": [x1,y1,x2,y2]}, ...],
-          "annotated_frame_path": "first_frame.jpg",  # relative to session dir
+          "annotated_frame_path": "annotated_frame_<frame>_<request>.jpg",
           "image_dimensions": {"width": W, "height": H},
         }
     """
@@ -324,7 +324,9 @@ def detect_frame_players(session_id: str, session: dict, frame_idx: int,
 
     out_dir = sm.session_output_dir(session_id)
     out_dir.mkdir(parents=True, exist_ok=True)
-    rel_path = f"annotated_frame_{frame_idx}.jpg"
+    # Parallel segment scans and retries must never overwrite each other.
+    from uuid import uuid4
+    rel_path = f"annotated_frame_{frame_idx}_{uuid4().hex}.jpg"
     cv2.imwrite(str(out_dir / rel_path), annotated, [cv2.IMWRITE_JPEG_QUALITY, 88])
 
     return {

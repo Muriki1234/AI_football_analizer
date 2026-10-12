@@ -517,12 +517,14 @@ def _action_detect_frame(session_id: str, s: dict, payload: dict, sm: SessionMan
     output_dir = sm.session_output_dir(session_id)
     frame_path = output_dir / result.get("annotated_frame_path", "first_frame.jpg")
     frame_url = None
+    # Keep the image paired with this request's boxes; never reuse first_frame.jpg.
+    storage_key = f"{session_id}/selection_frames/{frame_path.name}"
 
     if frame_path.exists():
         # Prefer R2 upload (no size limits, same infra as video upload)
         try:
             from .storage.r2 import upload_to_r2
-            r2_url = upload_to_r2(frame_path, f"{session_id}/first_frame.jpg")
+            r2_url = upload_to_r2(frame_path, storage_key)
             if r2_url:
                 frame_url = r2_url
         except Exception as r2_exc:
@@ -533,7 +535,6 @@ def _action_detect_frame(session_id: str, s: dict, payload: dict, sm: SessionMan
             supa = _get_supabase()
             if supa is not None:
                 try:
-                    storage_key = f"{session_id}/first_frame.jpg"
                     with open(frame_path, "rb") as f:
                         supa.storage.from_("videos").upload(
                             storage_key, f,
@@ -547,6 +548,7 @@ def _action_detect_frame(session_id: str, s: dict, payload: dict, sm: SessionMan
         "players": result.get("players", []),
         "players_data": result.get("players", []),
         "annotated_frame_url": frame_url,
+        "frame_index": frame_idx,
         "image_dimensions": result.get("image_dimensions"),
     }
 
