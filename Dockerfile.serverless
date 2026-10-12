@@ -77,5 +77,15 @@ ENV PYTHONPATH=/app
 ENV SAMURAI_SCRIPT=/app/samurai/scripts/demo.py
 ENV SAM2_MODEL_PATH=/app/weights/sam2.1_hiera_base_plus.pt
 
+# Replace the truncated OpenBLAS files observed in cached dependency layers.
+# Keep the existing package versions and do not let pip upgrade CUDA dependencies.
+RUN pip install --no-cache-dir --force-reinstall --no-deps \
+        numpy==1.26.4 opencv-python==4.11.0.86 opencv-python-headless==4.10.0.84 \
+    && python -c "import numpy, cv2, torch, os; assert os.path.getsize(os.environ['SAM2_MODEL_PATH']) == 323606802; print(numpy.__version__, cv2.__version__, torch.__version__)" \
+    && python -m unittest \
+        server.pipeline.test_samurai_kinematics \
+        server.pipeline.test_target_player_continuous_kinematic_accumulator \
+        server.pipeline.test_canonical_pitch_coordinate_normalizer
+
 # Command to run the RunPod Serverless handler
 CMD ["python", "-m", "server.handler"]
