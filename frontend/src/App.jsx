@@ -3,11 +3,37 @@ import { BrowserRouter as Router, Routes, Route, useLocation, Navigate } from 'r
 import { AnimatePresence, motion as Motion } from 'framer-motion';
 import { ProgressProvider } from './components/ProgressBar';
 import Welcome from './pages/Welcome';
-const Upload = lazy(() => import('./pages/Upload'));
-const Trimmer = lazy(() => import('./pages/Trimmer'));
-const MultiSegmentConfig = lazy(() => import('./pages/MultiSegmentConfig'));
-const Sessions = lazy(() => import('./pages/Sessions'));
-const Dashboard = lazy(() => import('./pages/Dashboard'));
+function lazyWithRetry(componentImport) {
+    return lazy(async () => {
+        try {
+            return await componentImport();
+        } catch (error) {
+            const isChunkError = Boolean(
+                error?.message?.includes('Failed to fetch dynamically imported module') ||
+                error?.message?.includes('Importing a module script failed') ||
+                error?.message?.includes('Loading chunk') ||
+                error?.toString()?.includes('dynamically imported module')
+            );
+            if (isChunkError && typeof window !== 'undefined') {
+                const key = 'chunk_reload_attempt';
+                const lastAttempt = parseInt(sessionStorage.getItem(key) || '0', 10);
+                const now = Date.now();
+                if (now - lastAttempt > 15000) {
+                    sessionStorage.setItem(key, String(now));
+                    window.location.reload();
+                    return new Promise(() => {});
+                }
+            }
+            throw error;
+        }
+    });
+}
+
+const Upload = lazyWithRetry(() => import('./pages/Upload'));
+const Trimmer = lazyWithRetry(() => import('./pages/Trimmer'));
+const MultiSegmentConfig = lazyWithRetry(() => import('./pages/MultiSegmentConfig'));
+const Sessions = lazyWithRetry(() => import('./pages/Sessions'));
+const Dashboard = lazyWithRetry(() => import('./pages/Dashboard'));
 // PlayerLibrary / PlayerProfile 是 100% mock data，没接后端，不暴露路由
 // 直到真的有 player metadata pipeline 再上线。
 import Login from './pages/Login';

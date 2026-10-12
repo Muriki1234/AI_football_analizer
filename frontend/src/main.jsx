@@ -5,6 +5,19 @@ import ErrorBoundary from './components/ErrorBoundary';
 import App from './App.jsx';
 import './index.css';
 
+// Auto-reload when dynamic imports fail due to new version deployment
+if (typeof window !== 'undefined') {
+    window.addEventListener('vite:preloadError', () => {
+        const key = 'chunk_reload_attempt';
+        const lastAttempt = parseInt(sessionStorage.getItem(key) || '0', 10);
+        const now = Date.now();
+        if (now - lastAttempt > 15000) {
+            sessionStorage.setItem(key, String(now));
+            window.location.reload();
+        }
+    });
+}
+
 createRoot(document.getElementById('root')).render(
     <StrictMode>
         <ErrorBoundary>
