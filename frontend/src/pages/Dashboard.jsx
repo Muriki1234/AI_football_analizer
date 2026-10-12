@@ -1452,7 +1452,7 @@ export default function Dashboard() {
                                                                 ? { label: t('dashboard.counterAttackEvent'), color: '#ec4899' }
                                                                 : { label: t('dashboard.transitionEvent'), color: '#3b82f6' };
 
-                                                    const defaultClipTitle = language === 'zh'
+                                                    const defaultClipTitle = lang === 'zh'
                                                         ? `战术片段 [${Math.floor((clip.event_time_s || 0) / 60)}:${String(Math.floor((clip.event_time_s || 0) % 60)).padStart(2, '0')}]`
                                                         : `Tactical Clip [${Math.floor((clip.event_time_s || 0) / 60)}:${String(Math.floor((clip.event_time_s || 0) % 60)).padStart(2, '0')}]`;
 
@@ -1558,7 +1558,7 @@ export default function Dashboard() {
                             <div className="drawer__item is-static">
                                 <div className="drawer__item-head drawer__item-head--static">
                                     <HiFire />
-                                    <span>{language === 'zh' ? '跑动热力图' : 'Activity Heatmap'}</span>
+                                    <span>{lang === 'zh' ? '跑动热力图' : 'Activity Heatmap'}</span>
                                 </div>
                                 <div className="drawer__section-body">
                                     {heatmapDataUrl ? (
@@ -1694,14 +1694,14 @@ export default function Dashboard() {
                             <div>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                     <h3 style={{ margin: 0, fontSize: '1.15rem', color: '#f8fafc', fontWeight: 600 }}>
-                                        {activeHighlightModal.metadata?.title || (language === 'zh' ? '战术高光镜头 (Broadcast HUD)' : 'Tactical Highlight (Broadcast HUD)')}
+                                        {activeHighlightModal.metadata?.title || (lang === 'zh' ? '战术高光镜头 (Broadcast HUD)' : 'Tactical Highlight (Broadcast HUD)')}
                                     </h3>
                                     <span className="coach-qa-result__badge">
                                         {activeHighlightModal.event_type?.toUpperCase() || 'MOMENT'}
                                     </span>
                                 </div>
                                 <p style={{ margin: '4px 0 0 0', fontSize: '0.8rem', color: '#94a3b8' }}>
-                                    {activeHighlightModal.metadata?.description || (language === 'zh' ? `关键事件时刻: ${activeHighlightModal.event_time_s?.toFixed(1)}s (片段时长: ${activeHighlightModal.duration_s?.toFixed(1)}s)` : `Key Event: ${activeHighlightModal.event_time_s?.toFixed(1)}s (Duration: ${activeHighlightModal.duration_s?.toFixed(1)}s)`)}
+                                    {activeHighlightModal.metadata?.description || (lang === 'zh' ? `关键事件时刻: ${activeHighlightModal.event_time_s?.toFixed(1)}s (片段时长: ${activeHighlightModal.duration_s?.toFixed(1)}s)` : `Key Event: ${activeHighlightModal.event_time_s?.toFixed(1)}s (Duration: ${activeHighlightModal.duration_s?.toFixed(1)}s)`)}
                                 </p>
                             </div>
                             <button
